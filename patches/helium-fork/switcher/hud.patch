@@ -1,0 +1,933 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -373,6 +373,8 @@ static_library("ui") {
+     "enterprise_startup_dialog.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
++    "helium/helium_tab_switcher_controller.cc",
++    "helium/helium_tab_switcher_controller.h",
+     "idle_bubble.h",
+     "managed_ui.cc",
+     "managed_ui.h",
+@@ -4545,6 +4547,8 @@ static_library("ui") {
+       "views/tabs/hovercard/tab_hover_card_thumbnail_observer.h",
+       "views/tabs/new_tab_button.cc",
+       "views/tabs/new_tab_button.h",
++      "views/tabs/switcher/tab_switcher_hud_view.cc",
++      "views/tabs/switcher/tab_switcher_hud_view.h",
+       "views/tabs/tab.cc",
+       "views/tabs/tab.h",
+       "views/tabs/tab/alert_indicator_button.cc",
+Index: src/chrome/browser/ui/browser_command_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_command_controller.cc
++++ src/chrome/browser/ui/browser_command_controller.cc
+@@ -70,6 +70,7 @@
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
++#include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_controller.h"
+ #include "chrome/browser/ui/managed_ui.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+@@ -661,6 +662,14 @@ void BrowserCommandController::HandleCom
+     base::TimeTicks time_stamp) {
+   DCHECK(IsCommandEnabled(id)) << "Invalid/disabled command " << id;
+ 
++  // helium-fork: the visual Ctrl+Tab switcher intercepts tab cycling
++  // commands; when it declines (pref off, <2 tabs) the stock handling
++  // below applies unchanged.
++  if ((id == IDC_SELECT_NEXT_TAB || id == IDC_SELECT_PREVIOUS_TAB) &&
++      HeliumTabSwitcherController::MaybeHandleCycleCommand(browser_, id)) {
++    return;
++  }
++
+   // The order of commands in this switch statement must match the function
+   // declaration order in browser.h!
+   switch (id) {
+Index: src/chrome/browser/ui/browser_ui_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_ui_prefs.cc
++++ src/chrome/browser/ui/browser_ui_prefs.cc
+@@ -123,6 +123,9 @@ void RegisterBrowserUserPrefs(user_prefs
+ 
+   registry->RegisterBooleanPref(prefs::kTabCyclingMRU, false);
+ 
++  registry->RegisterBooleanPref(prefs::kTabSwitcherHudEnabled, true);
++  registry->RegisterIntegerPref(prefs::kTabSwitcherHudCount, 5);
++
+   registry->RegisterBooleanPref(prefs::kShiftRightClickContextMenu, true);
+ 
+   registry->RegisterBooleanPref(prefs::kShowZoomIndicator, true);
+Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -78,6 +78,7 @@
+ #include "chrome/browser/ui/focus/browser_focus_controller_webui.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
++#include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
+ #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
+@@ -594,6 +595,10 @@ void BrowserWindowFeatures::Init(Browser
+         GetUserDataFactory().CreateInstance<HeliumLayoutStateController>(
+             *browser, browser, profile->GetPrefs());
+ 
++    helium_tab_switcher_controller_ =
++        GetUserDataFactory().CreateInstance<HeliumTabSwitcherController>(
++            *browser, browser, profile->GetPrefs());
++
+     if (tabs::IsVerticalTabsFeatureEnabled()) {
+       Browser* raw_browser = browser->GetBrowserForMigrationOnly();
+ 
+Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
+===================================================================
+--- src.orig/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ src/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -56,6 +56,7 @@ class FindBarController;
+ class FindBarOwner;
+ class FullscreenControlHost;
+ class HeliumLayoutStateController;
++class HeliumTabSwitcherController;
+ class HistoryClustersSidePanelCoordinator;
+ class HistorySidePanelCoordinator;
+ class ImmersiveModeController;
+@@ -679,6 +680,7 @@ class BrowserWindowFeatures {
+   std::unique_ptr<BrowserUserEducationInterface> user_education_;
+   std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
+   std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;
++  std::unique_ptr<HeliumTabSwitcherController> helium_tab_switcher_controller_;
+ 
+   std::unique_ptr<tabs::VerticalTabStripStateController>
+       vertical_tab_strip_state_controller_;
+Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
+@@ -0,0 +1,372 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
++
++#include <algorithm>
++#include <numeric>
++#include <set>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_data.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
++#include "chrome/browser/ui/thumbnails/thumbnail_tab_helper.h"
++#include "chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/base_window.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/views/event_monitor.h"
++
++namespace {
++
++// How long Ctrl has to be held before the HUD becomes visible. A quick
++// Ctrl+Tab tap commits before this fires, so the HUD never flashes.
++constexpr base::TimeDelta kHudDelay = base::Milliseconds(150);
++
++// Upper bound on how much longer the HUD may wait for in-flight thumbnail
++// decodes after kHudDelay. Once shown, the HUD content is frozen — images
++// that miss this window keep their favicon placeholder for the session.
++constexpr base::TimeDelta kShowGateCap = base::Milliseconds(100);
++
++constexpr int kMinHudCount = 3;
++constexpr int kMaxHudCount = 9;
++
++}  // namespace
++
++DEFINE_USER_DATA(HeliumTabSwitcherController);
++
++HeliumTabSwitcherController::HeliumTabSwitcherController(
++    BrowserWindowInterface* browser_window,
++    PrefService* pref_service)
++    : browser_window_(browser_window),
++      pref_service_(pref_service),
++      scoped_unowned_user_data_(browser_window->GetUnownedUserDataHost(),
++                                *this) {}
++
++HeliumTabSwitcherController::~HeliumTabSwitcherController() {
++  if (cycling_) {
++    StopCycling();
++  }
++}
++
++// static
++HeliumTabSwitcherController* HeliumTabSwitcherController::From(
++    BrowserWindowInterface* browser_window) {
++  if (!browser_window) {
++    return nullptr;
++  }
++  return Get(browser_window->GetUnownedUserDataHost());
++}
++
++// static
++bool HeliumTabSwitcherController::MaybeHandleCycleCommand(
++    BrowserWindowInterface* browser_window,
++    int command_id) {
++  HeliumTabSwitcherController* controller = From(browser_window);
++  return controller && controller->HandleCycleCommand(command_id);
++}
++
++void HeliumTabSwitcherController::CommitIndex(size_t index) {
++  if (!cycling_ || index >= mru_tabs_.size()) {
++    return;
++  }
++  highlighted_ = index;
++  CommitCycling();
++}
++
++void HeliumTabSwitcherController::CancelCycling() {
++  if (!cycling_) {
++    return;
++  }
++  StopCycling();
++}
++
++bool HeliumTabSwitcherController::HandleCycleCommand(int command_id) {
++  if (!pref_service_->GetBoolean(prefs::kTabSwitcherHudEnabled)) {
++    return false;
++  }
++
++  if (!cycling_ && !StartCycling()) {
++    return false;
++  }
++
++  Advance(command_id == IDC_SELECT_PREVIOUS_TAB ? -1 : 1);
++  return true;
++}
++
++bool HeliumTabSwitcherController::StartCycling() {
++  TabStripModel* model = GetTabStripModel();
++  if (!model || model->count() < 2) {
++    return false;
++  }
++
++  views::Widget* browser_widget = GetBrowserWidget();
++  if (!browser_widget) {
++    return false;
++  }
++
++  // Snapshot tabs in MRU order (the active tab has the most recent
++  // last-active time, so it naturally sorts first).
++  const int count = model->count();
++  std::vector<int> indices(count);
++  std::iota(indices.begin(), indices.end(), 0);
++  std::sort(indices.begin(), indices.end(), [model](int a, int b) {
++    return model->GetWebContentsAt(a)->GetLastActiveTimeTicks() >
++           model->GetWebContentsAt(b)->GetLastActiveTimeTicks();
++  });
++
++  const int hud_count =
++      std::clamp(pref_service_->GetInteger(prefs::kTabSwitcherHudCount),
++                 kMinHudCount, kMaxHudCount);
++  const size_t cycle_size =
++      std::min(static_cast<size_t>(hud_count), indices.size());
++
++  mru_tabs_.clear();
++  for (size_t i = 0; i < cycle_size; ++i) {
++    mru_tabs_.push_back(model->GetTabAtIndex(indices[i])->GetHandle());
++  }
++  overflow_count_ = indices.size() - cycle_size;
++
++  // Kick off a fast-path capture for tabs without stored thumbnail data —
++  // notably the active tab, which is only ever captured when switched away
++  // from. Despite its name this API has no hidden-state requirement: for
++  // visible tabs it does a direct CopyFromSurface (~ms), comfortably inside
++  // kHudDelay; for background tabs without a copyable surface it silently
++  // no-ops.
++  for (const tabs::TabHandle& handle : mru_tabs_) {
++    tabs::TabInterface* tab = handle.Get();
++    if (!tab) {
++      continue;
++    }
++    auto* thumbnail_helper =
++        ThumbnailTabHelper::FromWebContents(tab->GetContents());
++    if (thumbnail_helper && !thumbnail_helper->thumbnail()->has_data()) {
++      thumbnail_helper->CaptureThumbnailOnTabBackgrounded();
++    }
++  }
++  highlighted_ = 0;
++  cycling_ = true;
++
++  model->AddObserver(this);
++  browser_widget_observation_.Observe(browser_widget);
++  event_monitor_ = views::EventMonitor::CreateWindowMonitor(
++      this, browser_widget->GetNativeWindow(),
++      {ui::EventType::kKeyPressed, ui::EventType::kKeyReleased,
++       ui::EventType::kMousePressed});
++  hud_timer_.Start(FROM_HERE, kHudDelay,
++                   base::BindOnce(&HeliumTabSwitcherController::ShowHud,
++                                  base::Unretained(this)));
++  return true;
++}
++
++void HeliumTabSwitcherController::Advance(int delta) {
++  if (mru_tabs_.empty()) {
++    return;
++  }
++  const size_t size = mru_tabs_.size();
++  highlighted_ = delta > 0 ? (highlighted_ + 1) % size
++                           : (highlighted_ + size - 1) % size;
++  if (hud_view_) {
++    hud_view_->SetHighlightedIndex(highlighted_);
++  }
++}
++
++void HeliumTabSwitcherController::ShowHud() {
++  if (!cycling_ || hud_widget_) {
++    return;
++  }
++
++  views::Widget* browser_widget = GetBrowserWidget();
++  if (!browser_widget) {
++    CancelCycling();
++    return;
++  }
++
++  std::vector<tabs::TabData> cards;
++  cards.reserve(mru_tabs_.size());
++  for (const tabs::TabHandle& handle : mru_tabs_) {
++    tabs::TabInterface* tab = handle.Get();
++    if (!tab) {
++      continue;
++    }
++    cards.push_back(tabs::TabData::FromTabInterface(tab));
++  }
++  if (cards.size() != mru_tabs_.size() || cards.size() < 2) {
++    // A tab died between snapshot and display; keep it simple and bail.
++    CancelCycling();
++    return;
++  }
++
++  auto view = std::make_unique<TabSwitcherHudView>(
++      this, std::move(cards), highlighted_, overflow_count_);
++
++  views::Widget::InitParams params(
++      views::Widget::InitParams::CLIENT_OWNS_WIDGET,
++      views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
++  params.parent = browser_widget->GetNativeView();
++  params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
++  params.accept_events = true;
++  // Keep the browser window as the key window so it continues to receive
++  // the Ctrl release / further Ctrl+Tab presses (see FindBarHost for the
++  // full rationale on Activatable::kNo).
++  params.activatable = views::Widget::InitParams::Activatable::kNo;
++  params.shadow_type = views::Widget::InitParams::ShadowType::kDrop;
++  params.name = "HeliumTabSwitcherHud";
++
++  hud_widget_ = std::make_unique<views::Widget>();
++  hud_widget_->Init(std::move(params));
++  hud_view_ = hud_widget_->SetContentsView(std::move(view));
++
++  const gfx::Rect browser_bounds = browser_widget->GetWindowBoundsInScreen();
++  const gfx::Size size = hud_view_->GetPreferredSize();
++  hud_widget_->SetBounds(
++      gfx::Rect(browser_bounds.x() + (browser_bounds.width() - size.width()) / 2,
++                browser_bounds.y() +
++                    (browser_bounds.height() - size.height()) / 2,
++                size.width(), size.height()));
++
++  // Show gate: wait (bounded) until every card with stored thumbnail data
++  // has its decoded image, so the HUD appears fully formed and never
++  // repaints afterwards. SetReadyCallback fires synchronously if nothing is
++  // pending.
++  hud_view_->SetReadyCallback(
++      base::BindOnce(&HeliumTabSwitcherController::ShowHudWidgetNow,
++                     base::Unretained(this)));
++  if (hud_widget_ && !hud_widget_->IsVisible()) {
++    show_gate_timer_.Start(
++        FROM_HERE, kShowGateCap,
++        base::BindOnce(&HeliumTabSwitcherController::ShowHudWidgetNow,
++                       base::Unretained(this)));
++  }
++}
++
++void HeliumTabSwitcherController::ShowHudWidgetNow() {
++  if (!cycling_ || !hud_widget_ || hud_widget_->IsVisible()) {
++    return;
++  }
++  show_gate_timer_.Stop();
++  hud_view_->Freeze();
++  hud_widget_->ShowInactive();
++}
++
++void HeliumTabSwitcherController::CommitCycling() {
++  const tabs::TabHandle handle = mru_tabs_[highlighted_];
++  StopCycling();
++
++  tabs::TabInterface* tab = handle.Get();
++  if (!tab) {
++    return;
++  }
++  TabStripModel* model = GetTabStripModel();
++  if (!model) {
++    return;
++  }
++  const int index = model->GetIndexOfTab(tab);
++  if (index < 0) {
++    return;
++  }
++  model->ActivateTabAt(index,
++                       TabStripUserGestureDetails(
++                           TabStripUserGestureDetails::GestureType::kOther));
++}
++
++void HeliumTabSwitcherController::StopCycling() {
++  cycling_ = false;
++  hud_timer_.Stop();
++  show_gate_timer_.Stop();
++  event_monitor_.reset();
++  browser_widget_observation_.Reset();
++  if (TabStripModel* model = GetTabStripModel()) {
++    model->RemoveObserver(this);
++  }
++  hud_view_ = nullptr;
++  hud_widget_.reset();
++  mru_tabs_.clear();
++  overflow_count_ = 0;
++  highlighted_ = 0;
++}
++
++TabStripModel* HeliumTabSwitcherController::GetTabStripModel() {
++  return browser_window_->GetTabStripModel();
++}
++
++views::Widget* HeliumTabSwitcherController::GetBrowserWidget() {
++  ui::BaseWindow* window = browser_window_->GetWindow();
++  if (!window) {
++    return nullptr;
++  }
++  return views::Widget::GetWidgetForNativeWindow(window->GetNativeWindow());
++}
++
++void HeliumTabSwitcherController::OnEvent(const ui::Event& event) {
++  if (event.type() == ui::EventType::kKeyReleased &&
++      event.AsKeyEvent()->key_code() == ui::VKEY_CONTROL) {
++    CommitCycling();
++    return;
++  }
++
++  if (event.type() == ui::EventType::kKeyPressed &&
++      event.AsKeyEvent()->key_code() == ui::VKEY_ESCAPE) {
++    CancelCycling();
++    return;
++  }
++
++  if (event.type() == ui::EventType::kMousePressed) {
++    // Clicks on the HUD itself arrive at the HUD widget, not the monitored
++    // browser window, so any press seen here is outside the HUD.
++    CancelCycling();
++  }
++}
++
++void HeliumTabSwitcherController::OnWidgetActivationChanged(
++    views::Widget* widget,
++    bool active) {
++  if (!active) {
++    CancelCycling();
++  }
++}
++
++void HeliumTabSwitcherController::OnWidgetDestroying(views::Widget* widget) {
++  CancelCycling();
++}
++
++void HeliumTabSwitcherController::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  if (!cycling_ || change.type() != TabStripModelChange::kRemoved) {
++    return;
++  }
++
++  const tabs::TabHandle highlighted_handle =
++      highlighted_ < mru_tabs_.size() ? mru_tabs_[highlighted_]
++                                      : tabs::TabHandle::Null();
++
++  std::erase_if(mru_tabs_,
++                [](const tabs::TabHandle& handle) { return !handle.Get(); });
++
++  if (mru_tabs_.size() < 2) {
++    CancelCycling();
++    return;
++  }
++
++  const auto it = std::ranges::find(mru_tabs_, highlighted_handle);
++  highlighted_ = it != mru_tabs_.end()
++                     ? static_cast<size_t>(it - mru_tabs_.begin())
++                     : std::min(highlighted_, mru_tabs_.size() - 1);
++
++  if (hud_widget_) {
++    // Rare path: rebuild the HUD with the surviving tabs.
++    hud_view_ = nullptr;
++    hud_widget_.reset();
++    ShowHud();
++  }
++}
+Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/helium_tab_switcher_controller.h
+@@ -0,0 +1,128 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_TAB_SWITCHER_CONTROLLER_H_
++#define CHROME_BROWSER_UI_HELIUM_HELIUM_TAB_SWITCHER_CONTROLLER_H_
++
++#include <memory>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "components/tabs/public/tab_interface.h"
++#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++#include "ui/events/event_observer.h"
++#include "ui/views/widget/widget.h"
++#include "ui/views/widget/widget_observer.h"
++
++class BrowserWindowInterface;
++class PrefService;
++class TabStripModel;
++class TabSwitcherHudView;
++
++namespace views {
++class EventMonitor;
++}  // namespace views
++
++// Implements the visual Ctrl+Tab switcher with the macOS Cmd+Tab interaction
++// model:
++//   - A quick Ctrl+Tab tap instantly activates the most recently used tab
++//     (no HUD ever appears).
++//   - Holding Ctrl for longer than a short delay shows a centered HUD with
++//     one card per tab (thumbnail + favicon + title) in MRU order. Further
++//     Tab presses move the highlight without activating intermediate tabs.
++//   - Releasing Ctrl commits the highlighted tab; Esc or clicking the
++//     browser window cancels.
++//
++// Cycling commands are intercepted in
++// BrowserCommandController::HandleCommandWithDisposition() before the default
++// IDC_SELECT_NEXT_TAB / IDC_SELECT_PREVIOUS_TAB handling; when the
++// helium.workspace.ctrl_tab_hud pref is disabled this class consumes nothing
++// and the stock (Helium MRU / positional) cycling behavior applies.
++class HeliumTabSwitcherController : public ui::EventObserver,
++                                    public views::WidgetObserver,
++                                    public TabStripModelObserver {
++ public:
++  DECLARE_USER_DATA(HeliumTabSwitcherController);
++
++  HeliumTabSwitcherController(BrowserWindowInterface* browser_window,
++                              PrefService* pref_service);
++  HeliumTabSwitcherController(const HeliumTabSwitcherController&) = delete;
++  HeliumTabSwitcherController& operator=(const HeliumTabSwitcherController&) =
++      delete;
++  ~HeliumTabSwitcherController() override;
++
++  static HeliumTabSwitcherController* From(
++      BrowserWindowInterface* browser_window);
++
++  // Returns true if the command was consumed by the switcher. Called from
++  // BrowserCommandController for IDC_SELECT_NEXT_TAB /
++  // IDC_SELECT_PREVIOUS_TAB.
++  static bool MaybeHandleCycleCommand(BrowserWindowInterface* browser_window,
++                                      int command_id);
++
++  // Called by TabSwitcherHudView when a card is clicked.
++  void CommitIndex(size_t index);
++
++  // Stops cycling without activating any tab.
++  void CancelCycling();
++
++  bool IsCyclingForTesting() const { return cycling_; }
++
++ private:
++  bool HandleCycleCommand(int command_id);
++  bool StartCycling();
++  void Advance(int delta);
++  void ShowHud();
++  // Makes the (already created) HUD widget visible and freezes its content.
++  // Reached either from the all-thumbnails-ready callback or from the
++  // bounded show-gate timer, whichever fires first; idempotent.
++  void ShowHudWidgetNow();
++  void CommitCycling();
++  // Shared teardown for commit and cancel paths.
++  void StopCycling();
++
++  TabStripModel* GetTabStripModel();
++  views::Widget* GetBrowserWidget();
++
++  // ui::EventObserver:
++  void OnEvent(const ui::Event& event) override;
++
++  // views::WidgetObserver:
++  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
++  void OnWidgetDestroying(views::Widget* widget) override;
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++
++  const raw_ptr<BrowserWindowInterface> browser_window_;
++  const raw_ptr<PrefService> pref_service_;
++
++  // State below is only meaningful while |cycling_| is true.
++  bool cycling_ = false;
++  // Cycle set in MRU order (active tab first), capped by the
++  // helium.workspace.ctrl_tab_hud_count pref.
++  std::vector<tabs::TabHandle> mru_tabs_;
++  // Number of open tabs not included in |mru_tabs_|.
++  size_t overflow_count_ = 0;
++  size_t highlighted_ = 0;
++  base::OneShotTimer hud_timer_;
++  base::OneShotTimer show_gate_timer_;
++  std::unique_ptr<views::EventMonitor> event_monitor_;
++  base::ScopedObservation<views::Widget, views::WidgetObserver>
++      browser_widget_observation_{this};
++  std::unique_ptr<views::Widget> hud_widget_;
++  raw_ptr<TabSwitcherHudView> hud_view_ = nullptr;
++
++  ui::ScopedUnownedUserData<HeliumTabSwitcherController>
++      scoped_unowned_user_data_;
++};
++
++#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_TAB_SWITCHER_CONTROLLER_H_
+Index: src/chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.cc
+@@ -0,0 +1,230 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.h"
++
++#include <algorithm>
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
++#include "chrome/browser/ui/thumbnails/thumbnail_image.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_id.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/geometry/rounded_corners_f.h"
++#include "ui/gfx/text_constants.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/background.h"
++#include "ui/views/border.h"
++#include "ui/views/controls/button/button.h"
++#include "ui/views/controls/image_view.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/layout/box_layout.h"
++#include "ui/views/layout/box_layout_view.h"
++
++namespace {
++
++constexpr int kThumbnailWidth = 200;
++constexpr int kThumbnailHeight = 125;
++constexpr int kCardCornerRadius = 12;
++constexpr int kCardBorderThickness = 2;
++constexpr int kCardPadding = 8;
++constexpr int kHudCornerRadius = 16;
++constexpr int kHudPadding = 16;
++constexpr int kCardSpacing = 12;
++constexpr int kFaviconSize = 16;
++constexpr int kFallbackFaviconSize = 32;
++
++}  // namespace
++
++// A single tab card: thumbnail on top, favicon + title below. Clicking the
++// card commits that tab.
++class TabSwitcherHudView::CardView : public views::Button {
++  METADATA_HEADER(CardView, views::Button)
++
++ public:
++  CardView(HeliumTabSwitcherController* controller,
++           const tabs::TabData& data,
++           size_t index,
++           base::OnceClosure on_first_image)
++      : views::Button(
++            base::BindRepeating(&HeliumTabSwitcherController::CommitIndex,
++                                base::Unretained(controller),
++                                index)),
++        on_first_image_(std::move(on_first_image)) {
++    auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
++        views::BoxLayout::Orientation::kVertical,
++        gfx::Insets(kCardPadding), kCardPadding));
++    layout->set_cross_axis_alignment(
++        views::BoxLayout::CrossAxisAlignment::kStart);
++
++    thumbnail_ = AddChildView(std::make_unique<views::ImageView>());
++    thumbnail_->SetPreferredSize(
++        gfx::Size(kThumbnailWidth, kThumbnailHeight));
++    thumbnail_->SetHorizontalAlignment(views::ImageView::Alignment::kCenter);
++    thumbnail_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
++
++    auto* title_row = AddChildView(std::make_unique<views::BoxLayoutView>());
++    title_row->SetOrientation(views::BoxLayout::Orientation::kHorizontal);
++    title_row->SetBetweenChildSpacing(kCardPadding);
++    title_row->SetCrossAxisAlignment(
++        views::BoxLayout::CrossAxisAlignment::kCenter);
++
++    auto* favicon = title_row->AddChildView(std::make_unique<views::ImageView>());
++    favicon->SetImage(data.favicon);
++    favicon->SetImageSize(gfx::Size(kFaviconSize, kFaviconSize));
++
++    auto* title = title_row->AddChildView(std::make_unique<views::Label>());
++    title->SetText(data.title);
++    title->SetElideBehavior(gfx::ELIDE_TAIL);
++    title->SetMaximumWidthSingleLine(kThumbnailWidth - kFaviconSize -
++                                     2 * kCardPadding);
++    title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++
++    // Until (unless) a thumbnail arrives, show a large favicon centered in
++    // the thumbnail slot. Discarded tabs stay in this state.
++    thumbnail_->SetImage(data.favicon);
++    thumbnail_->SetImageSize(
++        gfx::Size(kFallbackFaviconSize, kFallbackFaviconSize));
++
++    if (data.thumbnail) {
++      subscription_ = data.thumbnail->Subscribe();
++      subscription_->SetSizeHint(
++          gfx::Size(kThumbnailWidth, kThumbnailHeight));
++      subscription_->SetUncompressedImageCallback(base::BindRepeating(
++          &CardView::OnThumbnailAvailable, weak_factory_.GetWeakPtr()));
++      // With no captured data this is a no-op (thumbnail_image.cc bails
++      // early); the image then arrives via the capture kicked off in
++      // HeliumTabSwitcherController::StartCycling().
++      if (data.thumbnail->has_data()) {
++        data.thumbnail->RequestThumbnailImage();
++      }
++    }
++
++    GetViewAccessibility().SetName(
++        data.title.empty() ? u"tab" : data.title);
++    SetHighlighted(false);
++  }
++
++  CardView(const CardView&) = delete;
++  CardView& operator=(const CardView&) = delete;
++  ~CardView() override = default;
++
++  // Drops the thumbnail subscription so the card never changes once the
++  // HUD is visible.
++  void Freeze() { subscription_.reset(); }
++
++  void SetHighlighted(bool highlighted) {
++    if (highlighted) {
++      SetBorder(views::CreateRoundedRectBorder(
++          kCardBorderThickness, kCardCornerRadius,
++          ui::kColorFocusableBorderFocused));
++    } else {
++      SetBorder(views::CreateEmptyBorder(kCardBorderThickness));
++    }
++  }
++
++ private:
++  void OnThumbnailAvailable(gfx::ImageSkia image) {
++    if (image.isNull() || image.width() < 1 || image.height() < 1) {
++      return;
++    }
++    // Aspect-fit into the thumbnail slot.
++    const float scale =
++        std::min(static_cast<float>(kThumbnailWidth) / image.width(),
++                 static_cast<float>(kThumbnailHeight) / image.height());
++    thumbnail_->SetImage(ui::ImageModel::FromImageSkia(image));
++    thumbnail_->SetImageSize(
++        gfx::Size(static_cast<int>(image.width() * scale),
++                  static_cast<int>(image.height() * scale)));
++    if (on_first_image_) {
++      std::move(on_first_image_).Run();
++    }
++  }
++
++  raw_ptr<views::ImageView> thumbnail_ = nullptr;
++  std::unique_ptr<ThumbnailImage::Subscription> subscription_;
++  base::OnceClosure on_first_image_;
++  base::WeakPtrFactory<CardView> weak_factory_{this};
++};
++
++BEGIN_METADATA(TabSwitcherHudView, CardView)
++END_METADATA
++
++TabSwitcherHudView::TabSwitcherHudView(
++    HeliumTabSwitcherController* controller,
++    std::vector<tabs::TabData> tabs,
++    size_t highlighted_index,
++    size_t overflow_count) {
++  SetLayoutManager(std::make_unique<views::BoxLayout>(
++      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(kHudPadding),
++      kCardSpacing));
++
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(kHudCornerRadius));
++  layer()->SetIsFastRoundedCorner(true);
++  SetBackground(views::CreateSolidBackground(ui::kColorBubbleBackground));
++
++  for (size_t i = 0; i < tabs.size(); ++i) {
++    // Only cards with already-captured data are awaited by the show gate;
++    // the rest keep their favicon placeholder.
++    base::OnceClosure on_first_image;
++    if (tabs[i].thumbnail && tabs[i].thumbnail->has_data()) {
++      ++pending_images_;
++      on_first_image = base::BindOnce(&TabSwitcherHudView::OnCardImageReady,
++                                      base::Unretained(this));
++    }
++    cards_.push_back(AddChildView(std::make_unique<CardView>(
++        controller, tabs[i], i, std::move(on_first_image))));
++  }
++
++  if (overflow_count > 0) {
++    auto* overflow = AddChildView(std::make_unique<views::Label>());
++    overflow->SetText(u"+" +
++                      base::UTF8ToUTF16(base::NumberToString(overflow_count)));
++  }
++
++  highlighted_index_ = std::min(highlighted_index, cards_.size() - 1);
++  cards_[highlighted_index_]->SetHighlighted(true);
++}
++
++TabSwitcherHudView::~TabSwitcherHudView() = default;
++
++void TabSwitcherHudView::SetHighlightedIndex(size_t index) {
++  if (index >= cards_.size() || index == highlighted_index_) {
++    return;
++  }
++  cards_[highlighted_index_]->SetHighlighted(false);
++  highlighted_index_ = index;
++  cards_[highlighted_index_]->SetHighlighted(true);
++}
++
++void TabSwitcherHudView::SetReadyCallback(base::OnceClosure callback) {
++  ready_callback_ = std::move(callback);
++  if (pending_images_ == 0 && ready_callback_) {
++    std::move(ready_callback_).Run();
++  }
++}
++
++void TabSwitcherHudView::Freeze() {
++  for (CardView* card : cards_) {
++    card->Freeze();
++  }
++}
++
++void TabSwitcherHudView::OnCardImageReady() {
++  if (pending_images_ > 0 && --pending_images_ == 0 && ready_callback_) {
++    std::move(ready_callback_).Run();
++  }
++}
++
++BEGIN_METADATA(TabSwitcherHudView)
++END_METADATA
+Index: src/chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.h
+@@ -0,0 +1,59 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_SWITCHER_TAB_SWITCHER_HUD_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_SWITCHER_TAB_SWITCHER_HUD_VIEW_H_
++
++#include <vector>
++
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "chrome/browser/ui/tabs/tab_data.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/view.h"
++
++class HeliumTabSwitcherController;
++
++// The centered Ctrl+Tab switcher overlay: a horizontal row of cards
++// (thumbnail + favicon + title) in MRU order with one highlighted entry.
++// Pure presentation; all interaction state lives in
++// HeliumTabSwitcherController, which owns the hosting widget.
++class TabSwitcherHudView : public views::View {
++  METADATA_HEADER(TabSwitcherHudView, views::View)
++
++ public:
++  TabSwitcherHudView(HeliumTabSwitcherController* controller,
++                     std::vector<tabs::TabData> tabs,
++                     size_t highlighted_index,
++                     size_t overflow_count);
++  TabSwitcherHudView(const TabSwitcherHudView&) = delete;
++  TabSwitcherHudView& operator=(const TabSwitcherHudView&) = delete;
++  ~TabSwitcherHudView() override;
++
++  void SetHighlightedIndex(size_t index);
++
++  // True once every card whose thumbnail already had captured data has
++  // received (and displayed) its decoded image. Cards without data show a
++  // large-favicon placeholder and are not waited for.
++  bool AllExpectedImagesReady() const { return pending_images_ == 0; }
++
++  // Invoked (at most once) when AllExpectedImagesReady() becomes true.
++  void SetReadyCallback(base::OnceClosure callback);
++
++  // Stops accepting further thumbnail updates so the view never changes
++  // after it becomes visible.
++  void Freeze();
++
++ private:
++  class CardView;
++
++  void OnCardImageReady();
++
++  std::vector<raw_ptr<CardView>> cards_;
++  size_t highlighted_index_ = 0;
++  size_t pending_images_ = 0;
++  base::OnceClosure ready_callback_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_SWITCHER_TAB_SWITCHER_HUD_VIEW_H_
+Index: src/chrome/common/pref_names.h
+===================================================================
+--- src.orig/chrome/common/pref_names.h
++++ src/chrome/common/pref_names.h
+@@ -605,6 +605,13 @@ inline constexpr char kNewTabNextToActiv
+ // when cycling through tabs with Ctrl+Tab.
+ inline constexpr char kTabCyclingMRU[] = "helium.browser.mru_tab_cycling";
+ 
++// helium-fork: whether Ctrl+Tab shows the visual switcher HUD, and how many
++// most-recently-used tabs it offers (cycling wraps within this set).
++inline constexpr char kTabSwitcherHudEnabled[] =
++    "helium.workspace.ctrl_tab_hud";
++inline constexpr char kTabSwitcherHudCount[] =
++    "helium.workspace.ctrl_tab_hud_count";
++
+ // A boolean pref set to true if Shift+right-click should bypass page context
+ // menu handlers and show the browser context menu.
+ inline constexpr char kShiftRightClickContextMenu[] =
