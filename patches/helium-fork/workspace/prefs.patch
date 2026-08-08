@@ -1,0 +1,80 @@
+Index: src/chrome/browser/prefs/browser_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/prefs/browser_prefs.cc
++++ src/chrome/browser/prefs/browser_prefs.cc
+@@ -88,6 +88,7 @@
+ #include "chrome/browser/tracing/chrome_tracing_delegate.h"
+ #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_prefs.h"
+ #include "chrome/browser/ui/browser_ui_prefs.h"
++#include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/browser/ui/network_profile_bubble.h"
+ #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
+ #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
+@@ -1808,6 +1809,7 @@ void RegisterProfilePrefs(user_prefs::Pr
+   QuietNotificationPermissionUiState::RegisterProfilePrefs(registry);
+   regional_capabilities::prefs::RegisterProfilePrefs(registry);
+   browser_shortcuts::prefs::RegisterProfilePrefs(registry);
++  helium_workspace::prefs::RegisterProfilePrefs(registry);
+   RegisterBrowserUserPrefs(registry);
+   registry->RegisterBooleanPref(prefs::kRestrictYouTubeCookiesDeletion, false);
+   RegisterGeminiSettingsPrefs(registry);
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -375,6 +375,8 @@ static_library("ui") {
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+     "helium/helium_tab_switcher_controller.h",
++    "helium_workspace/workspace_prefs.cc",
++    "helium_workspace/workspace_prefs.h",
+     "idle_bubble.h",
+     "managed_ui.cc",
+     "managed_ui.h",
+Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
+@@ -0,0 +1,15 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
++
++#include "components/pref_registry/pref_registry_syncable.h"
++
++namespace helium_workspace::prefs {
++
++void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
++  registry->RegisterListPref(kWorkspaceEntries);
++}
++
++}  // namespace helium_workspace::prefs
+Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_prefs.h
+@@ -0,0 +1,22 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_PREFS_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_PREFS_H_
++
++namespace user_prefs {
++class PrefRegistrySyncable;
++}  // namespace user_prefs
++
++namespace helium_workspace::prefs {
++
++// List of dicts describing the persistent Favorites/Pinned entries of the
++// workspace sidebar. See workspace_entry.h for the schema.
++inline constexpr char kWorkspaceEntries[] = "helium.workspace.entries";
++
++void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
++
++}  // namespace helium_workspace::prefs
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_PREFS_H_

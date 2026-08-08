@@ -327,3 +327,6 @@ helium/ui/native-frame-materials.patch
 helium/ui/page-zoom-indicator.patch
 helium/ui/helium-noise-page-info.patch
 helium-fork/switcher/hud.patch
+helium-fork/workspace/prefs.patch
+helium-fork/workspace/model.patch
+helium-fork/workspace/pin-semantics.patch

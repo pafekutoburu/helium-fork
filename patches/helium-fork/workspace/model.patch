@@ -1,0 +1,934 @@
+Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+===================================================================
+--- src.orig/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
++++ src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+@@ -651,6 +651,7 @@
+ #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
+ #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_service_factory.h"
+ #endif
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ 
+ #if BUILDFLAG(USE_NSS_CERTS)
+ #include "chrome/browser/net/nss_service_factory.h"
+@@ -845,6 +846,7 @@ void ChromeBrowserMainExtraPartsProfiles
+ #if defined(TOOLKIT_VIEWS)
+   browser_shortcuts::BrowserShortcutServiceFactory::GetInstance();
+ #endif
++  helium_workspace::WorkspaceServiceFactory::GetInstance();
+ #if !BUILDFLAG(IS_ANDROID)
+   BrowserManagerServiceFactory::GetInstance();
+ #endif
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -10,6 +10,7 @@ import("//build/config/ui.gni")
+ import("//chrome/browser/buildflags.gni")
+ import("//chrome/common/features.gni")
+ import("//components/captive_portal/core/features.gni")
++import("//testing/test.gni")
+ import("//components/compose/features.gni")
+ import("//components/enterprise/buildflags/buildflags.gni")
+ import("//components/lens/features.gni")
+@@ -375,8 +376,14 @@ static_library("ui") {
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+     "helium/helium_tab_switcher_controller.h",
++    "helium_workspace/workspace_entry.cc",
++    "helium_workspace/workspace_entry.h",
+     "helium_workspace/workspace_prefs.cc",
+     "helium_workspace/workspace_prefs.h",
++    "helium_workspace/workspace_service.cc",
++    "helium_workspace/workspace_service.h",
++    "helium_workspace/workspace_service_factory.cc",
++    "helium_workspace/workspace_service_factory.h",
+     "idle_bubble.h",
+     "managed_ui.cc",
+     "managed_ui.h",
+@@ -5977,3 +5984,21 @@ if (enable_dice_support) {
+     deps = [ "//base" ]
+   }
+ }
++
++# helium-fork: standalone workspace unit tests. The full unit_tests target is
++# unbuildable in Helium's pruned tree (chrome/test/data is stripped), so the
++# pure-logic pieces get their own minimal gtest binary.
++test("helium_workspace_unittests") {
++  sources = [
++    "helium_workspace/workspace_entry.cc",
++    "helium_workspace/workspace_entry.h",
++    "helium_workspace/workspace_entry_unittest.cc",
++  ]
++  deps = [
++    "//base",
++    "//base/test:run_all_unittests",
++    "//base/test:test_support",
++    "//testing/gtest",
++    "//url",
++  ]
++}
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_entry.cc
+@@ -0,0 +1,81 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++
++#include "base/strings/utf_string_conversions.h"
++
++namespace helium_workspace {
++
++namespace {
++
++constexpr char kKeyId[] = "id";
++constexpr char kKeySpaceId[] = "space_id";
++constexpr char kKeySection[] = "section";
++constexpr char kKeyUrl[] = "url";
++constexpr char kKeyTitle[] = "title";
++constexpr char kKeyPosition[] = "position";
++constexpr char kKeyVersion[] = "version";
++
++}  // namespace
++
++WorkspaceEntry::WorkspaceEntry() = default;
++WorkspaceEntry::WorkspaceEntry(const WorkspaceEntry&) = default;
++WorkspaceEntry& WorkspaceEntry::operator=(const WorkspaceEntry&) = default;
++WorkspaceEntry::~WorkspaceEntry() = default;
++
++base::DictValue WorkspaceEntry::ToValue() const {
++  base::DictValue dict;
++  dict.Set(kKeyId, id);
++  dict.Set(kKeySpaceId, space_id);
++  dict.Set(kKeySection, static_cast<int>(section));
++  dict.Set(kKeyUrl, url.spec());
++  dict.Set(kKeyTitle, title);
++  dict.Set(kKeyPosition, position);
++  dict.Set(kKeyVersion, version);
++  return dict;
++}
++
++// static
++std::optional<WorkspaceEntry> WorkspaceEntry::FromValue(
++    const base::DictValue& dict) {
++  const std::string* id = dict.FindString(kKeyId);
++  if (!id || id->empty()) {
++    return std::nullopt;
++  }
++
++  const std::string* url_string = dict.FindString(kKeyUrl);
++  if (!url_string) {
++    return std::nullopt;
++  }
++  GURL url(*url_string);
++  if (!url.is_valid()) {
++    return std::nullopt;
++  }
++
++  const std::optional<int> section = dict.FindInt(kKeySection);
++  if (!section ||
++      *section < static_cast<int>(Section::kFavorite) ||
++      *section > static_cast<int>(Section::kPinned)) {
++    return std::nullopt;
++  }
++
++  WorkspaceEntry entry;
++  entry.id = *id;
++  entry.url = std::move(url);
++  entry.section = static_cast<Section>(*section);
++
++  if (const std::string* space_id = dict.FindString(kKeySpaceId);
++      space_id && !space_id->empty()) {
++    entry.space_id = *space_id;
++  }
++  if (const std::string* title = dict.FindString(kKeyTitle)) {
++    entry.title = base::UTF8ToUTF16(*title);
++  }
++  entry.position = dict.FindInt(kKeyPosition).value_or(0);
++  entry.version = dict.FindInt(kKeyVersion).value_or(kCurrentVersion);
++  return entry;
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_entry.h
+@@ -0,0 +1,53 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ENTRY_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ENTRY_H_
++
++#include <optional>
++#include <string>
++
++#include "base/values.h"
++#include "url/gurl.h"
++
++namespace helium_workspace {
++
++// One persistent sidebar entry (a Favorite or a Pinned tab). Entries outlive
++// their tabs: closing ("unloading") the backing tab keeps the entry, and the
++// entry's |url| — the URL it was originally pinned at — is what the tab
++// returns to when reset or re-created.
++struct WorkspaceEntry {
++  // Values are persisted; do not renumber.
++  enum class Section {
++    kFavorite = 0,
++    kPinned = 1,
++  };
++
++  WorkspaceEntry();
++  WorkspaceEntry(const WorkspaceEntry&);
++  WorkspaceEntry& operator=(const WorkspaceEntry&);
++  ~WorkspaceEntry();
++
++  // Serialization schema version this code writes.
++  static constexpr int kCurrentVersion = 1;
++
++  base::DictValue ToValue() const;
++
++  // Returns std::nullopt for missing/invalid required fields (id, url,
++  // section). Unknown fields are ignored; missing optional fields get
++  // defaults.
++  static std::optional<WorkspaceEntry> FromValue(const base::DictValue& dict);
++
++  std::string id;                  // UUID, primary key.
++  std::string space_id = "default";  // Reserved for v2 Spaces.
++  Section section = Section::kPinned;
++  GURL url;                        // Original pinned URL (reset target).
++  std::u16string title;
++  int position = 0;                // Sort key within its section.
++  int version = kCurrentVersion;
++};
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ENTRY_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
+@@ -0,0 +1,90 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium_workspace {
++namespace {
++
++WorkspaceEntry MakeEntry() {
++  WorkspaceEntry entry;
++  entry.id = "0d9b1c9e-3f6a-4a3e-9d55-1c2b3a4d5e6f";
++  entry.space_id = "default";
++  entry.section = WorkspaceEntry::Section::kFavorite;
++  entry.url = GURL("https://example.com/path?q=1");
++  entry.title = u"Example 例子";
++  entry.position = 3;
++  return entry;
++}
++
++TEST(WorkspaceEntryTest, RoundTrip) {
++  const WorkspaceEntry original = MakeEntry();
++  const std::optional<WorkspaceEntry> decoded =
++      WorkspaceEntry::FromValue(original.ToValue());
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ(decoded->id, original.id);
++  EXPECT_EQ(decoded->space_id, original.space_id);
++  EXPECT_EQ(decoded->section, original.section);
++  EXPECT_EQ(decoded->url, original.url);
++  EXPECT_EQ(decoded->title, original.title);
++  EXPECT_EQ(decoded->position, original.position);
++  EXPECT_EQ(decoded->version, WorkspaceEntry::kCurrentVersion);
++}
++
++TEST(WorkspaceEntryTest, MissingRequiredFieldsRejected) {
++  // Empty dict.
++  EXPECT_FALSE(WorkspaceEntry::FromValue(base::DictValue()).has_value());
++
++  // Missing id.
++  base::DictValue no_id = MakeEntry().ToValue();
++  no_id.Remove("id");
++  EXPECT_FALSE(WorkspaceEntry::FromValue(no_id).has_value());
++
++  // Missing url.
++  base::DictValue no_url = MakeEntry().ToValue();
++  no_url.Remove("url");
++  EXPECT_FALSE(WorkspaceEntry::FromValue(no_url).has_value());
++
++  // Invalid url.
++  base::DictValue bad_url = MakeEntry().ToValue();
++  bad_url.Set("url", "not a url");
++  EXPECT_FALSE(WorkspaceEntry::FromValue(bad_url).has_value());
++
++  // Out-of-range section.
++  base::DictValue bad_section = MakeEntry().ToValue();
++  bad_section.Set("section", 42);
++  EXPECT_FALSE(WorkspaceEntry::FromValue(bad_section).has_value());
++
++  // Wrong type for section.
++  base::DictValue wrong_type = MakeEntry().ToValue();
++  wrong_type.Set("section", "pinned");
++  EXPECT_FALSE(WorkspaceEntry::FromValue(wrong_type).has_value());
++}
++
++TEST(WorkspaceEntryTest, OptionalFieldsGetDefaults) {
++  base::DictValue minimal;
++  minimal.Set("id", "some-id");
++  minimal.Set("url", "https://example.org/");
++  minimal.Set("section", 1);
++
++  const std::optional<WorkspaceEntry> decoded =
++      WorkspaceEntry::FromValue(minimal);
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ(decoded->space_id, "default");
++  EXPECT_TRUE(decoded->title.empty());
++  EXPECT_EQ(decoded->position, 0);
++  EXPECT_EQ(decoded->version, WorkspaceEntry::kCurrentVersion);
++  EXPECT_EQ(decoded->section, WorkspaceEntry::Section::kPinned);
++}
++
++TEST(WorkspaceEntryTest, UnknownFieldsIgnored) {
++  base::DictValue dict = MakeEntry().ToValue();
++  dict.Set("future_field", "whatever");
++  EXPECT_TRUE(WorkspaceEntry::FromValue(dict).has_value());
++}
++
++}  // namespace
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
+@@ -0,0 +1,399 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++
++#include <algorithm>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/uuid.h"
++#include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
++#include "chrome/browser/performance_manager/public/user_tuning/user_tuning_utils.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
++#include "chrome/browser/sessions/session_restore.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
++#include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/performance_manager/public/performance_manager.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/scoped_user_pref_update.h"
++#include "content/public/browser/web_contents.h"
++
++namespace helium_workspace {
++
++namespace {
++
++using performance_manager::PerformanceManager;
++using DiscardEligibilityPolicy =
++    performance_manager::policies::DiscardEligibilityPolicy;
++using performance_manager::policies::CanDiscardResult;
++
++constexpr auto kWorkspaceDiscardReason =
++    ::mojom::LifecycleUnitDiscardReason::EXTERNAL;
++
++// Entries sort favorites-first, then by position.
++bool EntryOrderLess(const WorkspaceEntry& a, const WorkspaceEntry& b) {
++  if (a.section != b.section) {
++    return a.section == WorkspaceEntry::Section::kFavorite;
++  }
++  return a.position < b.position;
++}
++
++}  // namespace
++
++WorkspaceService::WorkspaceService(Profile* profile)
++    : profile_(profile), prefs_(profile->GetPrefs()) {
++  LoadFromPrefs();
++  session_restored_subscription_ =
++      SessionRestore::RegisterOnSessionRestoredCallback(base::BindRepeating(
++          &WorkspaceService::OnSessionRestored, weak_factory_.GetWeakPtr()));
++}
++
++WorkspaceService::~WorkspaceService() = default;
++
++const WorkspaceEntry* WorkspaceService::FindEntryById(
++    const std::string& id) const {
++  for (const WorkspaceEntry& entry : entries_) {
++    if (entry.id == id) {
++      return &entry;
++    }
++  }
++  return nullptr;
++}
++
++const WorkspaceEntry* WorkspaceService::FindUnboundEntryByUrl(
++    const GURL& url) const {
++  for (const WorkspaceEntry& entry : entries_) {
++    if (entry.url == url &&
++        FindTabForEntry(entry.id) == tabs::TabHandle::Null()) {
++      return &entry;
++    }
++  }
++  return nullptr;
++}
++
++std::string WorkspaceService::AddEntry(WorkspaceEntry::Section section,
++                                       const GURL& url,
++                                       const std::u16string& title) {
++  if (!url.is_valid()) {
++    return std::string();
++  }
++  if (section == WorkspaceEntry::Section::kFavorite) {
++    const size_t favorites = std::ranges::count_if(
++        entries_, [](const WorkspaceEntry& e) {
++          return e.section == WorkspaceEntry::Section::kFavorite;
++        });
++    if (favorites >= kMaxFavorites) {
++      return std::string();
++    }
++  }
++
++  WorkspaceEntry entry;
++  entry.id = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  entry.section = section;
++  entry.url = url;
++  entry.title = title;
++  entry.position = NextPosition(section);
++  const std::string id = entry.id;
++  entries_.push_back(std::move(entry));
++  std::stable_sort(entries_.begin(), entries_.end(), EntryOrderLess);
++  PersistToPrefs();
++  NotifyChanged();
++  return id;
++}
++
++bool WorkspaceService::RemoveEntry(const std::string& id) {
++  const size_t erased = std::erase_if(
++      entries_, [&](const WorkspaceEntry& e) { return e.id == id; });
++  if (!erased) {
++    return false;
++  }
++  std::erase_if(tab_to_entry_,
++                [&](const auto& pair) { return pair.second == id; });
++  PersistToPrefs();
++  NotifyChanged();
++  return true;
++}
++
++bool WorkspaceService::SetEntryUrl(const std::string& id, const GURL& url) {
++  if (!url.is_valid()) {
++    return false;
++  }
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.id == id) {
++      entry.url = url;
++      PersistToPrefs();
++      NotifyChanged();
++      return true;
++    }
++  }
++  return false;
++}
++
++bool WorkspaceService::SetEntryTitle(const std::string& id,
++                                     const std::u16string& title) {
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.id == id) {
++      if (entry.title == title) {
++        return true;
++      }
++      entry.title = title;
++      PersistToPrefs();
++      NotifyChanged();
++      return true;
++    }
++  }
++  return false;
++}
++
++void WorkspaceService::BindTab(tabs::TabHandle handle,
++                               const std::string& entry_id) {
++  tab_to_entry_[handle] = entry_id;
++}
++
++void WorkspaceService::UnbindTab(tabs::TabHandle handle) {
++  tab_to_entry_.erase(handle);
++  pending_reset_.erase(handle);
++}
++
++std::string WorkspaceService::FindEntryIdForTab(tabs::TabHandle handle) const {
++  const auto it = tab_to_entry_.find(handle);
++  return it != tab_to_entry_.end() ? it->second : std::string();
++}
++
++tabs::TabHandle WorkspaceService::FindTabForEntry(
++    const std::string& entry_id) const {
++  for (const auto& [handle, id] : tab_to_entry_) {
++    if (id == entry_id) {
++      return handle;
++    }
++  }
++  return tabs::TabHandle::Null();
++}
++
++bool WorkspaceService::IsWorkspaceTab(tabs::TabHandle handle) const {
++  return tab_to_entry_.contains(handle);
++}
++
++void WorkspaceService::MarkPendingReset(tabs::TabHandle handle) {
++  pending_reset_.insert(handle);
++}
++
++bool WorkspaceService::TakePendingReset(tabs::TabHandle handle) {
++  return pending_reset_.erase(handle) > 0;
++}
++
++// static
++bool WorkspaceService::DiscardTabForWorkspace(tabs::TabInterface* tab) {
++  if (!tab) {
++    return false;
++  }
++  content::WebContents* contents = tab->GetContents();
++  if (!contents) {
++    return false;
++  }
++  if (contents->WasDiscarded()) {
++    return true;  // Already unloaded.
++  }
++  if (!PerformanceManager::IsAvailable()) {
++    return false;
++  }
++  DiscardEligibilityPolicy* policy =
++      DiscardEligibilityPolicy::GetFromGraph(PerformanceManager::GetGraph());
++  if (!policy) {
++    return false;
++  }
++  base::WeakPtr<performance_manager::PageNode> page_node =
++      PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
++  if (!page_node) {
++    return false;
++  }
++  if (policy->CanDiscard(page_node.get(), kWorkspaceDiscardReason,
++                         /*ignore_recent_visibility=*/true) !=
++      CanDiscardResult::kEligible) {
++    return false;
++  }
++  performance_manager::user_tuning::DiscardPage(
++      page_node.get(), kWorkspaceDiscardReason,
++      /*ignore_minimum_time_in_background=*/true);
++  return true;
++}
++
++void WorkspaceService::EnsureReconciled() {
++  if (reconciled_) {
++    return;
++  }
++  RunStartupReconciliation();
++}
++
++void WorkspaceService::AddObserver(Observer* observer) {
++  observers_.AddObserver(observer);
++}
++
++void WorkspaceService::RemoveObserver(Observer* observer) {
++  observers_.RemoveObserver(observer);
++}
++
++void WorkspaceService::Shutdown() {
++  session_restored_subscription_ = {};
++}
++
++void WorkspaceService::LoadFromPrefs() {
++  entries_.clear();
++  for (const base::Value& value :
++       prefs_->GetList(prefs::kWorkspaceEntries)) {
++    if (!value.is_dict()) {
++      continue;
++    }
++    if (std::optional<WorkspaceEntry> entry =
++            WorkspaceEntry::FromValue(value.GetDict())) {
++      entries_.push_back(std::move(*entry));
++    }
++  }
++  std::stable_sort(entries_.begin(), entries_.end(), EntryOrderLess);
++}
++
++void WorkspaceService::PersistToPrefs() {
++  ScopedListPrefUpdate update(prefs_, prefs::kWorkspaceEntries);
++  base::ListValue& values = update.Get();
++  values.clear();
++  for (const WorkspaceEntry& entry : entries_) {
++    values.Append(entry.ToValue());
++  }
++}
++
++void WorkspaceService::NotifyChanged() {
++  for (Observer& observer : observers_) {
++    observer.OnWorkspaceEntriesChanged();
++  }
++}
++
++int WorkspaceService::NextPosition(WorkspaceEntry::Section section) const {
++  int max_position = -1;
++  for (const WorkspaceEntry& entry : entries_) {
++    if (entry.section == section) {
++      max_position = std::max(max_position, entry.position);
++    }
++  }
++  return max_position + 1;
++}
++
++void WorkspaceService::OnSessionRestored(Profile* profile, int num_tabs) {
++  if (profile != profile_ || reconciled_) {
++    return;
++  }
++  RunStartupReconciliation();
++}
++
++void WorkspaceService::RunStartupReconciliation() {
++  reconciled_ = true;
++
++  BrowserWindowInterface* target_browser = nullptr;
++
++  // Collect every unclaimed pinned tab across this profile's windows
++  // (session restore, Chromium's PinnedTabCodec startup tabs, ...).
++  std::vector<tabs::TabHandle> unclaimed;
++  ProfileBrowserCollection::GetForProfile(profile_)->ForEach(
++      [&](BrowserWindowInterface* browser) {
++        TabStripModel* model = browser->GetTabStripModel();
++        if (!model) {
++          return true;
++        }
++        if (!target_browser) {
++          target_browser = browser;
++        }
++        for (int i = 0; i < model->IndexOfFirstNonPinnedTab(); ++i) {
++          tabs::TabInterface* tab = model->GetTabAtIndex(i);
++          if (tab && !IsWorkspaceTab(tab->GetHandle())) {
++            unclaimed.push_back(tab->GetHandle());
++          }
++        }
++        return true;
++      },
++      BrowserCollection::Order::kActivation);
++
++  if (!target_browser) {
++    // No suitable window yet; allow a later EnsureReconciled() attempt.
++    reconciled_ = false;
++    return;
++  }
++
++  // Adopt pass A — exact URL match (tab is already at its entry URL).
++  std::erase_if(unclaimed, [&](tabs::TabHandle handle) {
++    tabs::TabInterface* tab = handle.Get();
++    if (!tab) {
++      return true;
++    }
++    if (const WorkspaceEntry* entry = FindUnboundEntryByUrl(tab->GetURL())) {
++      BindTab(handle, entry->id);
++      return true;
++    }
++    return false;
++  });
++
++  // Adopt pass B — same-origin match (a pinned tab that had navigated away
++  // when the browser quit). Marked for reset so its next activation returns
++  // to the entry URL, matching Arc's after-restart semantics.
++  std::erase_if(unclaimed, [&](tabs::TabHandle handle) {
++    tabs::TabInterface* tab = handle.Get();
++    if (!tab) {
++      return true;
++    }
++    const GURL url = tab->GetURL();
++    for (const WorkspaceEntry& entry : entries_) {
++      if (FindTabForEntry(entry.id) == tabs::TabHandle::Null() &&
++          entry.url.DeprecatedGetOriginAsURL() ==
++              url.DeprecatedGetOriginAsURL()) {
++        BindTab(handle, entry.id);
++        MarkPendingReset(handle);
++        return true;
++      }
++    }
++    return false;
++  });
++
++  // Back-fill pass — pinned tabs the model does not know about become
++  // entries, so model and tab strip stay consistent in both directions.
++  for (tabs::TabHandle handle : unclaimed) {
++    tabs::TabInterface* tab = handle.Get();
++    if (!tab) {
++      continue;
++    }
++    content::WebContents* contents = tab->GetContents();
++    const std::string id =
++        AddEntry(WorkspaceEntry::Section::kPinned, tab->GetURL(),
++                 contents ? contents->GetTitle() : std::u16string());
++    if (!id.empty()) {
++      BindTab(handle, id);
++    }
++  }
++
++  // Pass 2 — rebuild: entries without a live tab get a fresh background
++  // pinned tab at the entry URL, immediately discarded so it stays unloaded
++  // until clicked.
++  for (const WorkspaceEntry& entry : entries_) {
++    if (FindTabForEntry(entry.id) != tabs::TabHandle::Null()) {
++      continue;
++    }
++    TabStripModel* model = target_browser->GetTabStripModel();
++    content::WebContents* contents = chrome::AddAndReturnTabAt(
++        target_browser, entry.url, model->IndexOfFirstNonPinnedTab(),
++        /*foreground=*/false, /*group=*/std::nullopt, /*pinned=*/true);
++    if (!contents) {
++      continue;
++    }
++    tabs::TabInterface* tab = model->GetTabForWebContents(contents);
++    if (!tab) {
++      continue;
++    }
++    BindTab(tab->GetHandle(), entry.id);
++    DiscardTabForWorkspace(tab);
++  }
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_service.h
+@@ -0,0 +1,126 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SERVICE_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SERVICE_H_
++
++#include <map>
++#include <set>
++#include <string>
++#include <vector>
++
++#include "base/callback_list.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/observer_list.h"
++#include "base/observer_list_types.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "components/keyed_service/core/keyed_service.h"
++#include "components/tabs/public/tab_interface.h"
++
++class GURL;
++class PrefService;
++class Profile;
++
++namespace helium_workspace {
++
++// Profile-scoped model of the workspace sidebar: the persistent
++// Favorites/Pinned entries, their runtime binding to live tabs, and the
++// startup reconciliation that re-establishes that binding after a restart.
++//
++// Invariant (established by reconciliation, maintained by
++// WorkspaceTabController): every entry is backed by a real native pinned
++// tab; an "unloaded" entry's tab is in the discarded state.
++class WorkspaceService : public KeyedService {
++ public:
++  class Observer : public base::CheckedObserver {
++   public:
++    // Fired on any change to the persistent entry list.
++    virtual void OnWorkspaceEntriesChanged() {}
++  };
++
++  static constexpr size_t kMaxFavorites = 12;
++
++  explicit WorkspaceService(Profile* profile);
++  WorkspaceService(const WorkspaceService&) = delete;
++  WorkspaceService& operator=(const WorkspaceService&) = delete;
++  ~WorkspaceService() override;
++
++  // ---- Persistent model ----
++  const std::vector<WorkspaceEntry>& entries() const { return entries_; }
++  const WorkspaceEntry* FindEntryById(const std::string& id) const;
++  // First unbound entry matching |url| exactly, or nullptr.
++  const WorkspaceEntry* FindUnboundEntryByUrl(const GURL& url) const;
++
++  // Returns the new entry's id, or the empty string if rejected (favorites
++  // cap reached).
++  std::string AddEntry(WorkspaceEntry::Section section,
++                       const GURL& url,
++                       const std::u16string& title);
++  bool RemoveEntry(const std::string& id);
++  bool SetEntryUrl(const std::string& id, const GURL& url);
++  bool SetEntryTitle(const std::string& id, const std::u16string& title);
++
++  // ---- Runtime tab binding (never persisted) ----
++  void BindTab(tabs::TabHandle handle, const std::string& entry_id);
++  void UnbindTab(tabs::TabHandle handle);
++  // Empty string if the tab is not a workspace entry.
++  std::string FindEntryIdForTab(tabs::TabHandle handle) const;
++  tabs::TabHandle FindTabForEntry(const std::string& entry_id) const;
++  bool IsWorkspaceTab(tabs::TabHandle handle) const;
++
++  // ---- Reset-to-origin marker ----
++  // Set when an entry's tab is unloaded so that its next activation
++  // navigates back to the entry URL instead of the last visited one.
++  void MarkPendingReset(tabs::TabHandle handle);
++  bool TakePendingReset(tabs::TabHandle handle);
++
++  // Discards |tab|'s contents via the same performance_manager path Helium's
++  // tab hibernation uses, for exactly one tab. The tab must not be in the
++  // foreground. Returns false if the tab is not eligible (audio playing,
++  // form data, capture in progress, ...). A true return (including the
++  // already-discarded case) means the tab is unloaded.
++  static bool DiscardTabForWorkspace(tabs::TabInterface* tab);
++
++  // Called by the first WorkspaceTabController of a profile when this
++  // startup did not go through session restore; the session-restore path
++  // subscribes itself in the constructor. Idempotent.
++  void EnsureReconciled();
++  bool reconciled() const { return reconciled_; }
++
++  void AddObserver(Observer* observer);
++  void RemoveObserver(Observer* observer);
++
++  // KeyedService:
++  void Shutdown() override;
++
++ private:
++  void LoadFromPrefs();
++  void PersistToPrefs();
++  void NotifyChanged();
++  int NextPosition(WorkspaceEntry::Section section) const;
++
++  void OnSessionRestored(Profile* profile, int num_tabs);
++
++  // Startup reconciliation: adopt existing pinned tabs by URL, re-create
++  // tabs for entries without one (as background discarded pinned tabs), and
++  // record entries for pinned tabs the model does not know about.
++  void RunStartupReconciliation();
++
++  const raw_ptr<Profile> profile_;
++  const raw_ptr<PrefService> prefs_;
++
++  std::vector<WorkspaceEntry> entries_;
++  std::map<tabs::TabHandle, std::string> tab_to_entry_;
++  std::set<tabs::TabHandle> pending_reset_;
++  bool reconciled_ = false;
++
++  base::CallbackListSubscription session_restored_subscription_;
++  base::ObserverList<Observer> observers_;
++  base::WeakPtrFactory<WorkspaceService> weak_factory_{this};
++};
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SERVICE_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_factory.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_service_factory.cc
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++
++namespace helium_workspace {
++
++// static
++WorkspaceService* WorkspaceServiceFactory::GetForProfile(Profile* profile) {
++  return static_cast<WorkspaceService*>(
++      GetInstance()->GetServiceForBrowserContext(profile, true));
++}
++
++// static
++WorkspaceServiceFactory* WorkspaceServiceFactory::GetInstance() {
++  static base::NoDestructor<WorkspaceServiceFactory> instance;
++  return instance.get();
++}
++
++WorkspaceServiceFactory::WorkspaceServiceFactory()
++    : ProfileKeyedServiceFactory(
++          "HeliumWorkspaceService",
++          ProfileSelections::Builder()
++              .WithRegular(ProfileSelection::kRedirectedToOriginal)
++              .WithGuest(ProfileSelection::kNone)
++              .WithSystem(ProfileSelection::kNone)
++              .WithAshInternals(ProfileSelection::kNone)
++              .Build()) {}
++
++WorkspaceServiceFactory::~WorkspaceServiceFactory() = default;
++
++std::unique_ptr<KeyedService>
++WorkspaceServiceFactory::BuildServiceInstanceForBrowserContext(
++    content::BrowserContext* context) const {
++  return std::make_unique<WorkspaceService>(
++      Profile::FromBrowserContext(context));
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_factory.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_service_factory.h
+@@ -0,0 +1,38 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SERVICE_FACTORY_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SERVICE_FACTORY_H_
++
++#include "base/no_destructor.h"
++#include "chrome/browser/profiles/profile_keyed_service_factory.h"
++
++class Profile;
++
++namespace helium_workspace {
++
++class WorkspaceService;
++
++class WorkspaceServiceFactory : public ProfileKeyedServiceFactory {
++ public:
++  static WorkspaceService* GetForProfile(Profile* profile);
++  static WorkspaceServiceFactory* GetInstance();
++
++  WorkspaceServiceFactory(const WorkspaceServiceFactory&) = delete;
++  WorkspaceServiceFactory& operator=(const WorkspaceServiceFactory&) = delete;
++
++ private:
++  friend base::NoDestructor<WorkspaceServiceFactory>;
++
++  WorkspaceServiceFactory();
++  ~WorkspaceServiceFactory() override;
++
++  // ProfileKeyedServiceFactory:
++  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
++      content::BrowserContext* context) const override;
++};
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SERVICE_FACTORY_H_

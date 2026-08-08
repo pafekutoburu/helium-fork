@@ -1,0 +1,597 @@
+Index: src/chrome/app/chrome_command_ids.h
+===================================================================
+--- src.orig/chrome/app/chrome_command_ids.h
++++ src/chrome/app/chrome_command_ids.h
+@@ -117,6 +117,7 @@
+ 
+ #define IDC_CTRL_S_SHORTCUT             34090
+ #define IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN 34091
++#define IDC_HELIUM_WS_TOGGLE_PIN        34092
+ 
+ // Tab group Commands
+ #define IDC_ADD_NEW_TAB_TO_GROUP      34100
+Index: src/chrome/app/chrome_dll.rc
+===================================================================
+--- src.orig/chrome/app/chrome_dll.rc
++++ src/chrome/app/chrome_dll.rc
+@@ -41,7 +41,7 @@ BEGIN
+     "P",            IDC_BASIC_PRINT,            VIRTKEY, CONTROL, SHIFT
+ #endif
+     "D",            IDC_BOOKMARK_ALL_TABS,      VIRTKEY, CONTROL, SHIFT
+-    "D",            IDC_BOOKMARK_THIS_TAB,      VIRTKEY, CONTROL
++    "D",            IDC_HELIUM_WS_TOGGLE_PIN,   VIRTKEY, CONTROL
+     VK_F7,          IDC_CARET_BROWSING_TOGGLE,  VIRTKEY
+     VK_DELETE,      IDC_CLEAR_BROWSING_DATA,    VIRTKEY, CONTROL, SHIFT
+     "W",            IDC_CLOSE_TAB,              VIRTKEY, CONTROL
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -1973,6 +1973,9 @@ are declared in tools/grit/grit_args.gni
+       <message name="IDS_SHORTCUT_COMMAND_TOGGLE_ZEN_MODE_TOP_CHROME_PIN" desc="Command name shown on the Settings shortcuts page for pinning or unpinning the top toolbar in zen mode.">
+         Pin top toolbar
+       </message>
++      <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_TOGGLE_PIN" desc="Command name shown on the Settings shortcuts page for pinning or unpinning the current tab in the workspace sidebar.">
++        Pin or unpin tab
++      </message>
+       <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
+         Toggle developer tools
+       </message>
+Index: src/chrome/browser/global_keyboard_shortcuts_mac.mm
+===================================================================
+--- src.orig/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ src/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -144,6 +144,7 @@ const std::vector<KeyboardShortcutData>&
+       {true,  false, false, false, kVK_ANSI_Keypad9,      IDC_SELECT_LAST_TAB},
+ 
+       {true,  false, false, false, kVK_ANSI_S,            IDC_CTRL_S_SHORTCUT},
++      {true,  false, false, false, kVK_ANSI_D,            IDC_HELIUM_WS_TOGGLE_PIN},
+       {true,  true,  false, false, kVK_ANSI_L,            IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN},
+ 
+       {true,  true,  false, false, kVK_ANSI_M,            IDC_SHOW_AVATAR_MENU},
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -383,6 +383,8 @@ static_library("ui") {
+     "helium_workspace/workspace_service.h",
+     "helium_workspace/workspace_service_factory.cc",
+     "helium_workspace/workspace_service_factory.h",
++    "helium_workspace/workspace_tab_controller.cc",
++    "helium_workspace/workspace_tab_controller.h",
+     "idle_bubble.h",
+     "managed_ui.cc",
+     "managed_ui.h",
+Index: src/chrome/browser/ui/accelerator_table.cc
+===================================================================
+--- src.orig/chrome/browser/ui/accelerator_table.cc
++++ src/chrome/browser/ui/accelerator_table.cc
+@@ -56,7 +56,7 @@ const AcceleratorMapping kAcceleratorMap
+     {ui::VKEY_ESCAPE, ui::EF_NONE, IDC_CLOSE_FIND_OR_STOP},
+ 
+ #if !BUILDFLAG(IS_MAC)
+-    {ui::VKEY_D, ui::EF_PLATFORM_ACCELERATOR, IDC_BOOKMARK_THIS_TAB},
++    {ui::VKEY_D, ui::EF_PLATFORM_ACCELERATOR, IDC_HELIUM_WS_TOGGLE_PIN},
+     {ui::VKEY_D, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
+      IDC_BOOKMARK_ALL_TABS},
+     {ui::VKEY_W, ui::EF_PLATFORM_ACCELERATOR, IDC_CLOSE_TAB},
+Index: src/chrome/browser/ui/browser_command_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_command_controller.cc
++++ src/chrome/browser/ui/browser_command_controller.cc
+@@ -71,6 +71,7 @@
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
+ #include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_controller.h"
+ #include "chrome/browser/ui/managed_ui.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+@@ -670,6 +671,14 @@ void BrowserCommandController::HandleCom
+     return;
+   }
+ 
++  // helium-fork: Cmd+W on a workspace entry's tab unloads it (the entry
++  // survives) instead of closing; plain tabs close as usual.
++  if (id == IDC_CLOSE_TAB &&
++      helium_workspace::WorkspaceTabController::MaybeHandleCloseTab(
++          browser_)) {
++    return;
++  }
++
+   // The order of commands in this switch statement must match the function
+   // declaration order in browser.h!
+   switch (id) {
+@@ -1499,6 +1508,13 @@ void BrowserCommandController::HandleCom
+       }
+       break;
+     }
++    case IDC_HELIUM_WS_TOGGLE_PIN: {
++      if (auto* workspace_controller =
++              helium_workspace::WorkspaceTabController::From(browser_)) {
++        workspace_controller->TogglePinActiveTab();
++      }
++      break;
++    }
+     // Hosted App commands
+     case IDC_COPY_URL:
+       CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
+@@ -2042,6 +2058,8 @@ void BrowserCommandController::InitComma
+   command_updater_->UpdateCommandEnabled(IDC_HELIUM_SERVICES_OPEN, true);
+   command_updater_->UpdateCommandEnabled(IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN,
+                                          false);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_TOGGLE_PIN,
++                                         normal_window);
+   command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
+ 
+   // Safety Hub commands.
+Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
++++ src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+@@ -211,6 +211,8 @@ std::optional<BrowserShortcutCommandLabe
+       return Label(IDS_SHORTCUT_COMMAND_SHOW_APP_MENU);
+     case IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN:
+       return Label(IDS_SHORTCUT_COMMAND_TOGGLE_ZEN_MODE_TOP_CHROME_PIN);
++    case IDC_HELIUM_WS_TOGGLE_PIN:
++      return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_TOGGLE_PIN);
+     case IDC_CARET_BROWSING_TOGGLE:
+       return Label(IDS_SETTINGS_ENABLE_CARET_BROWSING_TITLE);
+     case IDC_CLEAR_BROWSING_DATA:
+Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_window/internal/browser_window_features.cc
++++ src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
+@@ -79,6 +79,8 @@
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
+ #include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
+ #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
+@@ -599,6 +601,13 @@ void BrowserWindowFeatures::Init(Browser
+         GetUserDataFactory().CreateInstance<HeliumTabSwitcherController>(
+             *browser, browser, profile->GetPrefs());
+ 
++    helium_workspace_tab_controller_ =
++        GetUserDataFactory()
++            .CreateInstance<helium_workspace::WorkspaceTabController>(
++                *browser, browser,
++                helium_workspace::WorkspaceServiceFactory::GetForProfile(
++                    profile));
++
+     if (tabs::IsVerticalTabsFeatureEnabled()) {
+       Browser* raw_browser = browser->GetBrowserForMigrationOnly();
+ 
+Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
+===================================================================
+--- src.orig/chrome/browser/ui/browser_window/public/browser_window_features.h
++++ src/chrome/browser/ui/browser_window/public/browser_window_features.h
+@@ -172,6 +172,10 @@ class GlicIphController;
+ class GlicNudgeController;
+ }  // namespace glic
+ 
++namespace helium_workspace {
++class WorkspaceTabController;
++}  // namespace helium_workspace
++
+ namespace lens {
+ class LensOverlayEntryPointController;
+ class LensRegionSearchController;
+@@ -681,6 +685,8 @@ class BrowserWindowFeatures {
+   std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
+   std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;
+   std::unique_ptr<HeliumTabSwitcherController> helium_tab_switcher_controller_;
++  std::unique_ptr<helium_workspace::WorkspaceTabController>
++      helium_workspace_tab_controller_;
+ 
+   std::unique_ptr<tabs::VerticalTabStripStateController>
+       vertical_tab_strip_state_controller_;
+Index: src/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+===================================================================
+--- src.orig/chrome/browser/ui/cocoa/accelerators_cocoa.mm
++++ src/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+@@ -55,7 +55,7 @@ const struct AcceleratorMapping {
+      ui::VKEY_B},
+     {IDC_SHOW_BOOKMARK_MANAGER, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN,
+      ui::VKEY_B},
+-    {IDC_BOOKMARK_THIS_TAB, ui::EF_COMMAND_DOWN, ui::VKEY_D},
++    {IDC_HELIUM_WS_TOGGLE_PIN, ui::EF_COMMAND_DOWN, ui::VKEY_D},
+     {IDC_SHOW_DOWNLOADS, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_J},
+     {IDC_SHOW_HISTORY, ui::EF_COMMAND_DOWN, ui::VKEY_Y},
+     {IDC_VIEW_SOURCE, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN, ui::VKEY_U},
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -0,0 +1,293 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
++
++#include <string>
++
++#include "base/auto_reset.h"
++#include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/sessions/session_restore.h"
++#include "chrome/browser/tab_list/tab_removed_reason.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
++#include "chrome/common/webui_url_constants.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/web_contents.h"
++
++namespace helium_workspace {
++
++DEFINE_USER_DATA(WorkspaceTabController);
++
++WorkspaceTabController::WorkspaceTabController(
++    BrowserWindowInterface* browser_window,
++    WorkspaceService* service)
++    : browser_window_(browser_window),
++      service_(service),
++      scoped_unowned_user_data_(browser_window->GetUnownedUserDataHost(),
++                                *this) {
++  if (TabStripModel* model = browser_window_->GetTabStripModel()) {
++    model->AddObserver(this);
++  }
++
++  // Fallback reconciliation for startups that do not go through session
++  // restore (fresh profile, "open the New Tab page" startup setting, ...).
++  // Deferred so Chromium's own startup tabs (including PinnedTabCodec ones)
++  // exist by the time it runs; the session-restore path is subscribed by the
++  // service itself.
++  Profile* profile = browser_window_->GetProfile();
++  if (!service_->reconciled() && !SessionRestore::IsRestoring(profile) &&
++      !browser_window_->CreatedBySessionRestore()) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(
++                       [](base::WeakPtr<WorkspaceTabController> self) {
++                         if (self) {
++                           self->service_->EnsureReconciled();
++                         }
++                       },
++                       weak_factory_.GetWeakPtr()));
++  }
++}
++
++WorkspaceTabController::~WorkspaceTabController() {
++  if (TabStripModel* model = browser_window_->GetTabStripModel()) {
++    model->RemoveObserver(this);
++  }
++}
++
++// static
++WorkspaceTabController* WorkspaceTabController::From(
++    BrowserWindowInterface* browser_window) {
++  if (!browser_window) {
++    return nullptr;
++  }
++  return Get(browser_window->GetUnownedUserDataHost());
++}
++
++void WorkspaceTabController::TogglePinActiveTab() {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (!model || model->empty()) {
++    return;
++  }
++  const int active_index = model->active_index();
++  tabs::TabInterface* tab = model->GetTabAtIndex(active_index);
++  if (!tab) {
++    return;
++  }
++  const tabs::TabHandle handle = tab->GetHandle();
++  base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
++
++  const std::string entry_id = service_->FindEntryIdForTab(handle);
++  if (!entry_id.empty()) {
++    // Unpin: entry disappears, the tab lives on as a plain Today tab.
++    service_->RemoveEntry(entry_id);
++    if (model->IsTabPinned(active_index)) {
++      model->SetTabPinned(active_index, false);
++    }
++    return;
++  }
++
++  const GURL url = tab->GetURL();
++  if (!url.is_valid()) {
++    return;
++  }
++  content::WebContents* contents = tab->GetContents();
++  const std::string id =
++      service_->AddEntry(WorkspaceEntry::Section::kPinned, url,
++                         contents ? contents->GetTitle() : std::u16string());
++  if (id.empty()) {
++    return;
++  }
++  service_->BindTab(handle, id);
++  if (!model->IsTabPinned(active_index)) {
++    model->SetTabPinned(active_index, true);
++  }
++}
++
++// static
++bool WorkspaceTabController::MaybeHandleCloseTab(
++    BrowserWindowInterface* browser_window) {
++  WorkspaceTabController* controller = From(browser_window);
++  return controller && controller->UnloadActiveWorkspaceTab();
++}
++
++bool WorkspaceTabController::UnloadActiveWorkspaceTab() {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (!model || model->empty()) {
++    return false;
++  }
++  const int index = model->active_index();
++  tabs::TabInterface* tab = model->GetTabAtIndex(index);
++  if (!tab || !service_->IsWorkspaceTab(tab->GetHandle())) {
++    return false;
++  }
++  const tabs::TabHandle handle = tab->GetHandle();
++
++  // A foreground tab cannot be discarded; move the user somewhere sensible
++  // first (Arc: clearing a pinned tab lands you on the next Today tab).
++  DeactivateTabAt(index);
++
++  service_->MarkPendingReset(handle);
++  if (!WorkspaceService::DiscardTabForWorkspace(tab)) {
++    // Not eligible (audio, capture, ...): recreate as a fresh background
++    // discarded tab at the entry URL. This always unloads, at the cost of
++    // dropping that tab's history — same as Arc archiving it.
++    const std::string entry_id = service_->FindEntryIdForTab(handle);
++    const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
++    if (!entry) {
++      return true;
++    }
++    const GURL entry_url = entry->url;
++    base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
++    service_->UnbindTab(handle);
++    const int tab_index = model->GetIndexOfTab(tab);
++    if (tab_index >= 0) {
++      model->CloseWebContentsAt(tab_index, TabCloseTypes::CLOSE_NONE);
++    }
++    content::WebContents* new_contents = chrome::AddAndReturnTabAt(
++        browser_window_, entry_url, model->IndexOfFirstNonPinnedTab(),
++        /*foreground=*/false, /*group=*/std::nullopt, /*pinned=*/true);
++    if (new_contents) {
++      if (tabs::TabInterface* new_tab =
++              model->GetTabForWebContents(new_contents)) {
++        service_->BindTab(new_tab->GetHandle(), entry_id);
++        WorkspaceService::DiscardTabForWorkspace(new_tab);
++      }
++    }
++  }
++  return true;
++}
++
++void WorkspaceTabController::DeactivateTabAt(int index) {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (model->active_index() != index) {
++    return;
++  }
++  // Prefer the first unpinned (Today) tab.
++  const int first_unpinned = model->IndexOfFirstNonPinnedTab();
++  for (int i = first_unpinned; i < model->count(); ++i) {
++    if (i != index) {
++      model->ActivateTabAt(
++          i, TabStripUserGestureDetails(
++                 TabStripUserGestureDetails::GestureType::kOther));
++      return;
++    }
++  }
++  // No Today tab: open a fresh NTP in the foreground.
++  base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
++  chrome::AddTabAt(browser_window_, GURL(chrome::kChromeUINewTabPageURL),
++                   /*index=*/-1, /*foreground=*/true);
++}
++
++void WorkspaceTabController::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  // Reset-to-origin on activation. CHANGE_REASON_REPLACED activations are
++  // discard replacements (including our own unloads) — navigating there
++  // would defeat the unload, so they are skipped; the reset happens on the
++  // next real activation.
++  if (selection.active_tab_changed() && selection.new_tab &&
++      !(selection.reason & TabStripModelObserver::CHANGE_REASON_REPLACED)) {
++    tabs::TabInterface* tab = selection.new_tab;
++    const tabs::TabHandle handle = tab->GetHandle();
++    if (service_->TakePendingReset(handle)) {
++      const WorkspaceEntry* entry =
++          service_->FindEntryById(service_->FindEntryIdForTab(handle));
++      if (entry && tab->GetContents() && tab->GetURL() != entry->url) {
++        content::NavigationController::LoadURLParams params(entry->url);
++        params.transition_type = ui::PAGE_TRANSITION_AUTO_BOOKMARK;
++        tab->GetContents()->GetController().LoadURLWithParams(params);
++      }
++    }
++  }
++
++  // Uphold the invariant when an entry's tab is destroyed through a path we
++  // do not control (context menu close, close-other-tabs, ...): re-create it
++  // as a background discarded pinned tab.
++  if (change.type() != TabStripModelChange::kRemoved || in_self_mutation_ ||
++      tab_strip_model->closing_all()) {
++    return;
++  }
++  for (const TabStripModelChange::RemovedTab& removed :
++       change.GetRemove()->contents) {
++    if (!TabRemoveReasonUtils::WillDeleteTab(removed.remove_reason)) {
++      continue;
++    }
++    const tabs::TabHandle handle = removed.tab->GetHandle();
++    const std::string entry_id = service_->FindEntryIdForTab(handle);
++    if (entry_id.empty()) {
++      continue;
++    }
++    service_->UnbindTab(handle);
++    // TabStripModel forbids re-entrant mutation from observer callbacks
++    // (see the guard CHECK in tab_strip_model.cc), so the re-creation is
++    // posted.
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&WorkspaceTabController::RecreateEntryTab,
++                                  weak_factory_.GetWeakPtr(), entry_id));
++  }
++}
++
++void WorkspaceTabController::RecreateEntryTab(const std::string& entry_id) {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (!model || model->closing_all()) {
++    return;
++  }
++  const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
++  if (!entry ||
++      service_->FindTabForEntry(entry_id) != tabs::TabHandle::Null()) {
++    return;
++  }
++  base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
++  content::WebContents* new_contents = chrome::AddAndReturnTabAt(
++      browser_window_, entry->url, model->IndexOfFirstNonPinnedTab(),
++      /*foreground=*/false, /*group=*/std::nullopt, /*pinned=*/true);
++  if (!new_contents) {
++    return;
++  }
++  if (tabs::TabInterface* new_tab = model->GetTabForWebContents(new_contents)) {
++    service_->BindTab(new_tab->GetHandle(), entry_id);
++    WorkspaceService::DiscardTabForWorkspace(new_tab);
++  }
++}
++
++void WorkspaceTabController::OnTabPinnedStateChanged(tabs::TabInterface* tab,
++                                                     int index) {
++  if (in_self_mutation_ || !tab) {
++    return;
++  }
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  const tabs::TabHandle handle = tab->GetHandle();
++  const bool pinned = model->IsTabPinned(index);
++  const std::string entry_id = service_->FindEntryIdForTab(handle);
++
++  if (pinned && entry_id.empty()) {
++    // Native pin (context menu / drag into the pinned zone) — record an
++    // entry so native pinning and Cmd+D mean the same thing.
++    const GURL url = tab->GetURL();
++    if (!url.is_valid()) {
++      return;
++    }
++    content::WebContents* contents = tab->GetContents();
++    const std::string id =
++        service_->AddEntry(WorkspaceEntry::Section::kPinned, url,
++                           contents ? contents->GetTitle() : std::u16string());
++    if (!id.empty()) {
++      service_->BindTab(handle, id);
++    }
++  } else if (!pinned && !entry_id.empty()) {
++    // Native unpin — the entry goes away, tab becomes a plain Today tab.
++    service_->RemoveEntry(entry_id);
++  }
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -0,0 +1,78 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_CONTROLLER_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_CONTROLLER_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++
++class BrowserWindowInterface;
++
++namespace helium_workspace {
++
++class WorkspaceService;
++
++// Per-window behavior of the workspace sidebar entries (Arc pinned-tab
++// semantics):
++//   - Cmd+D toggles the active tab between a plain tab and a workspace
++//     Pinned entry (IDC_HELIUM_WS_TOGGLE_PIN).
++//   - Cmd+W on an entry's tab unloads it (discard) instead of closing;
++//     the entry survives and the next activation returns to the entry URL.
++//   - Entry tabs closed through any other path are re-created as background
++//     discarded pinned tabs, upholding the invariant that every entry is
++//     backed by a real pinned tab.
++//   - Native pin/unpin (context menu, dragging across the pinned boundary)
++//     is kept in sync with the entry model in both directions.
++class WorkspaceTabController : public TabStripModelObserver {
++ public:
++  DECLARE_USER_DATA(WorkspaceTabController);
++
++  WorkspaceTabController(BrowserWindowInterface* browser_window,
++                         WorkspaceService* service);
++  WorkspaceTabController(const WorkspaceTabController&) = delete;
++  WorkspaceTabController& operator=(const WorkspaceTabController&) = delete;
++  ~WorkspaceTabController() override;
++
++  static WorkspaceTabController* From(BrowserWindowInterface* browser_window);
++
++  // IDC_HELIUM_WS_TOGGLE_PIN. No-op on non-tab windows.
++  void TogglePinActiveTab();
++
++  // Returns true if Cmd+W was consumed (active tab is a workspace entry and
++  // was unloaded instead of closed).
++  static bool MaybeHandleCloseTab(BrowserWindowInterface* browser_window);
++
++ private:
++  bool UnloadActiveWorkspaceTab();
++  // Ensures the active tab is not |index| by activating a reasonable
++  // neighbor (first non-pinned tab, or a fresh NTP when there is none).
++  void DeactivateTabAt(int index);
++  // Re-creates |entry_id|'s backing tab as a background discarded pinned
++  // tab. Posted (never called re-entrantly) because TabStripModel forbids
++  // mutation from within observer notifications.
++  void RecreateEntryTab(const std::string& entry_id);
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++  void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
++
++  const raw_ptr<BrowserWindowInterface> browser_window_;
++  const raw_ptr<WorkspaceService> service_;
++  // Re-entrancy guard for model mutations we perform ourselves (pin/unpin,
++  // re-creation) so the observer hooks do not feed back.
++  bool in_self_mutation_ = false;
++
++  ui::ScopedUnownedUserData<WorkspaceTabController> scoped_unowned_user_data_;
++  base::WeakPtrFactory<WorkspaceTabController> weak_factory_{this};
++};
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_CONTROLLER_H_
+Index: src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -293,6 +293,7 @@ void BrowserNativeWidgetMac::ValidateUse
+     case IDC_RELOAD:
+     case IDC_CTRL_S_SHORTCUT:
+     case IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN:
++    case IDC_HELIUM_WS_TOGGLE_PIN:
+     case IDC_SAVE_PAGE:
+     case IDC_SELECT_NEXT_TAB:
+     case IDC_SELECT_PREVIOUS_TAB:
