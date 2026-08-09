@@ -53,7 +53,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -383,6 +383,8 @@ static_library("ui") {
+@@ -384,6 +384,8 @@ static_library("ui") {
      "helium_workspace/workspace_service.h",
      "helium_workspace/workspace_service_factory.cc",
      "helium_workspace/workspace_service_factory.h",
@@ -595,3 +595,94 @@ Index: src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
      case IDC_SAVE_PAGE:
      case IDC_SELECT_NEXT_TAB:
      case IDC_SELECT_PREVIOUS_TAB:
+Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
++++ src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
+@@ -12,6 +12,8 @@
+ #include "base/functional/bind.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/tabs/tab_data.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+@@ -39,6 +41,41 @@ constexpr base::TimeDelta kShowGateCap =
+ constexpr int kMinHudCount = 3;
+ constexpr int kMaxHudCount = 9;
+ 
++// helium-fork: a workspace entry whose tab has been unloaded. Closing a
++// favorite or pinned tab discards it rather than removing it, so it stays in
++// the model to keep its place in the sidebar — but it is not something the
++// switcher can switch *to*. Cycling onto one used to reopen the page the user
++// had just closed. A tab discarded for any other reason is still a live tab
++// the user opened and belongs in the list.
++bool IsDormantWorkspaceEntry(Profile* profile, tabs::TabInterface* tab) {
++  if (!profile || !tab) {
++    return false;
++  }
++  content::WebContents* contents = tab->GetContents();
++  if (!contents || !contents->WasDiscarded()) {
++    return false;
++  }
++  helium_workspace::WorkspaceService* service =
++      helium_workspace::WorkspaceServiceFactory::GetForProfile(profile);
++  return service && service->IsWorkspaceTab(tab->GetHandle());
++}
++
++// helium-fork: model indices of the tabs the switcher may cycle through.
++std::vector<int> CyclableTabIndices(TabStripModel* model, Profile* profile) {
++  std::vector<int> indices;
++  if (!model) {
++    return indices;
++  }
++  const int count = model->count();
++  indices.reserve(count);
++  for (int i = 0; i < count; ++i) {
++    if (!IsDormantWorkspaceEntry(profile, model->GetTabAtIndex(i))) {
++      indices.push_back(i);
++    }
++  }
++  return indices;
++}
++
+ }  // namespace
+ 
+ DEFINE_USER_DATA(HeliumTabSwitcherController);
+@@ -94,6 +131,18 @@ bool HeliumTabSwitcherController::Handle
+     return false;
+   }
+ 
++  // helium-fork: with fewer than two tabs worth cycling to there is nothing to
++  // do — and the command must be swallowed rather than declined. Declining
++  // hands it back to the default `IDC_SELECT_NEXT_TAB`, which walks the tab
++  // strip model, and a closed favorite is still sitting in that model as a
++  // dormant entry: selecting one reopened the page the user had just closed.
++  // Other reasons to decline (the HUD pref, no widget) still fall through.
++  if (!cycling_ && CyclableTabIndices(GetTabStripModel(),
++                                      browser_window_->GetProfile())
++                           .size() < 2) {
++    return true;
++  }
++
+   if (!cycling_ && !StartCycling()) {
+     return false;
+   }
+@@ -115,9 +164,13 @@ bool HeliumTabSwitcherController::StartC
+ 
+   // Snapshot tabs in MRU order (the active tab has the most recent
+   // last-active time, so it naturally sorts first).
+-  const int count = model->count();
+-  std::vector<int> indices(count);
+-  std::iota(indices.begin(), indices.end(), 0);
++  // helium-fork: unloaded workspace entries are skipped — see
++  // `IsDormantWorkspaceEntry`.
++  std::vector<int> indices =
++      CyclableTabIndices(model, browser_window_->GetProfile());
++  if (indices.size() < 2) {
++    return false;
++  }
+   std::sort(indices.begin(), indices.end(), [model](int a, int b) {
+     return model->GetWebContentsAt(a)->GetLastActiveTimeTicks() >
+            model->GetWebContentsAt(b)->GetLastActiveTimeTicks();

@@ -1,0 +1,454 @@
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -12196,6 +12196,12 @@ Check your passwords anytime in <ph name
+         <message name="IDS_TAB_CXMENU_UNPIN_TAB" desc="The label of the tab context menu item for unpinning one or more tabs.">
+           Unpin
+         </message>
++        <message name="IDS_TAB_CXMENU_ADD_TO_FAVORITES" desc="The label of the tab context menu item that moves a workspace pinned tab into the Favorites icon grid.">
++          Add to favorites
++        </message>
++        <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
++          Remove from favorites
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
+         </message>
+@@ -12327,6 +12333,12 @@ Check your passwords anytime in <ph name
+         <message name="IDS_TAB_CXMENU_UNPIN_TAB" desc="In Title Case: The label of the tab context menu item for unpinning one or more tabs.">
+           Unpin
+         </message>
++        <message name="IDS_TAB_CXMENU_ADD_TO_FAVORITES" desc="In Title Case: The label of the tab context menu item that moves a workspace pinned tab into the Favorites icon grid.">
++          Add to Favorites
++        </message>
++        <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="In Title Case: The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
++          Remove from Favorites
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="In Title Case: The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute Site} other {Mute Sites}}
+         </message>
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
+@@ -151,6 +151,35 @@ bool WorkspaceService::SetEntryTitle(con
+   return false;
+ }
+ 
++bool WorkspaceService::SetEntrySection(const std::string& id,
++                                       WorkspaceEntry::Section section) {
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.id != id) {
++      continue;
++    }
++    if (entry.section == section) {
++      return true;
++    }
++    if (section == WorkspaceEntry::Section::kFavorite &&
++        CountFavorites() >= kMaxFavorites) {
++      return false;
++    }
++    entry.section = section;
++    entry.position = NextPosition(section);
++    std::stable_sort(entries_.begin(), entries_.end(), EntryOrderLess);
++    PersistToPrefs();
++    NotifyChanged();
++    return true;
++  }
++  return false;
++}
++
++size_t WorkspaceService::CountFavorites() const {
++  return std::ranges::count_if(entries_, [](const WorkspaceEntry& e) {
++    return e.section == WorkspaceEntry::Section::kFavorite;
++  });
++}
++
+ void WorkspaceService::BindTab(tabs::TabHandle handle,
+                                const std::string& entry_id) {
+   tab_to_entry_[handle] = entry_id;
+@@ -180,6 +209,59 @@ bool WorkspaceService::IsWorkspaceTab(ta
+   return tab_to_entry_.contains(handle);
+ }
+ 
++std::optional<WorkspaceEntry::Section> WorkspaceService::GetSectionForTab(
++    tabs::TabHandle handle) const {
++  const auto it = tab_to_entry_.find(handle);
++  if (it == tab_to_entry_.end()) {
++    return std::nullopt;
++  }
++  const WorkspaceEntry* entry = FindEntryById(it->second);
++  return entry ? std::optional(entry->section) : std::nullopt;
++}
++
++bool WorkspaceService::IsFavoriteTab(tabs::TabHandle handle) const {
++  return GetSectionForTab(handle) == WorkspaceEntry::Section::kFavorite;
++}
++
++void WorkspaceService::SyncOrderFromTabStrip(TabStripModel* model) {
++  if (!model) {
++    return;
++  }
++  int favorite_position = 0;
++  int pinned_position = 0;
++  bool changed = false;
++  for (int i = 0; i < model->IndexOfFirstNonPinnedTab(); ++i) {
++    tabs::TabInterface* tab = model->GetTabAtIndex(i);
++    if (!tab) {
++      continue;
++    }
++    const std::string entry_id = FindEntryIdForTab(tab->GetHandle());
++    if (entry_id.empty()) {
++      continue;
++    }
++    for (WorkspaceEntry& entry : entries_) {
++      if (entry.id != entry_id) {
++        continue;
++      }
++      int& next_position =
++          entry.section == WorkspaceEntry::Section::kFavorite
++              ? favorite_position
++              : pinned_position;
++      if (entry.position != next_position) {
++        entry.position = next_position;
++        changed = true;
++      }
++      ++next_position;
++      break;
++    }
++  }
++  if (changed) {
++    std::stable_sort(entries_.begin(), entries_.end(), EntryOrderLess);
++    PersistToPrefs();
++    NotifyChanged();
++  }
++}
++
+ void WorkspaceService::MarkPendingReset(tabs::TabHandle handle) {
+   pending_reset_.insert(handle);
+ }
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.h
++++ src/chrome/browser/ui/helium_workspace/workspace_service.h
+@@ -22,6 +22,7 @@
+ class GURL;
+ class PrefService;
+ class Profile;
++class TabStripModel;
+ 
+ namespace helium_workspace {
+ 
+@@ -61,6 +62,10 @@ class WorkspaceService : public KeyedSer
+   bool RemoveEntry(const std::string& id);
+   bool SetEntryUrl(const std::string& id, const GURL& url);
+   bool SetEntryTitle(const std::string& id, const std::u16string& title);
++  // Moves an entry between the Favorites and Pinned sections. Promoting to
++  // Favorites fails (returns false) when the cap is reached.
++  bool SetEntrySection(const std::string& id, WorkspaceEntry::Section section);
++  size_t CountFavorites() const;
+ 
+   // ---- Runtime tab binding (never persisted) ----
+   void BindTab(tabs::TabHandle handle, const std::string& entry_id);
+@@ -69,6 +74,14 @@ class WorkspaceService : public KeyedSer
+   std::string FindEntryIdForTab(tabs::TabHandle handle) const;
+   tabs::TabHandle FindTabForEntry(const std::string& entry_id) const;
+   bool IsWorkspaceTab(tabs::TabHandle handle) const;
++  // Section of the entry bound to |handle|, or nullopt for non-entry tabs.
++  std::optional<WorkspaceEntry::Section> GetSectionForTab(
++      tabs::TabHandle handle) const;
++  bool IsFavoriteTab(tabs::TabHandle handle) const;
++
++  // Rewrites entry positions to match the physical order of the bound tabs
++  // in |model|'s pinned region (sections are not changed here).
++  void SyncOrderFromTabStrip(TabStripModel* model);
+ 
+   // ---- Reset-to-origin marker ----
+   // Set when an entry's tab is unloaded so that its next activation
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -37,6 +37,7 @@ WorkspaceTabController::WorkspaceTabCont
+   if (TabStripModel* model = browser_window_->GetTabStripModel()) {
+     model->AddObserver(this);
+   }
++  service_observation_.Observe(service_);
+ 
+   // Fallback reconciliation for startups that do not go through session
+   // restore (fresh profile, "open the New Tab page" startup setting, ...).
+@@ -210,6 +211,43 @@ void WorkspaceTabController::OnTabStripM
+     }
+   }
+ 
++  // Drag/move inside the pinned region: crossing the Favorites/Pinned
++  // boundary changes the entry's section (Arc: dragging into the top grid
++  // makes a favorite, dragging out demotes it).
++  if (change.type() == TabStripModelChange::kMoved && !in_self_mutation_) {
++    const TabStripModelChange::Move* move = change.GetMove();
++    if (move->tab &&
++        move->to_index < tab_strip_model->IndexOfFirstNonPinnedTab()) {
++      const tabs::TabHandle handle = move->tab->GetHandle();
++      const std::optional<WorkspaceEntry::Section> section =
++          service_->GetSectionForTab(handle);
++      if (section) {
++        // Count favorite tabs physically above the drop position (excluding
++        // the moved tab itself): landing within that prefix means Favorites.
++        int favorites_before = 0;
++        for (int i = 0; i < move->to_index; ++i) {
++          tabs::TabInterface* other = tab_strip_model->GetTabAtIndex(i);
++          if (other && other != move->tab &&
++              service_->IsFavoriteTab(other->GetHandle())) {
++            ++favorites_before;
++          }
++        }
++        const bool into_favorites = move->to_index <= favorites_before;
++        const WorkspaceEntry::Section target =
++            into_favorites ? WorkspaceEntry::Section::kFavorite
++                           : WorkspaceEntry::Section::kPinned;
++        if (target != *section) {
++          service_->SetEntrySection(service_->FindEntryIdForTab(handle),
++                                    target);
++        }
++      }
++    }
++    // Whether or not a section changed, re-align positions (and bounce back
++    // rejected promotions) once the move settles.
++    ScheduleEnforceSectionOrder();
++    return;
++  }
++
+   // Uphold the invariant when an entry's tab is destroyed through a path we
+   // do not control (context menu close, close-other-tabs, ...): re-create it
+   // as a background discarded pinned tab.
+@@ -260,6 +298,50 @@ void WorkspaceTabController::RecreateEnt
+   }
+ }
+ 
++void WorkspaceTabController::ScheduleEnforceSectionOrder() {
++  if (enforce_order_pending_) {
++    return;
++  }
++  enforce_order_pending_ = true;
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(&WorkspaceTabController::EnforceSectionOrder,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void WorkspaceTabController::EnforceSectionOrder() {
++  enforce_order_pending_ = false;
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (!model || model->closing_all()) {
++    return;
++  }
++  base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
++
++  // Desired order = entries in model order (favorites first, then by
++  // position) mapped to their bound tabs in this window.
++  int slot = 0;
++  for (const WorkspaceEntry& entry : service_->entries()) {
++    const tabs::TabHandle handle = service_->FindTabForEntry(entry.id);
++    tabs::TabInterface* tab = handle.Get();
++    if (!tab) {
++      continue;
++    }
++    const int current = model->GetIndexOfTab(tab);
++    if (current < 0) {
++      continue;  // Bound in another window.
++    }
++    if (current != slot) {
++      model->MoveWebContentsAt(current, slot, /*select_after_move=*/false);
++    }
++    ++slot;
++  }
++  service_->SyncOrderFromTabStrip(model);
++}
++
++void WorkspaceTabController::OnWorkspaceEntriesChanged() {
++  ScheduleEnforceSectionOrder();
++}
++
+ void WorkspaceTabController::OnTabPinnedStateChanged(tabs::TabInterface* tab,
+                                                      int index) {
+   if (in_self_mutation_ || !tab) {
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -7,6 +7,8 @@
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+ 
+@@ -14,8 +16,6 @@ class BrowserWindowInterface;
+ 
+ namespace helium_workspace {
+ 
+-class WorkspaceService;
+-
+ // Per-window behavior of the workspace sidebar entries (Arc pinned-tab
+ // semantics):
+ //   - Cmd+D toggles the active tab between a plain tab and a workspace
+@@ -27,7 +27,8 @@ class WorkspaceService;
+ //     backed by a real pinned tab.
+ //   - Native pin/unpin (context menu, dragging across the pinned boundary)
+ //     is kept in sync with the entry model in both directions.
+-class WorkspaceTabController : public TabStripModelObserver {
++class WorkspaceTabController : public TabStripModelObserver,
++                               public WorkspaceService::Observer {
+  public:
+   DECLARE_USER_DATA(WorkspaceTabController);
+ 
+@@ -56,6 +57,16 @@ class WorkspaceTabController : public Ta
+   // mutation from within observer notifications.
+   void RecreateEntryTab(const std::string& entry_id);
+ 
++  // Schedules (deduped) / performs reordering of the pinned region so bound
++  // tabs match the model order (favorites first, then by position), then
++  // syncs entry positions back from the physical order. Posted for the same
++  // re-entrancy reason as above.
++  void ScheduleEnforceSectionOrder();
++  void EnforceSectionOrder();
++
++  // WorkspaceService::Observer:
++  void OnWorkspaceEntriesChanged() override;
++
+   // TabStripModelObserver:
+   void OnTabStripModelChanged(
+       TabStripModel* tab_strip_model,
+@@ -68,6 +79,9 @@ class WorkspaceTabController : public Ta
+   // Re-entrancy guard for model mutations we perform ourselves (pin/unpin,
+   // re-creation) so the observer hooks do not feed back.
+   bool in_self_mutation_ = false;
++  bool enforce_order_pending_ = false;
++  base::ScopedObservation<WorkspaceService, WorkspaceService::Observer>
++      service_observation_{this};
+ 
+   ui::ScopedUnownedUserData<WorkspaceTabController> scoped_unowned_user_data_;
+   base::WeakPtrFactory<WorkspaceTabController> weak_factory_{this};
+Index: src/chrome/browser/ui/tabs/tab_menu_model.cc
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_menu_model.cc
++++ src/chrome/browser/ui/tabs/tab_menu_model.cc
+@@ -32,6 +32,9 @@
+ #include "chrome/browser/ui/tabs/existing_window_sub_menu_model.h"
+ #include "chrome/browser/ui/tabs/features.h"
+ #include "chrome/browser/ui/tabs/glic_tab_sub_menu_model.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/tabs/split_tab_menu_model.h"
+ #include "chrome/browser/ui/tabs/split_tab_swap_menu_model.h"
+ #include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
+@@ -428,6 +431,25 @@ void TabMenuModel::Build(int index) {
+       TabStripModel::CommandTogglePinned,
+       will_pin ? IDS_TAB_CXMENU_PIN_TAB : IDS_TAB_CXMENU_UNPIN_TAB);
+ 
++  // helium-fork: Arc-style Favorites toggle, shown only for tabs that are
++  // workspace entries (i.e. pinned via Cmd+D / native pin).
++  if (tabs::TabInterface* tab = tab_strip_->GetTabAtIndex(index)) {
++    auto* workspace_service =
++        helium_workspace::WorkspaceServiceFactory::GetForProfile(
++            tab_strip_->profile());
++    if (workspace_service) {
++      const std::optional<helium_workspace::WorkspaceEntry::Section> section =
++          workspace_service->GetSectionForTab(tab->GetHandle());
++      if (section) {
++        AddItemWithStringId(
++            TabStripModel::CommandToggleFavorite,
++            *section == helium_workspace::WorkspaceEntry::Section::kFavorite
++                ? IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES
++                : IDS_TAB_CXMENU_ADD_TO_FAVORITES);
++      }
++    }
++  }
++
+   if (features::IsMenuSimplificationEnabled()) {
+     SetIconForCommandId(
+         TabStripModel::CommandTogglePinned,
+Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_strip_model.cc
++++ src/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -46,6 +46,9 @@
+ #include "chrome/browser/glic/public/glic_enabling.h"
+ #include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/performance_manager/public/user_tuning/user_tuning_utils.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/reading_list/reading_list_model_factory.h"
+@@ -2498,6 +2501,24 @@ bool TabStripModel::IsContextMenuCommand
+       return false;
+     }
+ 
++    case CommandToggleFavorite: {
++      auto* workspace_service =
++          helium_workspace::WorkspaceServiceFactory::GetForProfile(profile_);
++      tabs::TabInterface* tab = GetTabAtIndex(context_index);
++      if (!workspace_service || !tab) {
++        return false;
++      }
++      const std::optional<helium_workspace::WorkspaceEntry::Section> section =
++          workspace_service->GetSectionForTab(tab->GetHandle());
++      if (!section) {
++        return false;
++      }
++      // Promoting requires room in the Favorites grid.
++      return *section == helium_workspace::WorkspaceEntry::Section::kFavorite ||
++             workspace_service->CountFavorites() <
++                 helium_workspace::WorkspaceService::kMaxFavorites;
++    }
++
+     case CommandCloseOtherTabs:
+     case CommandCloseTabsToLeft:
+     case CommandCloseTabsToRight: {
+@@ -2679,6 +2700,28 @@ void TabStripModel::ExecuteContextMenuCo
+       break;
+     }
+ 
++    case CommandToggleFavorite: {
++      auto* workspace_service =
++          helium_workspace::WorkspaceServiceFactory::GetForProfile(profile_);
++      tabs::TabInterface* tab = GetTabAtIndex(context_index);
++      if (!workspace_service || !tab) {
++        break;
++      }
++      const std::string entry_id =
++          workspace_service->FindEntryIdForTab(tab->GetHandle());
++      const std::optional<helium_workspace::WorkspaceEntry::Section> section =
++          workspace_service->GetSectionForTab(tab->GetHandle());
++      if (entry_id.empty() || !section) {
++        break;
++      }
++      workspace_service->SetEntrySection(
++          entry_id,
++          *section == helium_workspace::WorkspaceEntry::Section::kFavorite
++              ? helium_workspace::WorkspaceEntry::Section::kPinned
++              : helium_workspace::WorkspaceEntry::Section::kFavorite);
++      break;
++    }
++
+     case CommandCloseTab: {
+       base::UmaHistogramCounts1000("Tab.ContextMenu.CloseTab.SelectedTabsCount",
+                                    selection_model_.size());
+Index: src/chrome/browser/ui/tabs/tab_strip_model.h
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_strip_model.h
++++ src/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -775,6 +775,7 @@ class TabStripModel {
+     CommandGlicSwitchToRecentConversation,
+     CommandGlicUnshare,
+     CommandDiscard,
++    CommandToggleFavorite,
+     CommandLast
+   };
+   // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/histograms.xml:TabContextMenuCommand)
