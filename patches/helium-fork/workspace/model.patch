@@ -46,7 +46,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "idle_bubble.h",
      "managed_ui.cc",
      "managed_ui.h",
-@@ -5977,3 +5985,22 @@ if (enable_dice_support) {
+@@ -5977,3 +5985,45 @@ if (enable_dice_support) {
      deps = [ "//base" ]
    }
  }
@@ -54,17 +54,40 @@ Index: src/chrome/browser/ui/BUILD.gn
 +# helium-fork: standalone workspace unit tests. The full unit_tests target is
 +# unbuildable in Helium's pruned tree (chrome/test/data is stripped), so the
 +# pure-logic pieces get their own minimal gtest binary.
++# helium-fork: the sidebar's model layer, tested on its own. The official
++# unit_tests target cannot be built here -- Helium's pruning removes
++# chrome/test/data/extensions/..., which unit_tests.inputdeps needs -- so
++# anything that wants coverage has to be reachable from a target this small.
++# WorkspaceService takes a PrefService rather than a Profile for exactly that
++# reason; MockTabInterface from //components/tabs:test_support stands in for
++# tabs, and a window is only ever compared by pointer.
 +test("helium_workspace_unittests") {
 +  sources = [
 +    "helium_workspace/workspace_entry.cc",
 +    "helium_workspace/workspace_entry.h",
 +    "helium_workspace/workspace_entry_unittest.cc",
 +    "helium_workspace/workspace_grid_math.h",
++    "helium_workspace/workspace_prefs.cc",
++    "helium_workspace/workspace_prefs.h",
++    "helium_workspace/workspace_service.cc",
++    "helium_workspace/workspace_service.h",
++    "helium_workspace/workspace_service_unittest.cc",
 +  ]
 +  deps = [
 +    "//base",
 +    "//base/test:run_all_unittests",
 +    "//base/test:test_support",
++    "//chrome/common:constants",
++    "//components/prefs",
++    "//components/prefs:test_support",
++    "//components/sync_preferences:test_support",
++    # :impl as well as :public -- TabHandle lookup lives in
++    # impl/supports_handles.cc, and the whole point of several tests here is
++    # that a destroyed tab's handle stops resolving.
++    "//components/tabs:impl",
++    "//components/tabs:public",
++    "//components/tabs:test_support",
++    "//testing/gmock",
 +    "//testing/gtest",
 +    "//url",
 +  ]
@@ -429,7 +452,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
-@@ -0,0 +1,298 @@
+@@ -0,0 +1,303 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -441,8 +464,6 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
 +
 +#include "base/functional/bind.h"
 +#include "base/uuid.h"
-+#include "chrome/browser/profiles/profile.h"
-+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
 +#include "chrome/common/pref_names.h"
 +#include "components/prefs/pref_service.h"
@@ -467,8 +488,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
 +
 +}  // namespace
 +
-+WorkspaceService::WorkspaceService(Profile* profile)
-+    : profile_(profile), prefs_(profile->GetPrefs()) {
++WorkspaceService::WorkspaceService(PrefService* prefs) : prefs_(prefs) {
 +  LoadFromPrefs();
 +
 +  // One-shot migration off the old model, where every entry was backed by a
@@ -621,6 +641,14 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
 +}
 +
 +std::string WorkspaceService::FindEntryIdForTab(tabs::TabHandle handle) const {
++  // Same rule as FindTabsForEntry(): a binding only counts while its tab is
++  // still alive. Handle values are never recycled, so an entry left in the
++  // map by a tab that went away without unbinding is dead but not Null, and
++  // answering "yes, that is a workspace tab" for it is how bindings used to
++  // get stranded.
++  if (!handle.Get()) {
++    return std::string();
++  }
 +  const auto it = tab_to_entry_.find(handle);
 +  return it != tab_to_entry_.end() ? it->second : std::string();
 +}
@@ -659,7 +687,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
 +}
 +
 +bool WorkspaceService::IsWorkspaceTab(tabs::TabHandle handle) const {
-+  return tab_to_entry_.contains(handle);
++  return !FindEntryIdForTab(handle).empty();
 +}
 +
 +void WorkspaceService::AddObserver(Observer* observer) {
@@ -732,7 +760,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_service.h
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,122 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -755,7 +783,6 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
 +class BrowserWindowInterface;
 +class GURL;
 +class PrefService;
-+class Profile;
 +
 +namespace helium_workspace {
 +
@@ -785,7 +812,10 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
 +
 +  static constexpr size_t kMaxFavorites = 12;
 +
-+  explicit WorkspaceService(Profile* profile);
++  // Takes the PrefService rather than the Profile it came from: everything
++  // here is entry data plus a tab-handle map, and keeping the dependency this
++  // narrow is what lets helium_workspace_unittests exercise it directly.
++  explicit WorkspaceService(PrefService* prefs);
 +  WorkspaceService(const WorkspaceService&) = delete;
 +  WorkspaceService& operator=(const WorkspaceService&) = delete;
 +  ~WorkspaceService() override;
@@ -841,7 +871,6 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
 +  void NotifyChanged();
 +  int NextPosition(WorkspaceEntry::Section section) const;
 +
-+  const raw_ptr<Profile> profile_;
 +  const raw_ptr<PrefService> prefs_;
 +
 +  std::vector<WorkspaceEntry> entries_;
@@ -901,7 +930,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_factory.cc
 +WorkspaceServiceFactory::BuildServiceInstanceForBrowserContext(
 +    content::BrowserContext* context) const {
 +  return std::make_unique<WorkspaceService>(
-+      Profile::FromBrowserContext(context));
++      Profile::FromBrowserContext(context)->GetPrefs());
 +}
 +
 +}  // namespace helium_workspace
@@ -1004,3 +1033,54 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_grid_math.h
 +}  // namespace helium_workspace
 +
 +#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_GRID_MATH_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+@@ -7,10 +7,12 @@
+ #include <memory>
+ #include <string>
+ 
++#include "base/strings/string_number_conversions.h"
++#include "base/test/task_environment.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/common/pref_names.h"
+-#include "components/prefs/testing_pref_service.h"
++#include "components/sync_preferences/testing_pref_service_syncable.h"
+ #include "components/tabs/public/mock_tab_interface.h"
+ #include "testing/gmock/include/gmock/gmock.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+@@ -27,7 +29,9 @@ using ::testing::Return;
+ class WorkspaceServiceTest : public testing::Test {
+  protected:
+   void SetUp() override {
+-    RegisterWorkspacePrefs(prefs_.registry());
++    // The real registration function, so a pref renamed in production is a
++    // compile error here rather than a silent behaviour change.
++    prefs::RegisterProfilePrefs(prefs_.registry());
+     prefs_.registry()->RegisterListPref(::prefs::kPinnedTabs);
+     service_ = std::make_unique<WorkspaceService>(&prefs_);
+   }
+@@ -53,7 +57,11 @@ class WorkspaceServiceTest : public test
+     return reinterpret_cast<BrowserWindowInterface*>(0x2);
+   }
+ 
+-  TestingPrefServiceSimple prefs_;
++  // Title and favicon writes go through a debounced OneShotTimer, which
++  // needs a task runner even when the test never lets it fire.
++  base::test::TaskEnvironment task_environment_{
++      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
++  sync_preferences::TestingPrefServiceSyncable prefs_;
+   std::unique_ptr<WorkspaceService> service_;
+ };
+ 
+@@ -189,7 +197,7 @@ TEST_F(WorkspaceServiceTest, RemovingAnE
+ TEST_F(WorkspaceServiceTest, LegacyPinnedTabsAreClearedOnce) {
+   EXPECT_TRUE(prefs_.GetBoolean(prefs::kWorkspaceMigratedFromPinnedTabs));
+ 
+-  base::Value::List pinned;
++  base::ListValue pinned;
+   pinned.Append("https://example.com/");
+   prefs_.SetList(::prefs::kPinnedTabs, std::move(pinned));
+ 

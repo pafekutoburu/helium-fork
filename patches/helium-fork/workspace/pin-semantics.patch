@@ -194,7 +194,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-@@ -0,0 +1,350 @@
+@@ -0,0 +1,355 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -213,6 +213,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +#include "chrome/browser/ui/browser_tabstrip.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_favicon.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_service.h"
 +#include "chrome/browser/ui/tabs/tab_data.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -391,7 +392,11 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +
 +void WorkspaceTabController::CaptureFavicon(tabs::TabInterface* tab,
 +                                            const std::string& entry_id) {
-+  if (!tab || entry_id.empty()) {
++  // A tab that has not fetched an icon yet still reports one -- the
++  // placeholder globe -- and it passes IsImage(). Writing it would replace
++  // the entry's real icon with a globe, persistently, every time the entry
++  // was reopened. Only a favicon the site actually served may be stored.
++  if (!tab || entry_id.empty() || !TabHasRealFavicon(tab)) {
 +    return;
 +  }
 +  const ui::ImageModel favicon =

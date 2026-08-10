@@ -40,7 +40,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
  #include <utility>
  
  #include "base/functional/bind.h"
-@@ -168,6 +169,35 @@ bool WorkspaceService::SetEntryFavicon(c
+@@ -165,6 +166,35 @@ bool WorkspaceService::SetEntryFavicon(c
    return false;
  }
  
@@ -76,8 +76,8 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
  void WorkspaceService::BindTab(tabs::TabHandle handle,
                                 const std::string& entry_id) {
    const auto it = tab_to_entry_.find(handle);
-@@ -230,6 +260,16 @@ bool WorkspaceService::IsWorkspaceTab(ta
-   return tab_to_entry_.contains(handle);
+@@ -235,6 +265,16 @@ bool WorkspaceService::IsWorkspaceTab(ta
+   return !FindEntryIdForTab(handle).empty();
  }
  
 +std::optional<WorkspaceEntry::Section> WorkspaceService::GetSectionForTab(
@@ -105,7 +105,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
  #include <string>
  #include <vector>
  
-@@ -76,6 +77,10 @@ class WorkspaceService : public KeyedSer
+@@ -78,6 +79,10 @@ class WorkspaceService : public KeyedSer
    // Raw PNG bytes; empty clears the icon. Persisted so a cold start can draw
    // entries that have no tab.
    bool SetEntryFavicon(const std::string& id, std::string png_bytes);
@@ -116,7 +116,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
  
    // ---- Runtime tab binding (never persisted) ----
    void BindTab(tabs::TabHandle handle, const std::string& entry_id);
-@@ -89,6 +94,9 @@ class WorkspaceService : public KeyedSer
+@@ -91,6 +96,9 @@ class WorkspaceService : public KeyedSer
    tabs::TabHandle FindTabForEntryInWindow(const std::string& entry_id,
                                            BrowserWindowInterface* window) const;
    bool IsWorkspaceTab(tabs::TabHandle handle) const;
@@ -130,7 +130,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-@@ -78,7 +78,15 @@ void WorkspaceTabController::TogglePinAc
+@@ -79,7 +79,15 @@ void WorkspaceTabController::TogglePinAc
    if (!model || model->empty()) {
      return;
    }
@@ -147,7 +147,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    if (!tab) {
      return;
    }
-@@ -104,6 +112,46 @@ void WorkspaceTabController::TogglePinAc
+@@ -105,6 +113,46 @@ void WorkspaceTabController::TogglePinAc
    }
  }
  

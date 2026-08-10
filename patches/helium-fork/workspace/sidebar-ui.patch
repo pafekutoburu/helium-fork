@@ -678,7 +678,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,379 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -693,6 +693,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
 +#include "chrome/browser/favicon/favicon_service_factory.h"
 +#include "chrome/browser/favicon/favicon_utils.h"
 +#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium_workspace/workspace_favicon.h"
 +#include "chrome/browser/ui/layout_constants.h"
 +#include "chrome/browser/ui/tabs/tab_data.h"
 +#include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
@@ -969,13 +970,16 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
 +void WorkspaceEntryView::ResolveIcon() {
 +  favicon_tracker_.TryCancelAll();
 +
-+  // 1. The live tab. Its icon, but never its throbber: a sidebar row is a
-+  // bookmark-like thing, and spinning it on every reload reads as jank rather
-+  // than as progress. A tab that has not produced an icon yet falls through
-+  // to the persisted one instead of blanking the row while it loads.
++  // 1. The live tab, but only once it has a favicon the site actually
++  // served. A tab still loading reports the placeholder globe, and taking it
++  // here would blank out an entry that already has a perfectly good icon --
++  // reopening a closed entry would visibly lose its logo.
++  //
++  // Never its throbber, either: a sidebar row is a bookmark-like thing, and
++  // spinning it on every reload reads as jank rather than as progress.
 +  if (tabs::TabInterface* tab = bound_tab_.get()) {
-+    tabs::TabData data = tabs::TabData::FromTabInterface(tab);
-+    if (!data.favicon.IsEmpty()) {
++    if (helium_workspace::TabHasRealFavicon(tab)) {
++      tabs::TabData data = tabs::TabData::FromTabInterface(tab);
 +      data.network_state = tabs::TabNetworkState::kNone;
 +      data.should_hide_throbber = true;
 +      icon_->SetData(std::move(data));
