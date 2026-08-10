@@ -224,6 +224,22 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
  }
  
  bool PinnedTabContainerView::IsDragging() const {
+@@ -204,7 +149,14 @@ bool PinnedTabContainerView::ShouldAnima
+ 
+ bool PinnedTabContainerView::ShouldSnapToTarget(
+     const views::View& child_view) const {
+-  return views::IsViewClass<SplitTabView>(&child_view);
++  // helium-fork: the sidebar is profile data and is already complete on the
++  // window's first frame -- nothing arrives in it, so nothing should animate
++  // in. Left to itself the animating layout manager treats it as an added
++  // child and, on this container's horizontal axis, grows it from zero width;
++  // every Favorites capsule's x and width scale up together and the row reads
++  // as sweeping in from the left each time a window opens.
++  return views::IsViewClass<SplitTabView>(&child_view) ||
++         &child_view == workspace_view_;
+ }
+ 
+ std::optional<BrowserRootView::DropIndex>
 Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
