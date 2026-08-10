@@ -34,65 +34,1229 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
-@@ -5,6 +5,8 @@
- #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
- 
- #include "base/i18n/rtl.h"
-+#include "cc/paint/paint_flags.h"
-+#include "chrome/browser/ui/color/chrome_color_id.h"
- #include "chrome/browser/ui/layout_constants.h"
- #include "chrome/browser/ui/tabs/features.h"
- #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
-@@ -14,18 +16,215 @@
+@@ -14,6 +14,7 @@
  #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
  #include "chrome/browser/ui/views/tabs/common/tab_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/views/controls/scroll_view.h"
+@@ -50,6 +51,12 @@ PinnedTabContainerView::PinnedTabContain
+   node_destroyed_subscription_ = collection_node_->RegisterWillDestroyCallback(
+       base::BindOnce(&PinnedTabContainerView::ResetCollectionNode,
+                      base::Unretained(this)));
++
++  // helium-fork: the whole Arc sidebar (favorites grid, space header, pinned
++  // rows) is one child view driven by WorkspaceService::entries(). It is
++  // profile data, not this window's tabs, which is why a new window shows a
++  // complete sidebar on its first frame.
++  workspace_view_ = AddChildView(std::make_unique<WorkspaceSidebarView>());
+ }
+ 
+ PinnedTabContainerView::~PinnedTabContainerView() = default;
+@@ -60,125 +67,63 @@ views::ProposedLayout PinnedTabContainer
+   int total_width = 0;
+   int total_height = 0;
+ 
++  const int min_child_width =
++      GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
++  const int row_width = size_bounds.width().is_bounded()
++                            ? std::max(size_bounds.width().value(),
++                                       min_child_width)
++                            : min_child_width;
++
++  // helium-fork: the workspace sidebar owns the whole pinned region. It is
++  // laid out from WorkspaceService::entries(), so it needs no children from
++  // the tab collection at all.
++  if (workspace_view_) {
++    const int workspace_height =
++        workspace_view_
++            ->GetPreferredSize(views::SizeBounds(row_width, {}))
++            .height();
++    layouts.child_layouts.emplace_back(
++        workspace_view_.get(), true,
++        gfx::Rect(0, 0, row_width, workspace_height));
++    total_width = row_width;
++    total_height = workspace_height;
++  }
++
++  // helium-fork: a natively pinned tab has no sidebar row of its own -- the
++  // sidebar draws entries. WorkspaceTabController converts any such tab into
++  // an entry and takes the pin back, but that round trip is posted, so lay
++  // them out as ordinary rows for the frame or two they exist. Without this
++  // they would be invisible in the meantime.
+   const std::vector<views::View*> children =
+       collection_node_ ? collection_node_->GetDirectChildren()
+                        : std::vector<views::View*>();
+-
+-  int x = 0;
+-  int y = 0;
+-  int children_on_row = children.size();
+-
+-  if (children_on_row == 0) {
+-    layouts.host_size = gfx::Size(0, 0);
+-    return layouts;
+-  }
+-
+-  // Child width will be uniform and match the largest child's width.
+-  bool contains_split = false;
+-  for (const auto& i : collection_node_->children()) {
+-    if (i->type() == TabCollectionNode::Type::SPLIT) {
+-      contains_split = true;
+-    }
+-  }
+-  int child_width = GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth) *
+-                    (contains_split ? 2 : 1);
+-
+-  // If the width is bounded, calculate how many children can fit on a row.
+-  // Since all children are allocated the same width this will be the same for
+-  // every row.
+-  if (size_bounds.width().is_bounded() && size_bounds.width().value() > 0) {
+-    // Apply horizontal padding immediately at start of collapse animation by
+-    // including collapsing state.
+-    int available_width =
+-        size_bounds.width().value() -
+-        GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
+-
+-    // When we are in collapsed state, only one child should be shown per row.
+-    // During collapse animation and other cases, fit as many as possible.
+-    children_on_row = std::max(
+-        1,
+-        std::min(children_on_row,
+-                 static_cast<int>(std::floor((available_width - child_width) /
+-                                             (child_width + kTabPadding)) +
+-                                  1)));
+-
+-    // Allocate extra space to the tabs.
+-    available_width -=
+-        (children_on_row * child_width) + (kTabPadding * (children_on_row - 1));
+-    child_width += std::floor(available_width / children_on_row);
+-  }
+-
+-  int row_index = 0;
+-  for (auto* child : children) {
++  int y = total_height;
++  for (views::View* child : children) {
++    y += kTabPadding;
+     gfx::Rect bounds =
+-        gfx::Rect(child->GetPreferredSize(views::SizeBounds(child_width, {})));
+-    bounds.set_width(child_width);
+-
+-    auto drag_data = GetVisualDataForDraggedView(*child);
+-    const bool should_show_child = !(drag_data && drag_data->should_hide);
+-    if (!should_show_child) {
+-      layouts.child_layouts.emplace_back(child, false, bounds);
+-      continue;
+-    }
+-
+-    bounds.set_y(drag_data ? drag_data->offset.y() : y);
+-    int child_x = drag_data ? drag_data->offset.x() : x;
+-    if (drag_data && base::i18n::IsRTL()) {
+-      child_x = size_bounds.width().value() - child_x - child_width;
+-    }
+-    bounds.set_x(child_x);
+-
+-    if (row_index != 0) {
+-      bounds.set_x(bounds.x() + kTabPadding);
+-    }
+-
+-    if (!drag_data || !drag_data->should_float) {
+-      if (row_index != 0) {
+-        x += kTabPadding;
+-      }
+-      x += bounds.width();
+-      total_width = std::max(total_width, x);
+-      total_height = std::max(total_height, (y + bounds.height()));
+-
+-      row_index++;
+-      if (row_index >= children_on_row) {
+-        y = total_height + kTabPadding;
+-        row_index = 0;
+-        x = 0;
+-      }
+-    }
+-
++        gfx::Rect(child->GetPreferredSize(views::SizeBounds(row_width, {})));
++    bounds.set_width(row_width);
++    bounds.set_origin(gfx::Point(0, y));
+     layouts.child_layouts.emplace_back(child, true, bounds);
++    y += bounds.height();
++    total_width = std::max(total_width, bounds.width());
++    total_height = y;
+   }
+ 
+-  // Make sure we snap to bounded width if defined. This is necessary as the
+-  // `child_width` calculation above rounds width down and this can result in
+-  // off-by-one width calculations when the number of children on a row changes.
+-  // Changes in host width can be interpreted as a resize and animations may
+-  // otherwise snap to target.
+   layouts.host_size =
+       gfx::Size(size_bounds.width().value_or(total_width), total_height);
+   return layouts;
+ }
+ 
+ gfx::Size PinnedTabContainerView::GetMinimumSize() const {
+-  if (!collection_node_) {
+-    return gfx::Size();
+-  }
+-
+-  // The minimum size should be enough to show a row and a half, if needed.
+-  auto collapse_state = GetTabStripCollapseState();
+-  const int num_children = collection_node_->GetDirectChildren().size();
+-  const float min_rows = std::min(
+-      (collapse_state != tabs::VerticalTabStripCollapseState::kExpanded ? 1.5f
+-                                                                        : 1.0f),
+-      static_cast<float>(num_children));
+-  const int min_height =
+-      base::ClampCeil(GetLayoutConstant(LayoutConstant::kVerticalTabHeight) *
+-                      min_rows) +
+-      (num_children > 1 ? kTabPadding : 0);
++  // helium-fork: the sidebar decides its own floor. Asking it for a
++  // *preferred* size here would be wrong: with no width bound the grid plans
++  // one capsule per row, so a full Favorites grid would demand enough height
++  // to push Today off the strip.
++  const int workspace_height =
++      workspace_view_ ? workspace_view_->GetMinimumSize().height() : 0;
+   return gfx::Size(GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth),
+-                   min_height);
++                   workspace_height);
+ }
+ 
+ bool PinnedTabContainerView::IsDragging() const {
+Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
++++ src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
+@@ -14,6 +14,7 @@
+ #include "ui/views/view.h"
+ 
+ class TabCollectionNode;
++class WorkspaceSidebarView;
+ 
+ // The view class that represents the pinned tab region for the
+ // tab strip. It manages the layout of all the pinned tabs and serves
+@@ -70,6 +71,22 @@ class PinnedTabContainerView
+   void ResetCollectionNode();
+ 
+   raw_ptr<TabCollectionNode> collection_node_;
++
++  // helium-fork: the Arc sidebar. A plain child view, not part of the tab
++  // collection -- it renders profile-scoped entries rather than this
++  // window's tabs.
++  //
++  // Declared *before* `layout_manager_` on purpose. Installing a layout
++  // manager runs a layout pass immediately (SetLayoutManagerImpl ->
++  // Installed -> RecalculateTarget -> CalculateProposedLayout), and
++  // `layout_manager_` is initialised in the constructor's member-initialiser
++  // list -- so that pass runs while every member declared after it is still
++  // uninitialised. Reading this pointer there segfaulted whenever the
++  // garbage happened to be non-null. Members are initialised in declaration
++  // order, so putting it here makes it null before the layout pass can see
++  // it.
++  raw_ptr<WorkspaceSidebarView> workspace_view_ = nullptr;
++
+   const raw_ref<TabCollectionAnimatingLayoutManager> layout_manager_;
+ 
+   base::CallbackListSubscription node_destroyed_subscription_;
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -10,6 +10,8 @@
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -114,6 +116,10 @@ TabStripView::TabStripView(TabCollection
+       views::ScrollView::ScrollWithLayers::kEnabled));
+   SetScrollViewProperties(pinned_tabs_scroll_view_);
+ 
++  // helium-fork: Arc-style divider between the pinned section and the
++  // regular (Today) tabs, restored from the upstream separator.
++  tabs_separator_ = AddChildView(std::make_unique<views::Separator>());
++
+   unpinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
+       views::ScrollView::ScrollWithLayers::kEnabled));
+   SetScrollViewProperties(unpinned_tabs_scroll_view_);
+@@ -144,8 +150,12 @@ views::ProposedLayout TabStripView::Calc
+   const int region_horizontal_padding =
+       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
+ 
+-  const int region_vertical_padding = GetLayoutConstant(
+-      LayoutConstant::kVerticalTabStripCollapsedVerticalPadding);
++  // helium-fork: the pinned/Today divider needs more breathing room than the
++  // generic region padding gives it, or it reads as a hairline crammed
++  // against the tabs instead of a section break. Kept local rather than
++  // widening `kVerticalTabStripCollapsedVerticalPadding`, which the vertical
++  // top container and the WebUI toolbar CSS also consume.
++  static constexpr int kTabsSeparatorVerticalPadding = 12;
+ 
+   int y = 0;
+ 
+@@ -164,8 +174,14 @@ views::ProposedLayout TabStripView::Calc
+   int remaining_height = 0;
+   if (size_bounds.height().is_bounded()) {
+     remaining_height = size_bounds.height().value();
+-    if (pinned_preferred_height != 0 && unpinned_preferred_height != 0) {
+-      remaining_height -= region_vertical_padding;
++    // helium-fork: the divider is permanent, so its space is reserved
++    // whenever the pinned section is present -- matching where it is placed
++    // below. Keying this off Today's contents as well would under-reserve the
++    // moment Today emptied.
++    if (pinned_preferred_height != 0) {
++      remaining_height -= kTabsSeparatorVerticalPadding;
++      remaining_height -= tabs_separator_->GetPreferredSize().height() +
++                          kTabsSeparatorVerticalPadding;
+     }
+     // Clamp the remaining height to 0 if we have less space.
+     remaining_height = std::max(remaining_height, 0);
+@@ -194,10 +210,23 @@ views::ProposedLayout TabStripView::Calc
+ 
+   if (pinned_container_bounds.height()) {
+     y += pinned_container_bounds.height();
+-    // Add padding only if there are pinned and unpinned tabs.
+-    if (unpinned_preferred_height != 0) {
+-      y += region_vertical_padding;
+-    }
++    y += kTabsSeparatorVerticalPadding;
++  }
++
++  // helium-fork: the divider is permanent -- it is drawn even with Today
++  // empty. It is the only thing marking where the pinned section ends, and
++  // without it an empty Today reads as "the sidebar is all there is".
++  if (pinned_container_bounds.height() && size_bounds.width().is_bounded()) {
++    gfx::Rect tabs_separator_bounds(
++        region_horizontal_padding, y,
++        size_bounds.width().value() - 2 * region_horizontal_padding,
++        tabs_separator_->GetPreferredSize().height());
++    layouts.child_layouts.emplace_back(tabs_separator_.get(), true,
++                                       tabs_separator_bounds);
++    y += tabs_separator_bounds.height() + kTabsSeparatorVerticalPadding;
++  } else {
++    layouts.child_layouts.emplace_back(tabs_separator_.get(), false,
++                                       gfx::Rect());
+   }
+ 
+   // Place the unpinned container using the entire available width, we do not
+@@ -333,6 +362,21 @@ void TabStripView::OnTabChanged(const ta
+     }
+   }
+ 
++  // helium-fork: a tab bound to a workspace entry is drawn by the sidebar,
++  // and its TabView sits in the Today container hidden and zero-height.
++  // Scrolling to it would park `activated_view_tracker_` on that view, whose
++  // height can never reach its preferred height -- so the callback that turns
++  // Today's overflow gradients back on would never run, disabling them for
++  // the rest of the session. The sidebar is always fully visible anyway, so
++  // there is nothing to scroll to.
++  if (const helium_workspace::WorkspaceService* workspace_service =
++          helium_workspace::WorkspaceServiceFactory::GetForProfile(
++              active_tab->GetProfile())) {
++    if (workspace_service->IsWorkspaceTab(active_tab->GetHandle())) {
++      return;
++    }
++  }
++
+   TabCollectionNode* activated_node =
+       collection_node_->GetNodeForHandle(active_tab->GetHandle());
+   CHECK(activated_node);
+@@ -609,7 +653,10 @@ void TabStripView::DisableOverflowVisual
+   }
+ }
+ 
+-void TabStripView::UpdateColors() {}
++void TabStripView::UpdateColors() {
++  tabs_separator_->SetColorId(IsFrameActive() ? kColorTabDividerFrameActive
++                                              : kColorTabDividerFrameInactive);
++}
+ 
+ bool TabStripView::IsFrameActive() const {
+   return GetWidget() ? GetWidget()->ShouldPaintAsActive() : true;
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_view.h
+@@ -80,6 +80,9 @@ class TabView : public views::View,
+   SkPath GetPath() const;
+ 
+   const TabCollectionNode* collection_node() const { return collection_node_; }
++  // helium-fork: the Today section needs a tab's handle to ask the workspace
++  // service whether the sidebar is already drawing it as an entry.
++  const tabs::TabInterface* tab_interface() const { return GetTabInterface(); }
+   const TabStyle* tab_style() const { return tab_style_; }
+   float radial_highlight_opacity() { return radial_highlight_opacity_; }
+   const tabs::TabData& data() const { return tab_data_; }
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -12202,6 +12202,21 @@ Check your passwords anytime in <ph name
+         <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
+           Remove from favorites
+         </message>
++        <message name="IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_TITLE" desc="Title inside the dashed placeholder shown while the Favorites grid in the vertical tab sidebar is empty.">
++          Drag to add Favorites
++        </message>
++        <message name="IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_SUBTITLE" desc="Explanatory text inside the dashed placeholder shown while the Favorites grid in the vertical tab sidebar is empty.">
++          Favorites keep your most used sites and apps close
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_DEFAULT_NAME" desc="Default name of the space, shown in the collapsible header row that separates the Favorites grid from the pinned tabs in the vertical tab sidebar.">
++          Untitled
++        </message>
++        <message name="IDS_HELIUM_WS_ENTRY_MENU_OPEN" desc="The label of the context menu item that opens a workspace sidebar entry in a tab.">
++          Open
++        </message>
++        <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
++          Remove
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
+         </message>
+@@ -12339,6 +12354,21 @@ Check your passwords anytime in <ph name
+         <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="In Title Case: The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
+           Remove from Favorites
+         </message>
++        <message name="IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_TITLE" desc="In Title Case: Title inside the dashed placeholder shown while the Favorites grid in the vertical tab sidebar is empty.">
++          Drag to add Favorites
++        </message>
++        <message name="IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_SUBTITLE" desc="In Title Case: Explanatory text inside the dashed placeholder shown while the Favorites grid in the vertical tab sidebar is empty.">
++          Favorites keep your most used sites and apps close
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_DEFAULT_NAME" desc="In Title Case: Default name of the space, shown in the collapsible header row that separates the Favorites grid from the pinned tabs in the vertical tab sidebar.">
++          Untitled
++        </message>
++        <message name="IDS_HELIUM_WS_ENTRY_MENU_OPEN" desc="In Title Case: The label of the context menu item that opens a workspace sidebar entry in a tab.">
++          Open
++        </message>
++        <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="In Title Case: The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
++          Remove
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="In Title Case: The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute Site} other {Mute Sites}}
+         </message>
+Index: src/chrome/browser/ui/layout_constants.cc
+===================================================================
+--- src.orig/chrome/browser/ui/layout_constants.cc
++++ src/chrome/browser/ui/layout_constants.cc
+@@ -147,9 +147,14 @@ int GetLayoutConstant(LayoutConstant con
+     case LayoutConstant::kVerticalTabCornerRadius:
+       return 8;
+     case LayoutConstant::kVerticalTabHeight:
+-      return 30;
++      // helium-fork: Arc's rows are a little taller than upstream's 30.
++      return 34;
+     case LayoutConstant::kVerticalTabPinnedHeight:
+       return 30;
++    case LayoutConstant::kVerticalTabFavoriteHeight:
++      return 44;
++    case LayoutConstant::kVerticalTabFavoriteCornerRadius:
++      return 12;
+     case LayoutConstant::kVerticalTabMinWidth:
+       return 30;
+     case LayoutConstant::kVerticalTabStripHorizontalPadding:
+Index: src/chrome/browser/ui/layout_constants.h
+===================================================================
+--- src.orig/chrome/browser/ui/layout_constants.h
++++ src/chrome/browser/ui/layout_constants.h
+@@ -226,6 +226,12 @@ enum class LayoutConstant {
+   // The height of a pinned vertical tab.
+   kVerticalTabPinnedHeight,
+ 
++  // helium-fork: the height of a workspace favorite capsule in the icon grid.
++  kVerticalTabFavoriteHeight,
++
++  // helium-fork: the corner radius of a workspace favorite capsule.
++  kVerticalTabFavoriteCornerRadius,
++
+   // The minimum possible width for a vertical tab.
+   kVerticalTabMinWidth,
+ 
+Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
+@@ -11,6 +11,7 @@ namespace helium_workspace::prefs {
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterListPref(kWorkspaceEntries);
+   registry->RegisterBooleanPref(kWorkspaceMigratedFromPinnedTabs, false);
++  registry->RegisterBooleanPref(kWorkspaceSpaceCollapsed, false);
+ }
+ 
+ }  // namespace helium_workspace::prefs
+Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.h
++++ src/chrome/browser/ui/helium_workspace/workspace_prefs.h
+@@ -24,6 +24,11 @@ inline constexpr char kWorkspaceEntries[
+ inline constexpr char kWorkspaceMigratedFromPinnedTabs[] =
+     "helium.workspace.migrated_from_pinned_tabs";
+ 
++// Whether the space header row in the sidebar is collapsed, hiding the
++// full-row pinned section below it. The header itself stays visible.
++inline constexpr char kWorkspaceSpaceCollapsed[] =
++    "helium.workspace.space_collapsed";
++
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+ 
+ }  // namespace helium_workspace::prefs
+Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -61,6 +61,15 @@ source_set("impl") {
+     "tab_view.cc",
+     "tab_view.h",
+     "unpinned_tab_container_view.cc",
++
++    # helium-fork: the Arc-style workspace sidebar. These live in ":impl"
++    # rather than ":common" because they need the complete WorkspaceService
++    # type, which is in //chrome/browser/ui -- a dependency ":common" cannot
++    # take without a cycle.
++    "workspace_entry_view.cc",
++    "workspace_entry_view.h",
++    "workspace_sidebar_view.cc",
++    "workspace_sidebar_view.h",
+   ]
+ 
+   deps = [
+@@ -68,6 +77,7 @@ source_set("impl") {
+     "//chrome/browser/glic",
+     "//chrome/browser/glic/browser_ui:glow",
+     "//chrome/browser/glic/browser_ui:glow_controller",
++    "//chrome/browser/favicon",
+     "//chrome/browser/tab_group_sync:factories",
+     "//chrome/browser/themes",
+     "//chrome/browser/ui:browser_element_identifiers",
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+@@ -4,7 +4,12 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+ 
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
+ #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+@@ -28,6 +33,20 @@
+ namespace {
+ constexpr int kTabVerticalPadding = 2;
+ 
++// helium-fork: true when |child| is a tab the workspace sidebar already
++// draws as one of its entries. Such a tab is a real, ordinary tab -- it is
++// simply presented in the sidebar instead of in Today.
++bool IsWorkspaceEntryTab(
++    const helium_workspace::WorkspaceService* service,
++    const views::View* child) {
++  if (!service) {
++    return false;
++  }
++  const TabView* tab_view = views::AsViewClass<TabView>(child);
++  const tabs::TabInterface* tab = tab_view ? tab_view->tab_interface() : nullptr;
++  return tab && service->IsWorkspaceTab(tab->GetHandle());
++}
++
+ // The following are percentages used to determine the amount that dragged
+ // tabs must be peeking into/out of a tab group view in order for the handling
+ // drag container to change.
+@@ -116,9 +135,19 @@ views::ProposedLayout UnpinnedTabContain
+       collection_node_ ? collection_node_->GetDirectChildren()
+                        : std::vector<views::View*>();
+ 
++  // helium-fork: a tab bound to a workspace entry is drawn by the sidebar, not
++  // here -- otherwise clicking an entry would show the same page twice.
++  const helium_workspace::WorkspaceService* workspace_service =
++      GetWorkspaceService();
++
+   // Layout children in order. Children will have their preferred height and
+   // fill available width.
++  int laid_out_count = 0;
+   for (auto* child : children) {
++    if (IsWorkspaceEntryTab(workspace_service, child)) {
++      layouts.child_layouts.emplace_back(child, false, gfx::Rect());
++      continue;
++    }
+     // The leading inset should not be applied for tab groups when the tab strip
+     // is collapsed since the group color line is drawn in that space.
+     int x =
+@@ -144,12 +173,22 @@ views::ProposedLayout UnpinnedTabContain
+       bounds.set_width(size_bounds.width().value() - bounds.x() -
+                        horizontal_padding);
+     }
+-    layouts.child_layouts.emplace_back(child, child->GetVisible(), bounds);
++    // helium-fork: `true`, not `child->GetVisible()`. The entry filter above
++    // really does hide the view (LayoutManagerBase applies ChildLayout::visible
++    // via SetViewVisibility), so a tab that stops being an entry -- the entry
++    // was removed, or its tab was unbound -- would read back as invisible and
++    // stay that way, while still being given a full row of height here. That
++    // is a phantom blank row. Anything laid out at real bounds must be drawn.
++    layouts.child_layouts.emplace_back(child, true, bounds);
+     height += bounds.height() + kTabVerticalPadding;
+     width = std::max(width, bounds.width() + bounds.x());
++    ++laid_out_count;
+   }
+   // Remove excess padding if needed.
+-  if (!children.empty()) {
++  // helium-fork: keyed off what was actually laid out, not off `children` --
++  // a Today section holding nothing but entry tabs lays out nothing, and
++  // subtracting the padding anyway would leave a negative height.
++  if (laid_out_count > 0) {
+     height -= kTabVerticalPadding;
+   }
+ 
+@@ -169,13 +208,40 @@ views::ProposedLayout UnpinnedTabContain
+   return layouts;
+ }
+ 
++const helium_workspace::WorkspaceService*
++UnpinnedTabContainerView::GetWorkspaceService() const {
++  if (!GetWidget()) {
++    return nullptr;
++  }
++  gfx::NativeWindow window = GetWidget()->GetNativeWindow();
++  if (!window) {
++    return nullptr;
++  }
++  BrowserView* browser_view =
++      BrowserView::GetBrowserViewForNativeWindow(window);
++  if (!browser_view || !browser_view->browser()) {
++    return nullptr;
++  }
++  return helium_workspace::WorkspaceServiceFactory::GetForProfile(
++      browser_view->browser()->profile());
++}
++
+ gfx::Size UnpinnedTabContainerView::GetMinimumSize() const {
+   if (!collection_node_) {
+     return gfx::Size();
+   }
+ 
+   // The minimum size should be enough to show a tab and a half, if needed.
+-  const int num_children = collection_node_->GetDirectChildren().size();
++  // helium-fork: entry tabs are not drawn here, so they must not reserve
++  // height either -- a Today section holding only entry tabs is empty.
++  const helium_workspace::WorkspaceService* workspace_service =
++      GetWorkspaceService();
++  int num_children = 0;
++  for (views::View* child : collection_node_->GetDirectChildren()) {
++    if (!IsWorkspaceEntryTab(workspace_service, child)) {
++      ++num_children;
++    }
++  }
+   const int min_height =
+       base::ClampCeil(GetLayoutConstant(LayoutConstant::kVerticalTabHeight) *
+                       std::min(1.5f, static_cast<float>(num_children))) +
+@@ -189,9 +255,16 @@ UnpinnedTabContainerView::GetLinkDropInd
+   if (!collection_node_) {
+     return std::nullopt;
+   }
++  const helium_workspace::WorkspaceService* workspace_service =
++      GetWorkspaceService();
+   for (auto& child_node : collection_node_->children()) {
+     auto* view = child_node->view();
+     CHECK(view);
++    // helium-fork: entry tabs have no bounds here, so they can never be a
++    // drop target in Today.
++    if (IsWorkspaceEntryTab(workspace_service, view)) {
++      continue;
++    }
+     if (loc_in_container.y() >= view->bounds().bottom()) {
+       continue;
+     }
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+@@ -0,0 +1,375 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/common/workspace_entry_view.h"
++
++#include <utility>
++
++#include "base/containers/span.h"
++#include "base/functional/bind.h"
++#include "cc/paint/paint_flags.h"
++#include "chrome/browser/favicon/favicon_service_factory.h"
++#include "chrome/browser/favicon/favicon_utils.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/tabs/tab_data.h"
++#include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
++#include "chrome/browser/ui/views/tabs/tab/tab_title.h"
++#include "chrome/grit/generated_resources.h"
++#include "components/favicon/core/favicon_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "ui/base/clipboard/scoped_clipboard_writer.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/accessibility/ax_enums.mojom-shared.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/models/image_model.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/favicon_size.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/image/image.h"
++#include "ui/gfx/image/image_skia.h"
++#include "ui/views/controls/menu/menu_runner.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/style/typography.h"
++
++namespace {
++
++// Command ids for the entry context menu. Local to this view: the actions are
++// executed here, so they never reach the browser command table.
++enum EntryMenuCommand {
++  kOpen = 1,
++  kToggleFavorite,
++  kCopyAddress,
++  kRemove,
++};
++
++// Row metrics. The capsule/row heights and radii are the ones the tab strip
++// already uses for pinned vertical tabs, so an entry row lines up with a
++// Today row exactly.
++constexpr int kIconLeadingInset = 2;
++constexpr int kTitleSpacing = 8;
++constexpr int kTitleTrailingInset = 8;
++constexpr int kActiveOutlineThickness = 2;
++
++}  // namespace
++
++WorkspaceEntryView::WorkspaceEntryView(Delegate* delegate, Profile* profile)
++    : delegate_(delegate), profile_(profile) {
++  icon_ = AddChildView(std::make_unique<TabIcon>());
++  icon_->SetCanProcessEventsWithinSubtree(false);
++  title_label_ = AddChildView(std::make_unique<TabTitle>());
++
++  set_context_menu_controller(this);
++  GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
++}
++
++WorkspaceEntryView::~WorkspaceEntryView() = default;
++
++void WorkspaceEntryView::SetEntry(
++    const helium_workspace::WorkspaceEntry& entry) {
++  const bool section_changed = section_ != entry.section;
++  const bool icon_changed = favicon_png_ != entry.favicon_png;
++
++  entry_id_ = entry.id;
++  url_ = entry.url;
++  section_ = entry.section;
++
++  if (title_ != entry.title) {
++    title_ = entry.title;
++    title_label_->SetText(title_);
++    UpdateAccessibleState();
++  }
++  if (icon_changed) {
++    favicon_png_ = entry.favicon_png;
++    ResolveIcon();
++  }
++  if (section_changed) {
++    // Capsules hide their title and are a different height entirely.
++    title_label_->SetVisible(!renders_as_capsule());
++    InvalidateLayout();
++    SchedulePaint();
++  }
++}
++
++void WorkspaceEntryView::SetBoundTab(tabs::TabInterface* tab) {
++  const bool was_bound = !!bound_tab_;
++  if (bound_tab_.get() == tab) {
++    return;
++  }
++  bound_tab_ = tab ? tab->GetWeakPtr() : nullptr;
++  ResolveIcon();
++  if (was_bound != !!bound_tab_) {
++    // An unbound entry is drawn faded: it is a place the user can go, not a
++    // page that is open.
++    title_label_->SetEnabledColor(ui::kColorLabelForegroundSecondary);
++    if (bound_tab_) {
++      title_label_->SetEnabledColor(ui::kColorLabelForeground);
++    }
++    SchedulePaint();
++  }
++}
++
++void WorkspaceEntryView::SetActive(bool active) {
++  if (active_ == active) {
++    return;
++  }
++  active_ = active;
++  icon_->SetActiveState(active_);
++  SchedulePaint();
++}
++
++gfx::Size WorkspaceEntryView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  const int height = GetLayoutConstant(
++      renders_as_capsule() ? LayoutConstant::kVerticalTabFavoriteHeight
++                           : LayoutConstant::kVerticalTabHeight);
++  const int min_width = GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
++  const int width = available_size.width().is_bounded()
++                        ? std::max(min_width, available_size.width().value())
++                        : min_width;
++  return gfx::Size(width, height);
++}
++
++void WorkspaceEntryView::Layout(PassKey) {
++  const gfx::Size icon_size = icon_->GetPreferredSize();
++  const int icon_y = (height() - icon_size.height()) / 2;
++
++  if (renders_as_capsule()) {
++    // Centred icon, no text -- Arc's favorites grid.
++    icon_->SetBounds((width() - icon_size.width()) / 2, icon_y,
++                     icon_size.width(), icon_size.height());
++    return;
++  }
++
++  const int icon_x =
++      GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding) +
++      kIconLeadingInset;
++  icon_->SetBounds(icon_x, icon_y, icon_size.width(), icon_size.height());
++
++  const int title_x = icon_->bounds().right() + kTitleSpacing;
++  const int title_width = std::max(0, width() - title_x - kTitleTrailingInset);
++  const int title_height = title_label_->GetPreferredSize().height();
++  title_label_->SetBounds(title_x, (height() - title_height) / 2, title_width,
++                          title_height);
++}
++
++void WorkspaceEntryView::OnPaint(gfx::Canvas* canvas) {
++  const ui::ColorProvider* colors = GetColorProvider();
++  if (!colors) {
++    views::View::OnPaint(canvas);
++    return;
++  }
++
++  const int radius = GetLayoutConstant(
++      renders_as_capsule() ? LayoutConstant::kVerticalTabFavoriteCornerRadius
++                           : LayoutConstant::kVerticalTabCornerRadius);
++
++  cc::PaintFlags fill;
++  fill.setStyle(cc::PaintFlags::kFill_Style);
++  fill.setAntiAlias(true);
++  if (active_) {
++    fill.setColor(colors->GetColor(kColorTabBackgroundActiveFrameActive));
++    canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), radius, fill);
++  } else if (hovered_) {
++    fill.setColor(colors->GetColor(kColorTabBackgroundInactiveHoverFrameActive));
++    canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), radius, fill);
++  }
++
++  // Capsules always carry an outline, so an empty grid slot still reads as a
++  // slot; the active one gets the accent ring on top of its fill.
++  if (active_ && renders_as_capsule()) {
++    cc::PaintFlags stroke;
++    stroke.setStyle(cc::PaintFlags::kStroke_Style);
++    stroke.setStrokeWidth(kActiveOutlineThickness);
++    stroke.setAntiAlias(true);
++    stroke.setColor(colors->GetColor(kColorVerticalTabFavoriteActiveOutline));
++    gfx::RectF rect(GetLocalBounds());
++    rect.Inset(kActiveOutlineThickness / 2.0f);
++    canvas->DrawRoundRect(rect, radius, stroke);
++  } else if (renders_as_capsule()) {
++    const int thickness =
++        GetLayoutConstant(LayoutConstant::kVerticalTabPinnedBorderThickness);
++    cc::PaintFlags stroke;
++    stroke.setStyle(cc::PaintFlags::kStroke_Style);
++    stroke.setStrokeWidth(thickness);
++    stroke.setAntiAlias(true);
++    stroke.setColor(colors->GetColor(kColorVerticalTabPinnedOutline));
++    gfx::RectF rect(GetLocalBounds());
++    rect.Inset(thickness / 2.0f);
++    canvas->DrawRoundRect(rect, radius, stroke);
++  }
++
++  views::View::OnPaint(canvas);
++}
++
++bool WorkspaceEntryView::OnMousePressed(const ui::MouseEvent& event) {
++  return event.IsOnlyLeftMouseButton();
++}
++
++void WorkspaceEntryView::OnMouseReleased(const ui::MouseEvent& event) {
++  if (event.IsOnlyLeftMouseButton() && HitTestPoint(event.location()) &&
++      delegate_) {
++    delegate_->OnEntryActivated(entry_id_);
++  }
++}
++
++void WorkspaceEntryView::OnMouseEntered(const ui::MouseEvent& event) {
++  hovered_ = true;
++  SchedulePaint();
++}
++
++void WorkspaceEntryView::OnMouseExited(const ui::MouseEvent& event) {
++  hovered_ = false;
++  SchedulePaint();
++}
++
++void WorkspaceEntryView::ShowContextMenuForViewImpl(
++    views::View* source,
++    const gfx::Point& point,
++    ui::mojom::MenuSourceType source_type) {
++  menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
++  menu_model_->AddItemWithStringId(EntryMenuCommand::kOpen,
++                                   IDS_HELIUM_WS_ENTRY_MENU_OPEN);
++  menu_model_->AddItemWithStringId(
++      EntryMenuCommand::kToggleFavorite,
++      renders_as_capsule() ? IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES
++                           : IDS_TAB_CXMENU_ADD_TO_FAVORITES);
++  menu_model_->AddItemWithStringId(EntryMenuCommand::kCopyAddress,
++                                   IDS_CONTENT_CONTEXT_COPYLINKLOCATION);
++  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++  menu_model_->AddItemWithStringId(EntryMenuCommand::kRemove,
++                                   IDS_HELIUM_WS_ENTRY_MENU_REMOVE);
++
++  menu_runner_ = std::make_unique<views::MenuRunner>(
++      menu_model_.get(),
++      views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU);
++  menu_runner_->RunMenuAt(source->GetWidget(), nullptr,
++                          gfx::Rect(point, gfx::Size()),
++                          views::MenuAnchorPosition::kTopLeft, source_type);
++}
++
++bool WorkspaceEntryView::IsCommandIdEnabled(int command_id) const {
++  if (command_id == EntryMenuCommand::kToggleFavorite &&
++      !renders_as_capsule()) {
++    return delegate_ && delegate_->CanEntryBecomeFavorite(entry_id_);
++  }
++  return true;
++}
++
++void WorkspaceEntryView::ExecuteCommand(int command_id, int event_flags) {
++  if (!delegate_) {
++    return;
++  }
++  switch (command_id) {
++    case EntryMenuCommand::kOpen:
++      delegate_->OnEntryActivated(entry_id_);
++      break;
++    case EntryMenuCommand::kToggleFavorite:
++      delegate_->OnEntryToggleFavorite(entry_id_);
++      break;
++    case EntryMenuCommand::kCopyAddress: {
++      ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
++      writer.WriteText(base::UTF8ToUTF16(url_.spec()));
++      break;
++    }
++    case EntryMenuCommand::kRemove:
++      // Leaves any open tab alone; it simply becomes an ordinary tab again.
++      delegate_->OnEntryRemoved(entry_id_);
++      break;
++    default:
++      break;
++  }
++}
++
++void WorkspaceEntryView::ResolveIcon() {
++  favicon_tracker_.TryCancelAll();
++
++  // 1. The live tab. Its icon, but never its throbber: a sidebar row is a
++  // bookmark-like thing, and spinning it on every reload reads as jank rather
++  // than as progress. A tab that has not produced an icon yet falls through
++  // to the persisted one instead of blanking the row while it loads.
++  if (tabs::TabInterface* tab = bound_tab_.get()) {
++    tabs::TabData data = tabs::TabData::FromTabInterface(tab);
++    if (!data.favicon.IsEmpty()) {
++      data.network_state = tabs::TabNetworkState::kNone;
++      data.should_hide_throbber = true;
++      icon_->SetData(std::move(data));
++      return;
++    }
++  }
++
++  // 2. The icon persisted with the entry -- the only one available on a cold
++  // start, before anything has been clicked.
++  if (!favicon_png_.empty()) {
++    const SkBitmap bitmap =
++        gfx::PNGCodec::Decode(base::as_byte_span(favicon_png_));
++    if (!bitmap.isNull() && bitmap.width() > 0) {
++      // The stored PNG carries whatever density the tab had, so recover the
++      // scale from its pixel width instead of assuming 1x -- otherwise a 32px
++      // icon is drawn as 32 dip, and a 16px one is stretched on a Retina
++      // display. Dividing by kFaviconSize normalises any source size to the
++      // 16 dip the row draws at.
++      const float scale =
++          static_cast<float>(bitmap.width()) / gfx::kFaviconSize;
++      ApplyIcon(ui::ImageModel::FromImageSkia(
++          gfx::ImageSkia::CreateFromBitmap(bitmap, scale)));
++      return;
++    }
++  }
++
++  // 3. Whatever history already knows about the URL.
++  if (profile_ && url_.is_valid()) {
++    if (favicon::FaviconService* service =
++            FaviconServiceFactory::GetForProfile(
++                profile_, ServiceAccessType::EXPLICIT_ACCESS)) {
++      ApplyIcon(favicon::GetDefaultFaviconModel());
++      service->GetFaviconImageForPageURL(
++          url_,
++          base::BindOnce(&WorkspaceEntryView::OnFaviconFetched,
++                         weak_factory_.GetWeakPtr()),
++          &favicon_tracker_);
++      return;
++    }
++  }
++
++  // 4. TabIcon draws nothing at all for an empty ImageModel, so the default
++  // globe is a requirement rather than a nicety.
++  ApplyIcon(favicon::GetDefaultFaviconModel());
++}
++
++void WorkspaceEntryView::OnFaviconFetched(
++    const favicon_base::FaviconImageResult& result) {
++  if (result.image.IsEmpty()) {
++    return;
++  }
++  ApplyIcon(ui::ImageModel::FromImage(result.image));
++}
++
++void WorkspaceEntryView::ApplyIcon(const ui::ImageModel& favicon) {
++  tabs::TabData data;
++  data.title = title_;
++  data.favicon = favicon;
++  data.should_display_favicon = true;
++  data.network_state = tabs::TabNetworkState::kNone;
++  data.should_hide_throbber = true;
++  data.visible_url = url_;
++  data.last_committed_url = url_;
++  icon_->SetData(data);
++}
++
++void WorkspaceEntryView::UpdateAccessibleState() {
++  GetViewAccessibility().SetName(
++      title_.empty() ? base::UTF8ToUTF16(url_.spec()) : title_);
++  // A capsule draws no text at all, so the tooltip is the only way to tell
++  // one favorite from another.
++  SetTooltipText(title_.empty()
++                     ? base::UTF8ToUTF16(url_.spec())
++                     : title_ + u"\n" + base::UTF8ToUTF16(url_.spec()));
++}
++
++BEGIN_METADATA(WorkspaceEntryView)
++END_METADATA
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+@@ -0,0 +1,130 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_ENTRY_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_ENTRY_VIEW_H_
++
++#include <memory>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/cancelable_task_tracker.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "components/favicon_base/favicon_types.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/menus/simple_menu_model.h"
++#include "ui/views/context_menu_controller.h"
++#include "ui/views/view.h"
++
++class Profile;
++class TabIcon;
++class TabTitle;
++
++namespace tabs {
++class TabInterface;
++}  // namespace tabs
++
++namespace views {
++class MenuRunner;
++}  // namespace views
++
++// One row of the workspace sidebar. Unlike a TabView this renders a
++// WorkspaceEntry, which is persistent profile data and may have no tab open
++// for it at all -- so it cannot be a TabView, whose constructor immediately
++// dereferences a live tabs::TabInterface reached through a TabCollectionNode.
++//
++// Two presentations, matching Arc: Favorites are a fixed-height capsule with
++// a centred icon and no text, Pinned entries are a full-width row with icon
++// and title. Only TabIcon and TabTitle are reused from the tab strip;
++// TabView::OnPaint is deliberately not, because it pulls in TabStyle,
++// GlowHoverController, theme-image lookups and the drag plumbing.
++class WorkspaceEntryView : public views::View,
++                           public views::ContextMenuController,
++                           public ui::SimpleMenuModel::Delegate {
++  METADATA_HEADER(WorkspaceEntryView, views::View)
++
++ public:
++  class Delegate {
++   public:
++    virtual void OnEntryActivated(const std::string& entry_id) = 0;
++    virtual void OnEntryToggleFavorite(const std::string& entry_id) = 0;
++    virtual void OnEntryRemoved(const std::string& entry_id) = 0;
++    // False when promoting would exceed the favorites cap.
++    virtual bool CanEntryBecomeFavorite(const std::string& entry_id) const = 0;
++
++   protected:
++    virtual ~Delegate() = default;
++  };
++
++  WorkspaceEntryView(Delegate* delegate, Profile* profile);
++  WorkspaceEntryView(const WorkspaceEntryView&) = delete;
++  WorkspaceEntryView& operator=(const WorkspaceEntryView&) = delete;
++  ~WorkspaceEntryView() override;
++
++  // Pushes the entry's persistent state. Cheap to call with unchanged data.
++  void SetEntry(const helium_workspace::WorkspaceEntry& entry);
++  // The tab this window has open for the entry, or nullptr.
++  void SetBoundTab(tabs::TabInterface* tab);
++  // Whether this window's active tab is the entry's tab.
++  void SetActive(bool active);
++
++  const std::string& entry_id() const { return entry_id_; }
++  bool renders_as_capsule() const {
++    return section_ == helium_workspace::WorkspaceEntry::Section::kFavorite;
++  }
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  void Layout(PassKey) override;
++  void OnPaint(gfx::Canvas* canvas) override;
++  bool OnMousePressed(const ui::MouseEvent& event) override;
++  void OnMouseReleased(const ui::MouseEvent& event) override;
++  void OnMouseEntered(const ui::MouseEvent& event) override;
++  void OnMouseExited(const ui::MouseEvent& event) override;
++
++  // views::ContextMenuController:
++  void ShowContextMenuForViewImpl(
++      views::View* source,
++      const gfx::Point& point,
++      ui::mojom::MenuSourceType source_type) override;
++
++  // ui::SimpleMenuModel::Delegate:
++  bool IsCommandIdEnabled(int command_id) const override;
++  void ExecuteCommand(int command_id, int event_flags) override;
++
++ private:
++  // Live tab -> stored PNG -> favicon service -> default globe. The last step
++  // is not optional: TabIcon paints nothing for an empty ImageModel.
++  void ResolveIcon();
++  void OnFaviconFetched(const favicon_base::FaviconImageResult& result);
++  void ApplyIcon(const ui::ImageModel& favicon);
++  void UpdateAccessibleState();
++
++  const raw_ptr<Delegate> delegate_;
++  const raw_ptr<Profile> profile_;
++
++  std::string entry_id_;
++  GURL url_;
++  std::u16string title_;
++  std::string favicon_png_;
++  helium_workspace::WorkspaceEntry::Section section_ =
++      helium_workspace::WorkspaceEntry::Section::kPinned;
++
++  base::WeakPtr<tabs::TabInterface> bound_tab_;
++  bool active_ = false;
++  bool hovered_ = false;
++
++  raw_ptr<TabIcon> icon_ = nullptr;
++  raw_ptr<TabTitle> title_label_ = nullptr;
++
++  std::unique_ptr<ui::SimpleMenuModel> menu_model_;
++  std::unique_ptr<views::MenuRunner> menu_runner_;
++
++  base::CancelableTaskTracker favicon_tracker_;
++  base::WeakPtrFactory<WorkspaceEntryView> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_ENTRY_VIEW_H_
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -0,0 +1,552 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
++
++#include <algorithm>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "cc/paint/paint_flags.h"
 +#include "cc/paint/path_effect.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium_workspace/workspace_grid_math.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
++#include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/grit/generated_resources.h"
 +#include "components/omnibox/browser/vector_icons.h"
 +#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
 +#include "components/vector_icons/vector_icons.h"
 +#include "ui/base/l10n/l10n_util.h"
- #include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
 +#include "ui/base/models/image_model.h"
 +#include "ui/gfx/canvas.h"
- #include "ui/gfx/geometry/rect.h"
 +#include "ui/views/controls/image_view.h"
 +#include "ui/views/controls/label.h"
- #include "ui/views/controls/scroll_view.h"
 +#include "ui/views/layout/box_layout.h"
- #include "ui/views/layout/delegating_layout_manager.h"
- #include "ui/views/layout/layout_types.h"
- #include "ui/views/layout/proposed_layout.h"
 +#include "ui/views/style/typography.h"
- #include "ui/views/view.h"
- #include "ui/views/view_class_properties.h"
- #include "ui/views/view_utils.h"
- 
- namespace {
- constexpr int kTabPadding = 4;
-+// helium-fork: Arc favorites grid metrics — the spacing between capsules,
-+// the gap separating the grid from the full-row pinned section, the per-row
-+// capsule maximum (12 favorites cap in three rows), and the height of the
-+// persistent empty-state placeholder.
++#include "ui/views/view_utils.h"
++
++namespace {
++
++// Arc favorites grid metrics: spacing between capsules, the gap separating
++// the grid from the space header, the per-row capsule maximum (the 12-entry
++// cap in three rows) and the height of the persistent empty state.
++constexpr int kTabPadding = 4;
 +constexpr int kFavoriteGridGap = 8;
 +constexpr int kSectionGap = 8;
 +constexpr int kMaxFavoritesPerRow = 4;
 +constexpr int kFavoritesPlaceholderHeight = 90;
 +
-+// helium-fork: Arc space header row metrics.
++// Arc space header row metrics.
 +constexpr int kSpaceHeaderHeight = 28;
 +constexpr int kSpaceHeaderChevronSize = 16;
 +constexpr int kSpaceHeaderInnerSpacing = 4;
 +constexpr int kSpaceHeaderHorizontalInset = 6;
 +
-+// helium-fork: Arc-style persistent placeholder shown while the Favorites
-+// grid is empty. Draws a dashed rounded outline with a hint, and never
-+// intercepts events so drags land on the container itself.
++int GridPerRowMax(int available_width, int min_child_width) {
++  return std::clamp(
++      (available_width + kFavoriteGridGap) / (min_child_width + kFavoriteGridGap),
++      1, kMaxFavoritesPerRow);
++}
++
++// Arc-style persistent placeholder shown while the Favorites grid is empty.
++// Draws a dashed rounded outline with a hint, and never intercepts events.
 +class FavoritesEmptyPlaceholder : public views::View {
 +  METADATA_HEADER(FavoritesEmptyPlaceholder, views::View)
 +
@@ -152,11 +1316,10 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +BEGIN_METADATA(FavoritesEmptyPlaceholder)
 +END_METADATA
 +
-+// helium-fork: Arc's space name row, which always sits between the Favorites
-+// grid and the full-row pinned section. It is permanent even when the section
-+// below it is empty — that is what gives pinned tabs a drop target instead of
-+// the hairline gap left by the section separator. Clicking anywhere on the row
-+// collapses/expands the rows below.
++// Arc's space name row, which always sits between the Favorites grid and the
++// full-row pinned section. It is permanent even when the section below it is
++// empty, so the pinned section always has a visible upper edge. Clicking
++// anywhere on the row collapses/expands the rows below.
 +class WorkspaceSpaceHeader : public views::View {
 +  METADATA_HEADER(WorkspaceSpaceHeader, views::View)
 +
@@ -172,9 +1335,6 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +
 +    chevron_ = AddChildView(std::make_unique<views::ImageView>());
 +
-+    // The tab strip paints into non-opaque scroll layers, so labels here must
-+    // opt out of the subpixel-rendering opacity DCHECK, same as every other
-+    // label in the tab strip (see tab_title.cc).
 +    auto* title = AddChildView(std::make_unique<views::Label>(
 +        l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DEFAULT_NAME),
 +        views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
@@ -197,36 +1357,10 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +    UpdateChevron();
 +  }
 +
-+  // Highlights the whole row while it is the active drop target for a tab
-+  // drag, the way Arc does. Without it there is no feedback that an empty
-+  // pinned section is about to receive the tab.
-+  void SetDropTargetActive(bool active) {
-+    if (drop_target_active_ == active) {
-+      return;
-+    }
-+    drop_target_active_ = active;
-+    SchedulePaint();
-+  }
-+
 +  // views::View:
 +  void OnThemeChanged() override {
 +    views::View::OnThemeChanged();
 +    UpdateChevron();
-+  }
-+
-+  void OnPaint(gfx::Canvas* canvas) override {
-+    if (drop_target_active_ && GetColorProvider()) {
-+      cc::PaintFlags flags;
-+      flags.setStyle(cc::PaintFlags::kFill_Style);
-+      flags.setAntiAlias(true);
-+      flags.setColor(GetColorProvider()->GetColor(
-+          kColorVerticalTabSpaceHeaderDropTarget));
-+      canvas->DrawRoundRect(
-+          gfx::RectF(GetLocalBounds()),
-+          GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteCornerRadius),
-+          flags);
-+    }
-+    views::View::OnPaint(canvas);
 +  }
 +
 +  bool OnMousePressed(const ui::MouseEvent& event) override {
@@ -250,39 +1384,59 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +  const base::RepeatingClosure on_toggled_;
 +  raw_ptr<views::ImageView> chevron_ = nullptr;
 +  bool collapsed_ = false;
-+  bool drop_target_active_ = false;
 +};
 +
 +BEGIN_METADATA(WorkspaceSpaceHeader)
 +END_METADATA
 +
- }  // namespace
- 
- PinnedTabContainerView::PinnedTabContainerView(
-@@ -50,10 +249,89 @@ PinnedTabContainerView::PinnedTabContain
-   node_destroyed_subscription_ = collection_node_->RegisterWillDestroyCallback(
-       base::BindOnce(&PinnedTabContainerView::ResetCollectionNode,
-                      base::Unretained(this)));
++}  // namespace
 +
-+  // helium-fork: persistent Arc-style empty state for the Favorites grid.
++WorkspaceSidebarView::WorkspaceSidebarView() {
 +  placeholder_ = AddChildView(std::make_unique<FavoritesEmptyPlaceholder>());
-+
-+  // helium-fork: persistent Arc-style space name row above the pinned rows.
 +  space_header_ = AddChildView(std::make_unique<WorkspaceSpaceHeader>(
-+      base::BindRepeating(&PinnedTabContainerView::ToggleSpaceCollapsed,
++      base::BindRepeating(&WorkspaceSidebarView::ToggleSpaceCollapsed,
 +                          base::Unretained(this))));
- }
- 
- PinnedTabContainerView::~PinnedTabContainerView() = default;
- 
-+void PinnedTabContainerView::AddedToWidget() {
-+  views::View::AddedToWidget();
-+  // helium-fork: the browser (and therefore the profile prefs holding the
-+  // collapsed flag) is only reachable once the widget exists.
-+  LoadSpaceCollapsedFromPrefs();
 +}
 +
-+PrefService* PinnedTabContainerView::GetProfilePrefs() const {
++WorkspaceSidebarView::~WorkspaceSidebarView() {
++  // The tab strip observation unregisters itself: ~TabStripModelObserver
++  // calls StopObservingAll(). Reaching for the widget here to do it by hand
++  // would be worse than redundant -- by this point it may already be gone.
++  service_observation_.Reset();
++}
++
++void WorkspaceSidebarView::AddedToWidget() {
++  views::View::AddedToWidget();
++  // The browser -- and so the profile, the service and this window's tab
++  // strip -- is only reachable once the widget exists.
++  BrowserWindowInterface* browser = GetBrowserWindow();
++  if (!browser) {
++    return;
++  }
++  profile_ = browser->GetProfile();
++  // Null for off-the-record profiles, which have no sidebar of their own and
++  // must not render the parent profile's.
++  service_ = helium_workspace::WorkspaceServiceFactory::GetForProfile(profile_);
++  if (!service_) {
++    return;
++  }
++  service_observation_.Observe(service_);
++  if (TabStripModel* model = browser->GetTabStripModel()) {
++    model->AddObserver(this);
++  }
++  LoadSpaceCollapsedFromPrefs();
++  SyncEntryViews();
++}
++
++void WorkspaceSidebarView::RemovedFromWidget() {
++  service_observation_.Reset();
++  TabStripModelObserver::StopObservingAll(this);
++  service_ = nullptr;
++  profile_ = nullptr;
++  views::View::RemovedFromWidget();
++}
++
++BrowserWindowInterface* WorkspaceSidebarView::GetBrowserWindow() const {
 +  if (!GetWidget()) {
 +    return nullptr;
 +  }
@@ -292,13 +1446,14 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +  }
 +  BrowserView* browser_view =
 +      BrowserView::GetBrowserViewForNativeWindow(window);
-+  if (!browser_view || !browser_view->browser()) {
-+    return nullptr;
-+  }
-+  return browser_view->browser()->profile()->GetPrefs();
++  return browser_view ? browser_view->browser() : nullptr;
 +}
 +
-+void PinnedTabContainerView::LoadSpaceCollapsedFromPrefs() {
++PrefService* WorkspaceSidebarView::GetProfilePrefs() const {
++  return profile_ ? profile_->GetPrefs() : nullptr;
++}
++
++void WorkspaceSidebarView::LoadSpaceCollapsedFromPrefs() {
 +  PrefService* prefs = GetProfilePrefs();
 +  if (!prefs) {
 +    return;
@@ -315,13 +1470,7 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +  InvalidateLayout();
 +}
 +
-+void PinnedTabContainerView::SetSpaceHeaderDropTargetActive(bool active) {
-+  if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
-+    header->SetDropTargetActive(active);
-+  }
-+}
-+
-+void PinnedTabContainerView::ToggleSpaceCollapsed() {
++void WorkspaceSidebarView::ToggleSpaceCollapsed() {
 +  space_collapsed_ = !space_collapsed_;
 +  if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
 +    header->SetCollapsed(space_collapsed_);
@@ -330,816 +1479,415 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +    prefs->SetBoolean(helium_workspace::prefs::kWorkspaceSpaceCollapsed,
 +                      space_collapsed_);
 +  }
++  PreferredSizeChanged();
 +  InvalidateLayout();
 +}
 +
-+size_t PinnedTabContainerView::CountLeadingFavorites(
-+    const std::vector<views::View*>& children) const {
-+  size_t count = 0;
-+  for (views::View* child : children) {
-+    TabView* tab_view = views::AsViewClass<TabView>(child);
-+    if (!tab_view || !tab_view->IsFavoriteWorkspaceTab()) {
-+      break;
-+    }
-+    ++count;
-+  }
-+  return count;
++void WorkspaceSidebarView::OnWorkspaceEntriesChanged() {
++  SyncEntryViews();
 +}
 +
- views::ProposedLayout PinnedTabContainerView::CalculateProposedLayout(
-     const views::SizeBounds& size_bounds) const {
-   views::ProposedLayout layouts;
-@@ -66,53 +344,179 @@ views::ProposedLayout PinnedTabContainer
- 
-   int x = 0;
-   int y = 0;
--  int children_on_row = children.size();
- 
--  if (children_on_row == 0) {
--    layouts.host_size = gfx::Size(0, 0);
--    return layouts;
-+  // helium-fork: the leading favorites render as a wrapped icon grid (Arc's
-+  // second pin layer); every following child is a full row (first layer).
-+  // The controller keeps favorites physically first, so a prefix count is
-+  // sufficient.
-+  const size_t favorite_count = CountLeadingFavorites(children);
-+  for (size_t i = 0; i < children.size(); ++i) {
-+    if (TabView* tab_view = views::AsViewClass<TabView>(children[i])) {
-+      // No-ops (and never re-enters layout) when the value is unchanged.
-+      tab_view->SetRenderAsRow(i >= favorite_count);
-+    }
-   }
- 
--  // Child width will be uniform and match the largest child's width.
-+  // Minimum capsule width; splits occupy a double-width cell.
-   bool contains_split = false;
--  for (const auto& i : collection_node_->children()) {
--    if (i->type() == TabCollectionNode::Type::SPLIT) {
-+  for (size_t i = 0; i < favorite_count; ++i) {
-+    const TabCollectionNode* node = GetCollectionNodeFromView(*children[i]);
-+    if (node && node->type() == TabCollectionNode::Type::SPLIT) {
-       contains_split = true;
-     }
-   }
--  int child_width = GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth) *
--                    (contains_split ? 2 : 1);
-+  const int min_child_width =
-+      GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth) *
-+      (contains_split ? 2 : 1);
-+  int row_width = min_child_width;
-+  int available_width = 0;
-+  bool width_bounded = false;
- 
--  // If the width is bounded, calculate how many children can fit on a row.
--  // Since all children are allocated the same width this will be the same for
--  // every row.
-   if (size_bounds.width().is_bounded() && size_bounds.width().value() > 0) {
-     // Apply horizontal padding immediately at start of collapse animation by
-     // including collapsing state.
--    int available_width =
-+    width_bounded = true;
-+    available_width =
-         size_bounds.width().value() -
-         GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
-+    row_width = std::max(available_width, min_child_width);
++void WorkspaceSidebarView::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  SyncBindings();
++}
++
++void WorkspaceSidebarView::SyncEntryViews() {
++  if (!service_) {
++    return;
 +  }
 +
-+  // helium-fork: Arc favorites grid — at most 4 capsules per row (12-cap in
-+  // three rows), rows balanced (6 -> 3+3, 7 -> 4+3), and each row's capsules
-+  // share the row width equally. Narrow widths (collapse animation) reduce
-+  // the per-row maximum so capsules never drop below their minimum width.
-+  int per_row_max = kMaxFavoritesPerRow;
-+  if (width_bounded) {
-+    per_row_max =
-+        std::clamp((available_width + kFavoriteGridGap) /
-+                       (min_child_width + kFavoriteGridGap),
-+                   1, kMaxFavoritesPerRow);
-+  }
-+  // helium-fork: a floating (dragged) favorite reserves no slot, so the grid
-+  // geometry — and the empty-state placeholder — must be driven by the
-+  // favorites that actually occupy the layout. Without this, dragging the
-+  // first favorite into an empty grid hides the placeholder while
-+  // contributing no height: the grid collapses to zero, which yanks the space
-+  // header to the top of the sidebar and makes the segment boundary bounce.
-+  size_t laid_out_favorite_count = 0;
-+  for (size_t i = 0; i < favorite_count; ++i) {
-+    auto favorite_drag_data = GetVisualDataForDraggedView(*children[i]);
-+    if (!favorite_drag_data || !favorite_drag_data->should_float) {
-+      ++laid_out_favorite_count;
-+    }
-+  }
- 
--    // When we are in collapsed state, only one child should be shown per row.
--    // During collapse animation and other cases, fit as many as possible.
--    children_on_row = std::max(
--        1,
--        std::min(children_on_row,
--                 static_cast<int>(std::floor((available_width - child_width) /
--                                             (child_width + kTabPadding)) +
--                                  1)));
--
--    // Allocate extra space to the tabs.
--    available_width -=
--        (children_on_row * child_width) + (kTabPadding * (children_on_row - 1));
--    child_width += std::floor(available_width / children_on_row);
-+  int base_cols = 0;
-+  int extra_rows = 0;
-+  if (laid_out_favorite_count > 0) {
-+    const int grid_rows =
-+        (static_cast<int>(laid_out_favorite_count) + per_row_max - 1) /
-+        per_row_max;
-+    base_cols = static_cast<int>(laid_out_favorite_count) / grid_rows;
-+    extra_rows = static_cast<int>(laid_out_favorite_count) % grid_rows;
-+  }
-+  const auto cols_for_row = [&](int row) {
-+    return base_cols + (row < extra_rows ? 1 : 0);
-+  };
-+  const auto capsule_width_for_cols = [&](int cols) {
-+    if (!width_bounded) {
-+      return min_child_width;
-+    }
-+    return std::max(min_child_width,
-+                    (available_width - (cols - 1) * kFavoriteGridGap) / cols);
-+  };
++  const std::vector<helium_workspace::WorkspaceEntry>& entries =
++      service_->entries();
 +
-+  // helium-fork: the persistent placeholder is a plain child view (not part
-+  // of the collection), so it always needs an explicit layout entry.
-+  if (placeholder_) {
-+    if (laid_out_favorite_count == 0) {
-+      const int placeholder_width =
-+          width_bounded ? row_width : min_child_width;
-+      layouts.child_layouts.emplace_back(
-+          placeholder_.get(), true,
-+          gfx::Rect(0, 0, placeholder_width, kFavoritesPlaceholderHeight));
-+      total_width = std::max(total_width, placeholder_width);
-+      total_height = kFavoritesPlaceholderHeight;
-+      y = total_height + kSectionGap;
++  // Drop rows whose entry is gone.
++  std::vector<std::string> stale;
++  for (const auto& [id, view] : entry_views_) {
++    const bool still_there =
++        std::ranges::any_of(entries, [&id](const auto& e) {
++          return e.id == id;
++        });
++    if (!still_there) {
++      stale.push_back(id);
++    }
++  }
++  bool structure_changed = !stale.empty();
++  for (const std::string& id : stale) {
++    RemoveChildViewT(entry_views_[id].get());
++    entry_views_.erase(id);
++  }
++
++  // Create or update the rest, and rebuild the model order.
++  std::vector<raw_ptr<WorkspaceEntryView>> ordered;
++  ordered.reserve(entries.size());
++  size_t favorites = 0;
++  for (const helium_workspace::WorkspaceEntry& entry : entries) {
++    auto it = entry_views_.find(entry.id);
++    WorkspaceEntryView* view = nullptr;
++    if (it == entry_views_.end()) {
++      view = AddChildView(
++          std::make_unique<WorkspaceEntryView>(this, profile_.get()));
++      entry_views_[entry.id] = view;
++      structure_changed = true;
 +    } else {
-+      layouts.child_layouts.emplace_back(placeholder_.get(), false,
-+                                         gfx::Rect());
-+    }
-   }
- 
-+  int grid_row = 0;
-   int row_index = 0;
--  for (auto* child : children) {
--    gfx::Rect bounds =
--        gfx::Rect(child->GetPreferredSize(views::SizeBounds(child_width, {})));
--    bounds.set_width(child_width);
-+  int cols_in_row = laid_out_favorite_count > 0 ? cols_for_row(0) : 0;
-+  int capsule_width =
-+      cols_in_row > 0 ? capsule_width_for_cols(cols_in_row) : 0;
-+
-+  // helium-fork: the space header owns the grid -> rows transition and, like
-+  // the placeholder, is a plain child view that always needs an explicit
-+  // layout entry. It must appear even when both segments are empty — that
-+  // permanent row is what gives pinned tabs a drop target. Runs exactly once
-+  // per layout pass.
-+  bool space_header_placed = false;
-+  const auto place_space_header = [&]() {
-+    if (space_header_placed) {
-+      return;
-+    }
-+    space_header_placed = true;
-+    if (!space_header_) {
-+      return;
-+    }
-+    if (total_height > 0) {
-+      y = total_height + kSectionGap;
-+    }
-+    const int header_width = width_bounded ? row_width : min_child_width;
-+    layouts.child_layouts.emplace_back(
-+        space_header_.get(), true,
-+        gfx::Rect(0, y, header_width, kSpaceHeaderHeight));
-+    total_width = std::max(total_width, header_width);
-+    total_height = y + kSpaceHeaderHeight;
-+    y = total_height + kTabPadding;
-+    x = 0;
-+    row_index = 0;
-+  };
-+
-+  // helium-fork: a collapsed space hides the rows below the header, but never
-+  // while this container is hosting a drag — otherwise a tab dragged into a
-+  // collapsed section would disappear mid-gesture.
-+  const bool rows_hidden = space_collapsed_ && !IsHandlingDrag();
-+
-+  if (children.empty()) {
-+    place_space_header();
-+    layouts.host_size =
-+        gfx::Size(size_bounds.width().value_or(total_width), total_height);
-+    return layouts;
-+  }
-+
-+  for (size_t i = 0; i < children.size(); ++i) {
-+    views::View* child = children[i];
-+    const bool in_grid = i < favorite_count;
-+    const int segment_width = in_grid ? capsule_width : row_width;
-+
-+    if (!in_grid) {
-+      place_space_header();
-+      if (rows_hidden) {
-+        // Collapsed rows stack at the header's bottom edge at their normal
-+        // width, rather than collapsing to an empty rect at the origin. The
-+        // animating layout manager interpolates bounds but snaps visibility
-+        // to the target (tab_collection_animating_layout_manager.cc), so
-+        // empty bounds make an expand animate out of the top-left corner
-+        // instead of unfolding from under the header.
-+        gfx::Rect collapsed_bounds = gfx::Rect(
-+            child->GetPreferredSize(views::SizeBounds(row_width, {})));
-+        collapsed_bounds.set_width(row_width);
-+        collapsed_bounds.set_origin(gfx::Point(0, total_height));
-+        layouts.child_layouts.emplace_back(child, false, collapsed_bounds);
-+        continue;
++      view = it->second.get();
++      if (!ordered_entries_.empty() && ordered.size() < ordered_entries_.size() &&
++          ordered_entries_[ordered.size()].get() != view) {
++        structure_changed = true;
 +      }
 +    }
++    const bool was_capsule = view->renders_as_capsule();
++    view->SetEntry(entry);
++    if (was_capsule != view->renders_as_capsule()) {
++      structure_changed = true;
++    }
++    ordered.push_back(view);
++    if (entry.section == helium_workspace::WorkspaceEntry::Section::kFavorite) {
++      ++favorites;
++    }
++  }
++  if (ordered.size() != ordered_entries_.size()) {
++    structure_changed = true;
++  }
++  ordered_entries_ = std::move(ordered);
++  favorite_count_ = favorites;
 +
-+    gfx::Rect bounds = gfx::Rect(
-+        child->GetPreferredSize(views::SizeBounds(segment_width, {})));
-+    bounds.set_width(segment_width);
- 
-     auto drag_data = GetVisualDataForDraggedView(*child);
-     const bool should_show_child = !(drag_data && drag_data->should_hide);
-@@ -124,33 +528,48 @@ views::ProposedLayout PinnedTabContainer
-     bounds.set_y(drag_data ? drag_data->offset.y() : y);
-     int child_x = drag_data ? drag_data->offset.x() : x;
-     if (drag_data && base::i18n::IsRTL()) {
--      child_x = size_bounds.width().value() - child_x - child_width;
-+      child_x = size_bounds.width().value() - child_x - segment_width;
-     }
-     bounds.set_x(child_x);
- 
--    if (row_index != 0) {
--      bounds.set_x(bounds.x() + kTabPadding);
-+    if (in_grid && row_index != 0) {
-+      bounds.set_x(bounds.x() + kFavoriteGridGap);
-     }
- 
-     if (!drag_data || !drag_data->should_float) {
--      if (row_index != 0) {
--        x += kTabPadding;
--      }
--      x += bounds.width();
--      total_width = std::max(total_width, x);
--      total_height = std::max(total_height, (y + bounds.height()));
--
--      row_index++;
--      if (row_index >= children_on_row) {
-+      if (in_grid) {
-+        if (row_index != 0) {
-+          x += kFavoriteGridGap;
-+        }
-+        x += bounds.width();
-+        total_width = std::max(total_width, x);
-+        total_height = std::max(total_height, (y + bounds.height()));
++  SyncBindings();
 +
-+        row_index++;
-+        if (row_index >= cols_in_row) {
-+          y = total_height + kFavoriteGridGap;
-+          row_index = 0;
-+          x = 0;
-+          ++grid_row;
-+          cols_in_row = cols_for_row(grid_row);
-+          capsule_width =
-+              cols_in_row > 0 ? capsule_width_for_cols(cols_in_row) : 0;
-+        }
-+      } else {
-+        total_width = std::max(total_width, bounds.width());
-+        total_height = std::max(total_height, y + bounds.height());
-         y = total_height + kTabPadding;
--        row_index = 0;
--        x = 0;
-       }
-     }
- 
-     layouts.child_layouts.emplace_back(child, true, bounds);
-   }
- 
-+  // helium-fork: favorites but no pinned rows — the loop never reached the
-+  // transition, so the header still has to be placed (and always needs an
-+  // entry regardless).
-+  place_space_header();
++  // A title or favicon write-back fires this method too; only a change in
++  // membership, order or section can move anything.
++  if (structure_changed) {
++    PreferredSizeChanged();
++    InvalidateLayout();
++  }
++}
 +
-   // Make sure we snap to bounded width if defined. This is necessary as the
-   // `child_width` calculation above rounds width down and this can result in
-   // off-by-one width calculations when the number of children on a row changes.
-@@ -166,19 +585,41 @@ gfx::Size PinnedTabContainerView::GetMin
-     return gfx::Size();
-   }
- 
-+  const std::vector<views::View*> children =
-+      collection_node_->GetDirectChildren();
-+  const int num_children = children.size();
++void WorkspaceSidebarView::SyncBindings() {
++  if (!service_) {
++    return;
++  }
++  BrowserWindowInterface* browser = GetBrowserWindow();
++  if (!browser) {
++    return;
++  }
++  TabStripModel* model = browser->GetTabStripModel();
++  tabs::TabInterface* active_tab =
++      (model && !model->empty()) ? model->GetTabAtIndex(model->active_index())
++                                 : nullptr;
 +
-+  // helium-fork: the persistent Favorites placeholder contributes its height
-+  // whenever the grid is empty; without this the container collapses to 0px
-+  // and offers no drop target.
-+  const size_t favorite_count = CountLeadingFavorites(children);
-+  int placeholder_height = 0;
-+  if (placeholder_ && favorite_count == 0) {
-+    placeholder_height =
-+        kFavoritesPlaceholderHeight + (num_children > 0 ? kSectionGap : 0);
++  for (WorkspaceEntryView* view : ordered_entries_) {
++    const tabs::TabHandle handle =
++        service_->FindTabForEntryInWindow(view->entry_id(), browser);
++    tabs::TabInterface* tab = handle.Get();
++    view->SetBoundTab(tab);
++    view->SetActive(tab && tab == active_tab);
++  }
++}
++
++WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::ComputeLayout(
++    int width) const {
++  SidebarLayout out;
++  out.entry_bounds.resize(ordered_entries_.size());
++
++  const int min_child_width =
++      GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
++  const int available_width = std::max(
++      0,
++      width - GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding));
++  const int row_width = std::max(available_width, min_child_width);
++  const int per_row_max = available_width > 0
++                              ? GridPerRowMax(available_width, min_child_width)
++                              : kMaxFavoritesPerRow;
++
++  int y = 0;
++
++  if (favorite_count_ == 0) {
++    out.placeholder_visible = true;
++    out.placeholder_bounds =
++        gfx::Rect(0, 0, row_width, kFavoritesPlaceholderHeight);
++    y = kFavoritesPlaceholderHeight;
++  } else {
++    const helium_workspace::FavoritesGridPlan plan =
++        helium_workspace::PlanFavoritesGrid(static_cast<int>(favorite_count_),
++                                            per_row_max);
++    const int capsule_height =
++        GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
++    size_t index = 0;
++    for (int row = 0; row < plan.rows; ++row) {
++      const int cols = helium_workspace::FavoritesGridColsForRow(plan, row);
++      const int capsule_width = std::max(
++          min_child_width,
++          (row_width - (cols - 1) * kFavoriteGridGap) / std::max(cols, 1));
++      int x = 0;
++      for (int col = 0; col < cols && index < favorite_count_; ++col, ++index) {
++        out.entry_bounds[index] =
++            gfx::Rect(x, y, capsule_width, capsule_height);
++        x += capsule_width + kFavoriteGridGap;
++      }
++      y += capsule_height;
++      if (row + 1 < plan.rows) {
++        y += kFavoriteGridGap;
++      }
++    }
 +  }
 +
-+  // helium-fork: the space header is permanent, so it always contributes its
-+  // height — this is what keeps an empty pinned section from collapsing into
-+  // a hairline that tabs cannot be dropped onto.
-+  const int space_header_height =
-+      space_header_ ? kSpaceHeaderHeight + kSectionGap : 0;
++  y += kSectionGap;
++  out.header_bounds = gfx::Rect(0, y, row_width, kSpaceHeaderHeight);
++  y += kSpaceHeaderHeight;
 +
-   // The minimum size should be enough to show a row and a half, if needed.
-+  // helium-fork: children hidden by a collapsed space reserve no height.
-+  const int visible_children =
-+      space_collapsed_ ? static_cast<int>(favorite_count) : num_children;
-   auto collapse_state = GetTabStripCollapseState();
--  const int num_children = collection_node_->GetDirectChildren().size();
-   const float min_rows = std::min(
-       (collapse_state != tabs::VerticalTabStripCollapseState::kExpanded ? 1.5f
-                                                                         : 1.0f),
--      static_cast<float>(num_children));
-+      static_cast<float>(visible_children));
-   const int min_height =
-       base::ClampCeil(GetLayoutConstant(LayoutConstant::kVerticalTabHeight) *
-                       min_rows) +
--      (num_children > 1 ? kTabPadding : 0);
-+      (visible_children > 1 ? kTabPadding : 0);
-   return gfx::Size(GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth),
--                   min_height);
-+                   placeholder_height + space_header_height + min_height);
- }
- 
- bool PinnedTabContainerView::IsDragging() const {
-Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
++  const int row_height = GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
++  if (!space_collapsed_) {
++    for (size_t i = favorite_count_; i < ordered_entries_.size(); ++i) {
++      y += kTabPadding;
++      out.entry_bounds[i] = gfx::Rect(0, y, row_width, row_height);
++      y += row_height;
++    }
++  }
++
++  out.height = y;
++  return out;
++}
++
++gfx::Size WorkspaceSidebarView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  const int width = available_size.width().is_bounded()
++                        ? available_size.width().value()
++                        : GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
++  return gfx::Size(width, ComputeLayout(width).height);
++}
++
++gfx::Size WorkspaceSidebarView::GetMinimumSize() const {
++  // Deliberately not ComputeLayout(): at an unbounded width the grid plans a
++  // single column, so twelve favorites would claim twelve rows of minimum
++  // height and squeeze Today out of the strip entirely. What the sidebar
++  // actually needs is the space header (permanent -- it is the pinned
++  // section's visible edge), the empty-state placeholder while the grid is
++  // empty, and one row's worth of content.
++  int height = kSpaceHeaderHeight + kSectionGap;
++  height += favorite_count_ == 0
++                ? kFavoritesPlaceholderHeight
++                : GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
++  if (ordered_entries_.size() > favorite_count_ && !space_collapsed_) {
++    height +=
++        kTabPadding + GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
++  }
++  return gfx::Size(GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth),
++                   height);
++}
++
++void WorkspaceSidebarView::Layout(PassKey) {
++  const SidebarLayout layout = ComputeLayout(width());
++
++  if (placeholder_) {
++    placeholder_->SetVisible(layout.placeholder_visible);
++    if (layout.placeholder_visible) {
++      placeholder_->SetBoundsRect(layout.placeholder_bounds);
++    }
++  }
++  if (space_header_) {
++    space_header_->SetBoundsRect(layout.header_bounds);
++  }
++  for (size_t i = 0; i < ordered_entries_.size(); ++i) {
++    WorkspaceEntryView* view = ordered_entries_[i].get();
++    const bool visible = i < favorite_count_ || !space_collapsed_;
++    view->SetVisible(visible);
++    if (visible) {
++      view->SetBoundsRect(layout.entry_bounds[i]);
++    }
++  }
++}
++
++void WorkspaceSidebarView::OnEntryActivated(const std::string& entry_id) {
++  if (auto* controller =
++          helium_workspace::WorkspaceTabController::From(GetBrowserWindow())) {
++    controller->OpenEntry(entry_id);
++  }
++}
++
++void WorkspaceSidebarView::OnEntryToggleFavorite(const std::string& entry_id) {
++  if (!service_) {
++    return;
++  }
++  const helium_workspace::WorkspaceEntry* entry =
++      service_->FindEntryById(entry_id);
++  if (!entry) {
++    return;
++  }
++  service_->SetEntrySection(
++      entry_id,
++      entry->section == helium_workspace::WorkspaceEntry::Section::kFavorite
++          ? helium_workspace::WorkspaceEntry::Section::kPinned
++          : helium_workspace::WorkspaceEntry::Section::kFavorite);
++}
++
++void WorkspaceSidebarView::OnEntryRemoved(const std::string& entry_id) {
++  if (service_) {
++    service_->RemoveEntry(entry_id);
++  }
++}
++
++bool WorkspaceSidebarView::CanEntryBecomeFavorite(
++    const std::string& entry_id) const {
++  if (!service_) {
++    return false;
++  }
++  const helium_workspace::WorkspaceEntry* entry =
++      service_->FindEntryById(entry_id);
++  if (!entry) {
++    return false;
++  }
++  return entry->section ==
++             helium_workspace::WorkspaceEntry::Section::kFavorite ||
++         service_->CountFavorites() <
++             helium_workspace::WorkspaceService::kMaxFavorites;
++}
++
++BEGIN_METADATA(WorkspaceSidebarView)
++END_METADATA
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 ===================================================================
---- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
-+++ src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
-@@ -13,6 +13,7 @@
- #include "ui/views/layout/delegating_layout_manager.h"
- #include "ui/views/view.h"
- 
-+class PrefService;
- class TabCollectionNode;
- 
- // The view class that represents the pinned tab region for the
-@@ -37,6 +38,7 @@ class PinnedTabContainerView
- 
-   // views::View:
-   gfx::Size GetMinimumSize() const override;
-+  void AddedToWidget() override;
- 
-   // TabCollectionAnimatingLayoutManager::Delegate:
-   bool IsDragging() const override;
-@@ -49,6 +51,19 @@ class PinnedTabContainerView
-       const gfx::Point& loc_in_container);
- 
-  private:
-+  // helium-fork: number of leading children that are workspace favorites —
-+  // they render as an icon grid, everything after them as full rows.
-+  size_t CountLeadingFavorites(
-+      const std::vector<views::View*>& children) const;
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -0,0 +1,115 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
-+  // helium-fork: space header (Arc's collapsible space name row) state. The
-+  // collapsed flag is mirrored from a profile pref so it survives restarts.
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SIDEBAR_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SIDEBAR_VIEW_H_
++
++#include <map>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_entry_view.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/view.h"
++
++class BrowserWindowInterface;
++class PrefService;
++class Profile;
++class TabStripModel;
++
++// The whole workspace sidebar: the Favorites capsule grid, the collapsible
++// space header, and the full-row Pinned entries. It renders
++// WorkspaceService::entries() -- profile data -- rather than the window's
++// pinned tab collection, which is why a new window shows a complete sidebar
++// on its first frame.
++//
++// This lives one level below PinnedTabContainerView instead of inside it
++// because pinned_tab_container_view.h belongs to the "common" source_set,
++// whose dependencies cannot reach //chrome/browser/ui, and observing the
++// service needs the complete WorkspaceService type in a header.
++class WorkspaceSidebarView : public views::View,
++                             public helium_workspace::WorkspaceService::Observer,
++                             public TabStripModelObserver,
++                             public WorkspaceEntryView::Delegate {
++  METADATA_HEADER(WorkspaceSidebarView, views::View)
++
++ public:
++  WorkspaceSidebarView();
++  WorkspaceSidebarView(const WorkspaceSidebarView&) = delete;
++  WorkspaceSidebarView& operator=(const WorkspaceSidebarView&) = delete;
++  ~WorkspaceSidebarView() override;
++
++  // views::View:
++  void AddedToWidget() override;
++  void RemovedFromWidget() override;
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  gfx::Size GetMinimumSize() const override;
++  void Layout(PassKey) override;
++
++  // helium_workspace::WorkspaceService::Observer:
++  void OnWorkspaceEntriesChanged() override;
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++
++  // WorkspaceEntryView::Delegate:
++  void OnEntryActivated(const std::string& entry_id) override;
++  void OnEntryToggleFavorite(const std::string& entry_id) override;
++  void OnEntryRemoved(const std::string& entry_id) override;
++  bool CanEntryBecomeFavorite(const std::string& entry_id) const override;
++
++ private:
++  // Geometry of one layout pass, shared by Layout() and the preferred-size
++  // calculation so the two can never disagree.
++  struct SidebarLayout {
++    int height = 0;
++    std::vector<gfx::Rect> entry_bounds;  // Parallel to |ordered_entries_|.
++    gfx::Rect placeholder_bounds;
++    gfx::Rect header_bounds;
++    bool placeholder_visible = false;
++  };
++
++  // Resolves the browser this sidebar belongs to; only valid once the widget
++  // exists.
++  BrowserWindowInterface* GetBrowserWindow() const;
 +  PrefService* GetProfilePrefs() const;
 +  void LoadSpaceCollapsedFromPrefs();
 +  void ToggleSpaceCollapsed();
 +
-+  // Highlights the space header while it is the active drop target.
-+  void SetSpaceHeaderDropTargetActive(bool active);
-   // DraggedTabsContainer:
-   views::ScrollView* GetScrollViewForContainer() const override;
-   void UpdateTargetLayoutForDrag(
-@@ -72,6 +87,15 @@ class PinnedTabContainerView
-   raw_ptr<TabCollectionNode> collection_node_;
-   const raw_ref<TabCollectionAnimatingLayoutManager> layout_manager_;
- 
-+  // helium-fork: persistent Arc-style empty state for the Favorites grid;
-+  // a plain child view, not part of the tab collection.
-+  raw_ptr<views::View> placeholder_ = nullptr;
++  // Brings |entry_views_| in line with the service. Reconciles rather than
++  // rebuilds: OnWorkspaceEntriesChanged() fires on every persisted title
++  // change, and re-creating every row would restart every favicon fetch.
++  void SyncEntryViews();
++  // Pushes the per-window facts (which entry has a tab here, which one is
++  // active) onto the rows.
++  void SyncBindings();
 +
-+  // helium-fork: persistent Arc-style space name row between the Favorites
-+  // grid and the full-row pinned section. Also a plain child view.
++  SidebarLayout ComputeLayout(int width) const;
++
++  raw_ptr<Profile> profile_ = nullptr;
++  raw_ptr<helium_workspace::WorkspaceService> service_ = nullptr;
++
++  raw_ptr<views::View> placeholder_ = nullptr;
 +  raw_ptr<views::View> space_header_ = nullptr;
 +  bool space_collapsed_ = false;
 +
-   base::CallbackListSubscription node_destroyed_subscription_;
- };
- 
-Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++  // Entry id -> row, plus the model order the layout walks.
++  std::map<std::string, raw_ptr<WorkspaceEntryView>> entry_views_;
++  std::vector<raw_ptr<WorkspaceEntryView>> ordered_entries_;
++  size_t favorite_count_ = 0;
++
++  base::ScopedObservation<helium_workspace::WorkspaceService,
++                          helium_workspace::WorkspaceService::Observer>
++      service_observation_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SIDEBAR_VIEW_H_
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 ===================================================================
---- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-+++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -114,6 +114,10 @@ TabStripView::TabStripView(TabCollection
-       views::ScrollView::ScrollWithLayers::kEnabled));
-   SetScrollViewProperties(pinned_tabs_scroll_view_);
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+@@ -17,6 +17,9 @@
+ class TabCollectionNode;
+ class TabGroupView;
  
-+  // helium-fork: Arc-style divider between the pinned section and the
-+  // regular (Today) tabs, restored from the upstream separator.
-+  tabs_separator_ = AddChildView(std::make_unique<views::Separator>());
-+
-   unpinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
-       views::ScrollView::ScrollWithLayers::kEnabled));
-   SetScrollViewProperties(unpinned_tabs_scroll_view_);
-@@ -144,8 +148,12 @@ views::ProposedLayout TabStripView::Calc
-   const int region_horizontal_padding =
-       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
++namespace helium_workspace {
++class WorkspaceService;
++}  // namespace helium_workspace
  
--  const int region_vertical_padding = GetLayoutConstant(
--      LayoutConstant::kVerticalTabStripCollapsedVerticalPadding);
-+  // helium-fork: the pinned/Today divider needs more breathing room than the
-+  // generic region padding gives it, or it reads as a hairline crammed
-+  // against the tabs instead of a section break. Kept local rather than
-+  // widening `kVerticalTabStripCollapsedVerticalPadding`, which the vertical
-+  // top container and the WebUI toolbar CSS also consume.
-+  static constexpr int kTabsSeparatorVerticalPadding = 12;
+ // The view class that represents the unpinned tab region for the
+ // tab strip. It manages the layout of the all the unpinned tabs and
+@@ -56,6 +59,10 @@ class UnpinnedTabContainerView
+       const gfx::Point& point_in_local_coords);
  
-   int y = 0;
+  private:
++  // helium-fork: the profile's workspace model, or null (off-the-record
++  // windows, or before this view has a widget). Tabs bound to an entry are
++  // drawn by the sidebar and skipped here.
++  const helium_workspace::WorkspaceService* GetWorkspaceService() const;
  
-@@ -165,7 +173,9 @@ views::ProposedLayout TabStripView::Calc
-   if (size_bounds.height().is_bounded()) {
-     remaining_height = size_bounds.height().value();
-     if (pinned_preferred_height != 0 && unpinned_preferred_height != 0) {
--      remaining_height -= region_vertical_padding;
-+      remaining_height -= kTabsSeparatorVerticalPadding;
-+      remaining_height -= tabs_separator_->GetPreferredSize().height() +
-+                          kTabsSeparatorVerticalPadding;
-     }
-     // Clamp the remaining height to 0 if we have less space.
-     remaining_height = std::max(remaining_height, 0);
-@@ -196,10 +206,25 @@ views::ProposedLayout TabStripView::Calc
-     y += pinned_container_bounds.height();
-     // Add padding only if there are pinned and unpinned tabs.
-     if (unpinned_preferred_height != 0) {
--      y += region_vertical_padding;
-+      y += kTabsSeparatorVerticalPadding;
-     }
-   }
- 
-+  // helium-fork: place the pinned/Today divider when both sections exist.
-+  if (pinned_container_bounds.height() && unpinned_preferred_height != 0 &&
-+      size_bounds.width().is_bounded()) {
-+    gfx::Rect tabs_separator_bounds(
-+        region_horizontal_padding, y,
-+        size_bounds.width().value() - 2 * region_horizontal_padding,
-+        tabs_separator_->GetPreferredSize().height());
-+    layouts.child_layouts.emplace_back(tabs_separator_.get(), true,
-+                                       tabs_separator_bounds);
-+    y += tabs_separator_bounds.height() + kTabsSeparatorVerticalPadding;
-+  } else {
-+    layouts.child_layouts.emplace_back(tabs_separator_.get(), false,
-+                                       gfx::Rect());
-+  }
-+
-   // Place the unpinned container using the entire available width, we do not
-   // inset the x value by |region_horizontal_padding| here because, when the tab
-   // strip is collapsed, tab groups need to draw the group colored line in this
-@@ -609,7 +634,10 @@ void TabStripView::DisableOverflowVisual
-   }
- }
- 
--void TabStripView::UpdateColors() {}
-+void TabStripView::UpdateColors() {
-+  tabs_separator_->SetColorId(IsFrameActive() ? kColorTabDividerFrameActive
-+                                              : kColorTabDividerFrameInactive);
-+}
- 
- bool TabStripView::IsFrameActive() const {
-   return GetWidget() ? GetWidget()->ShouldPaintAsActive() : true;
-Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
-===================================================================
---- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
-+++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
-@@ -34,6 +34,8 @@
- #include "chrome/browser/ui/views/frame/themed_background.h"
- #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
- #include "chrome/browser/ui/views/helium/native_frame_materials.h"
-+#include "chrome/browser/ui/helium_workspace/workspace_service.h"
-+#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
- #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
- #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
- #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
-@@ -762,7 +764,7 @@ bool TabView::IsChildVisible(const views
-   if (child_view == title_) {
-     // Pinned titles should be visible in the expand on hover state when the
-     // width is sufficient to show the title.
--    return !pinned_ || IsInExpandOnHover(width);
-+    return !RenderAsGridIcon() || IsInExpandOnHover(width);
-   }
- 
-   if (child_view == alert_indicator_) {
-@@ -776,7 +778,7 @@ bool TabView::IsChildVisible(const views
-   }
- 
-   if (child_view == icon_) {
--    const bool should_hide_icon_for_alert = pinned_ || collapsed_;
-+    const bool should_hide_icon_for_alert = RenderAsGridIcon() || collapsed_;
-     return !should_hide_icon_for_alert ||
-            !IsChildVisible(alert_indicator_, width);
-   }
-@@ -812,9 +814,9 @@ views::ProposedLayout TabView::Calculate
-     const views::SizeBounds& size_bounds) const {
-   const int width = size_bounds.width().value_or(
-       VerticalTabStripRegionView::kUncollapsedMaxWidth);
--  const int height =
--      GetLayoutConstant(pinned_ ? LayoutConstant::kVerticalTabPinnedHeight
--                                : LayoutConstant::kVerticalTabHeight);
-+  const int height = GetLayoutConstant(
-+      RenderAsGridIcon() ? LayoutConstant::kVerticalTabFavoriteHeight
-+                         : LayoutConstant::kVerticalTabHeight);
-   views::ProposedLayout layouts;
-   layouts.host_size = gfx::Size(width, height);
- 
-@@ -823,7 +825,8 @@ views::ProposedLayout TabView::Calculate
- 
-   // If the tab is collapsed but animating with a wider width then we shouldn't
-   // center the contents.
--  const bool is_centered = (pinned_ || collapsed_) && !IsInExpandOnHover(width);
-+  const bool is_centered =
-+      (RenderAsGridIcon() || collapsed_) && !IsInExpandOnHover(width);
- 
-   int placed_children = 0;
-   for (const auto& child : tab_children_configs_) {
-@@ -1063,6 +1066,7 @@ void TabView::UpdateTabData(const tabs::
-   }
- 
-   icon_->SetData(tab_data_);
-+  icon_->SetDiscardRingSuppressed(IsFavoriteWorkspaceTab());
-   icon_->SetActiveState(tab->IsActivated());
-   icon_->SetAttention(TabIcon::AttentionType::kBlockedWebContents,
-                       !tab->IsActivated() && tab->IsBlocked());
-@@ -1086,15 +1090,21 @@ void TabView::UpdateTitle(std::u16string
- }
- 
- void TabView::UpdateBorder() {
--  if (pinned_) {
-+  if (RenderAsGridIcon()) {
-     if (split_) {
-       // Insets for border handled by the `SplitTabView`.
-       SetBorder(views::CreateEmptyBorder(gfx::Insets(GetLayoutConstant(
-           LayoutConstant::kVerticalTabPinnedBorderThickness))));
-+    } else if (active_ && IsFavoriteWorkspaceTab()) {
-+      // helium-fork: the selected favorite gets an accent-colored capsule
-+      // outline on top of the regular active fill.
-+      SetBorder(views::CreateRoundedRectBorder(
-+          2, GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteCornerRadius),
-+          kColorVerticalTabFavoriteActiveOutline));
-     } else {
-       SetBorder(views::CreateRoundedRectBorder(
-           GetLayoutConstant(LayoutConstant::kVerticalTabPinnedBorderThickness),
--          GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius),
-+          GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteCornerRadius),
-           IsFrameActive() ? kColorVerticalTabPinnedOutline
-                           : kColorTabDividerFrameInactive));
-     }
-@@ -1103,6 +1113,33 @@ void TabView::UpdateBorder() {
-   }
- }
- 
-+void TabView::SetRenderAsRow(bool render_as_row) {
-+  if (render_as_row_ == render_as_row) {
-+    return;
-+  }
-+  render_as_row_ = render_as_row;
-+  UpdateBorder();
-+  InvalidateLayout();
-+  SchedulePaint();
-+}
-+
-+bool TabView::IsFavoriteWorkspaceTab() const {
-+  const tabs::TabInterface* tab = GetTabInterface();
-+  if (!tab) {
-+    return false;
-+  }
-+  BrowserWindowInterface* browser =
-+      const_cast<tabs::TabInterface*>(tab)->GetBrowserWindowInterface();
-+  if (!browser) {
-+    return false;
-+  }
-+  auto* workspace_service =
-+      helium_workspace::WorkspaceServiceFactory::GetForProfile(
-+          browser->GetProfile());
-+  return workspace_service &&
-+         workspace_service->IsFavoriteTab(tab->GetHandle());
-+}
-+
- void TabView::UpdateThemeColors() {
-   if (!collection_node_) {
-     return;
-@@ -1303,8 +1340,11 @@ void TabView::UpdateHoverCard(HoverCardA
- }
- 
- SkScalar TabView::GetCornerRadius() const {
-+  // helium-fork: favorite capsules use the larger Arc-style radius.
-   return SkIntToScalar(
--      GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius) +
-+      GetLayoutConstant(RenderAsGridIcon()
-+                            ? LayoutConstant::kVerticalTabFavoriteCornerRadius
-+                            : LayoutConstant::kVerticalTabCornerRadius) +
-       (split_ ? GetInsets().height() : 0));
- }
- 
-Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
-===================================================================
---- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
-+++ src/chrome/browser/ui/views/tabs/common/tab_view.h
-@@ -80,6 +80,16 @@ class TabView : public views::View,
-   SkPath GetPath() const;
- 
-   const TabCollectionNode* collection_node() const { return collection_node_; }
-+  const tabs::TabInterface* tab_interface() const { return GetTabInterface(); }
-+
-+  // helium-fork: pinned workspace entries render as full rows (Arc's first
-+  // pin layer); only Favorites keep the centered grid-icon look. Set by
-+  // PinnedTabContainerView during layout.
-+  void SetRenderAsRow(bool render_as_row);
-+  bool render_as_row() const { return render_as_row_; }
-+  // Grid-icon presentation = pinned and not overridden to row.
-+  bool RenderAsGridIcon() const { return pinned_ && !render_as_row_; }
-+  bool IsFavoriteWorkspaceTab() const;
-   const TabStyle* tab_style() const { return tab_style_; }
-   float radial_highlight_opacity() { return radial_highlight_opacity_; }
-   const tabs::TabData& data() const { return tab_data_; }
-@@ -243,6 +253,7 @@ class TabView : public views::View,
-   bool split_ = false;
-   bool collapsed_ = false;
-   bool pinned_ = false;
-+  bool render_as_row_ = false;
-   bool shift_pressed_on_mouse_down_ = false;
- 
-   std::unique_ptr<GlowHoverController> hover_controller_;
-Index: src/chrome/browser/ui/views/tabs/tab/tab_icon.cc
-===================================================================
---- src.orig/chrome/browser/ui/views/tabs/tab/tab_icon.cc
-+++ src/chrome/browser/ui/views/tabs/tab/tab_icon.cc
-@@ -246,8 +246,9 @@ void TabIcon::OnDiscardRingTreatmentEnab
-       g_browser_process->local_state()->GetBoolean(
-           performance_manager::user_tuning::prefs::
-               kDiscardRingTreatmentEnabled);
--  bool show_discard_indicator =
--      is_discarded_ && discard_ring_treatment_enabled_;
-+  bool show_discard_indicator = is_discarded_ &&
-+                                discard_ring_treatment_enabled_ &&
-+                                !discard_ring_suppressed_;
-   if (was_discard_indicator_shown_ != show_discard_indicator) {
-     was_discard_indicator_shown_ = show_discard_indicator;
- 
-@@ -517,10 +518,33 @@ void TabIcon::SetIcon(const ui::ImageMod
-   UpdateThemedFavicon();
- }
- 
-+void TabIcon::SetDiscardRingSuppressed(bool suppressed) {
-+  if (discard_ring_suppressed_ == suppressed) {
-+    return;
-+  }
-+  discard_ring_suppressed_ = suppressed;
-+  const bool show_discard_indicator = is_discarded_ &&
-+                                      discard_ring_treatment_enabled_ &&
-+                                      !discard_ring_suppressed_;
-+  if (was_discard_indicator_shown_ != show_discard_indicator) {
-+    was_discard_indicator_shown_ = show_discard_indicator;
-+    // Jump straight to the end state; suppression should never animate.
-+    if (show_discard_indicator) {
-+      tab_discard_animation_.SetCurrentValue(1);
-+      favicon_size_animation_.Reset(0);
-+    } else {
-+      tab_discard_animation_.SetCurrentValue(0);
-+      favicon_size_animation_.Reset(1);
-+    }
-+    SchedulePaint();
-+  }
-+}
-+
- void TabIcon::SetDiscarded(bool discarded) {
-   is_discarded_ = discarded;
--  bool show_discard_indicator =
--      is_discarded_ && discard_ring_treatment_enabled_;
-+  bool show_discard_indicator = is_discarded_ &&
-+                                discard_ring_treatment_enabled_ &&
-+                                !discard_ring_suppressed_;
-   if (was_discard_indicator_shown_ != show_discard_indicator) {
-     was_discard_indicator_shown_ = show_discard_indicator;
-     favicon_size_animation_.SetSlideDuration(
-Index: src/chrome/browser/ui/views/tabs/tab/tab_icon.h
-===================================================================
---- src.orig/chrome/browser/ui/views/tabs/tab/tab_icon.h
-+++ src/chrome/browser/ui/views/tabs/tab/tab_icon.h
-@@ -78,6 +78,11 @@ class TabIcon : public views::View, publ
-   // won't work.
-   void SetCanPaintToLayer(bool can_paint_to_layer);
- 
-+  // helium-fork: workspace favorites render their icon normally even while
-+  // discarded — no dotted ring, no shrunken favicon.
-+  void SetDiscardRingSuppressed(bool suppressed);
-+
-+
-   // The loading animation only steps when this function is called. The
-   // `elapsed_time` parameter is expected to be the same among all tabs in a tab
-   // strip in order to keep the throbbers in sync.
-@@ -216,6 +221,7 @@ class TabIcon : public views::View, publ
-   // we don't want to animate the discard ring in the latter case.
-   bool is_discarded_ = false;
-   bool discard_ring_treatment_enabled_ = true;
-+  bool discard_ring_suppressed_ = false;
-   bool was_discard_indicator_shown_ = false;
- 
-   // Crash animation (in place of favicon). Lazily created since most of the
-Index: src/chrome/app/generated_resources.grd
-===================================================================
---- src.orig/chrome/app/generated_resources.grd
-+++ src/chrome/app/generated_resources.grd
-@@ -12202,6 +12202,15 @@ Check your passwords anytime in <ph name
-         <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
-           Remove from favorites
-         </message>
-+        <message name="IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_TITLE" desc="Title inside the dashed placeholder shown while the Favorites grid in the vertical tab sidebar is empty.">
-+          Drag to add Favorites
-+        </message>
-+        <message name="IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_SUBTITLE" desc="Explanatory text inside the dashed placeholder shown while the Favorites grid in the vertical tab sidebar is empty.">
-+          Favorites keep your most used sites and apps close
-+        </message>
-+        <message name="IDS_HELIUM_WS_SPACE_DEFAULT_NAME" desc="Default name of the space, shown in the collapsible header row that separates the Favorites grid from the pinned tabs in the vertical tab sidebar.">
-+          Untitled
-+        </message>
-         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
-           {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
-         </message>
-@@ -12339,6 +12348,15 @@ Check your passwords anytime in <ph name
-         <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="In Title Case: The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
-           Remove from Favorites
-         </message>
-+        <message name="IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_TITLE" desc="In Title Case: Title inside the dashed placeholder shown while the Favorites grid in the vertical tab sidebar is empty.">
-+          Drag to add Favorites
-+        </message>
-+        <message name="IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_SUBTITLE" desc="In Title Case: Explanatory text inside the dashed placeholder shown while the Favorites grid in the vertical tab sidebar is empty.">
-+          Favorites keep your most used sites and apps close
-+        </message>
-+        <message name="IDS_HELIUM_WS_SPACE_DEFAULT_NAME" desc="In Title Case: Default name of the space, shown in the collapsible header row that separates the Favorites grid from the pinned tabs in the vertical tab sidebar.">
-+          Untitled
-+        </message>
-         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="In Title Case: The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
-           {NUM_TABS, plural, =1 {Mute Site} other {Mute Sites}}
-         </message>
-Index: src/chrome/browser/ui/layout_constants.cc
-===================================================================
---- src.orig/chrome/browser/ui/layout_constants.cc
-+++ src/chrome/browser/ui/layout_constants.cc
-@@ -147,9 +147,14 @@ int GetLayoutConstant(LayoutConstant con
-     case LayoutConstant::kVerticalTabCornerRadius:
-       return 8;
-     case LayoutConstant::kVerticalTabHeight:
--      return 30;
-+      // helium-fork: Arc's rows are a little taller than upstream's 30.
-+      return 34;
-     case LayoutConstant::kVerticalTabPinnedHeight:
-       return 30;
-+    case LayoutConstant::kVerticalTabFavoriteHeight:
-+      return 44;
-+    case LayoutConstant::kVerticalTabFavoriteCornerRadius:
-+      return 12;
-     case LayoutConstant::kVerticalTabMinWidth:
-       return 30;
-     case LayoutConstant::kVerticalTabStripHorizontalPadding:
-Index: src/chrome/browser/ui/layout_constants.h
-===================================================================
---- src.orig/chrome/browser/ui/layout_constants.h
-+++ src/chrome/browser/ui/layout_constants.h
-@@ -226,6 +226,12 @@ enum class LayoutConstant {
-   // The height of a pinned vertical tab.
-   kVerticalTabPinnedHeight,
- 
-+  // helium-fork: the height of a workspace favorite capsule in the icon grid.
-+  kVerticalTabFavoriteHeight,
-+
-+  // helium-fork: the corner radius of a workspace favorite capsule.
-+  kVerticalTabFavoriteCornerRadius,
-+
-   // The minimum possible width for a vertical tab.
-   kVerticalTabMinWidth,
- 
-Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
-===================================================================
---- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.cc
-+++ src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
-@@ -10,6 +10,7 @@ namespace helium_workspace::prefs {
- 
- void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
-   registry->RegisterListPref(kWorkspaceEntries);
-+  registry->RegisterBooleanPref(kWorkspaceSpaceCollapsed, false);
- }
- 
- }  // namespace helium_workspace::prefs
-Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.h
-===================================================================
---- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.h
-+++ src/chrome/browser/ui/helium_workspace/workspace_prefs.h
-@@ -15,6 +15,11 @@ namespace helium_workspace::prefs {
- // workspace sidebar. See workspace_entry.h for the schema.
- inline constexpr char kWorkspaceEntries[] = "helium.workspace.entries";
- 
-+// Whether the space header row in the sidebar is collapsed, hiding the
-+// full-row pinned section below it. The header itself stays visible.
-+inline constexpr char kWorkspaceSpaceCollapsed[] =
-+    "helium.workspace.space_collapsed";
-+
- void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
- 
- }  // namespace helium_workspace::prefs
+   // DraggedTabsContainer:
+   views::ScrollView* GetScrollViewForContainer() const override;

@@ -35,7 +35,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,16 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -48,6 +48,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
 +
 +void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
 +  registry->RegisterListPref(kWorkspaceEntries);
++  registry->RegisterBooleanPref(kWorkspaceMigratedFromPinnedTabs, false);
 +}
 +
 +}  // namespace helium_workspace::prefs
@@ -55,7 +56,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_prefs.h
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,31 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -72,6 +73,15 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.h
 +// List of dicts describing the persistent Favorites/Pinned entries of the
 +// workspace sidebar. See workspace_entry.h for the schema.
 +inline constexpr char kWorkspaceEntries[] = "helium.workspace.entries";
++
++// Set once, the first time WorkspaceService runs against a profile whose
++// entries used to be backed by real native pinned tabs. Those tabs were
++// written into prefs::kPinnedTabs on every exit and re-navigated on every
++// start; the entries now live entirely in kWorkspaceEntries, so the stale
++// list is cleared exactly once and this flag stops us clearing a list the
++// user has since populated themselves.
++inline constexpr char kWorkspaceMigratedFromPinnedTabs[] =
++    "helium.workspace.migrated_from_pinned_tabs";
 +
 +void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 +

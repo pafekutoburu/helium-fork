@@ -53,7 +53,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -384,6 +384,8 @@ static_library("ui") {
+@@ -385,6 +385,8 @@ static_library("ui") {
      "helium_workspace/workspace_service.h",
      "helium_workspace/workspace_service_factory.cc",
      "helium_workspace/workspace_service_factory.h",
@@ -87,22 +87,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  #include "chrome/browser/ui/lens/lens_overlay_controller.h"
  #include "chrome/browser/ui/managed_ui.h"
  #include "chrome/browser/ui/navigator/browser_navigator.h"
-@@ -670,6 +671,14 @@ void BrowserCommandController::HandleCom
-     return;
-   }
- 
-+  // helium-fork: Cmd+W on a workspace entry's tab unloads it (the entry
-+  // survives) instead of closing; plain tabs close as usual.
-+  if (id == IDC_CLOSE_TAB &&
-+      helium_workspace::WorkspaceTabController::MaybeHandleCloseTab(
-+          browser_)) {
-+    return;
-+  }
-+
-   // The order of commands in this switch statement must match the function
-   // declaration order in browser.h!
-   switch (id) {
-@@ -1499,6 +1508,13 @@ void BrowserCommandController::HandleCom
+@@ -1499,6 +1500,13 @@ void BrowserCommandController::HandleCom
        }
        break;
      }
@@ -116,7 +101,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
      // Hosted App commands
      case IDC_COPY_URL:
        CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
-@@ -2042,6 +2058,8 @@ void BrowserCommandController::InitComma
+@@ -2042,6 +2050,8 @@ void BrowserCommandController::InitComma
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_SERVICES_OPEN, true);
    command_updater_->UpdateCommandEnabled(IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN,
                                           false);
@@ -151,16 +136,19 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
-@@ -599,6 +601,13 @@ void BrowserWindowFeatures::Init(Browser
+@@ -599,6 +601,16 @@ void BrowserWindowFeatures::Init(Browser
          GetUserDataFactory().CreateInstance<HeliumTabSwitcherController>(
              *browser, browser, profile->GetPrefs());
  
-+    helium_workspace_tab_controller_ =
-+        GetUserDataFactory()
-+            .CreateInstance<helium_workspace::WorkspaceTabController>(
-+                *browser, browser,
-+                helium_workspace::WorkspaceServiceFactory::GetForProfile(
-+                    profile));
++    // helium-fork: off-the-record profiles have no workspace service, so
++    // incognito windows simply have no sidebar controller.
++    if (auto* workspace_service =
++            helium_workspace::WorkspaceServiceFactory::GetForProfile(profile)) {
++      helium_workspace_tab_controller_ =
++          GetUserDataFactory()
++              .CreateInstance<helium_workspace::WorkspaceTabController>(
++                  *browser, browser, workspace_service);
++    }
 +
      if (tabs::IsVerticalTabsFeatureEnabled()) {
        Browser* raw_browser = browser->GetBrowserForMigrationOnly();
@@ -206,7 +194,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-@@ -0,0 +1,325 @@
+@@ -0,0 +1,349 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -214,25 +202,37 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
 +
 +#include <string>
++#include <vector>
 +
 +#include "base/auto_reset.h"
 +#include "base/functional/bind.h"
++#include "base/containers/span.h"
++#include "base/strings/string_view_util.h"
 +#include "base/task/single_thread_task_runner.h"
-+#include "chrome/browser/profiles/profile.h"
-+#include "chrome/browser/sessions/session_restore.h"
 +#include "chrome/browser/tab_list/tab_removed_reason.h"
 +#include "chrome/browser/ui/browser_tabstrip.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/tabs/tab_data.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
-+#include "chrome/common/webui_url_constants.h"
 +#include "components/tabs/public/tab_interface.h"
-+#include "content/public/browser/navigation_controller.h"
 +#include "content/public/browser/web_contents.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/image/image_skia.h"
++#include "ui/gfx/image/image_skia_rep.h"
 +
 +namespace helium_workspace {
++
++namespace {
++
++// A stored favicon is only there to draw a 16x16 sidebar row on a cold
++// start. Anything larger is a page that served an oversized icon; skip it
++// rather than grow the pref by a screenshot.
++constexpr size_t kMaxFaviconBytes = 32 * 1024;
++
++}  // namespace
 +
 +DEFINE_USER_DATA(WorkspaceTabController);
 +
@@ -247,23 +247,12 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +    model->AddObserver(this);
 +  }
 +
-+  // Fallback reconciliation for startups that do not go through session
-+  // restore (fresh profile, "open the New Tab page" startup setting, ...).
-+  // Deferred so Chromium's own startup tabs (including PinnedTabCodec ones)
-+  // exist by the time it runs; the session-restore path is subscribed by the
-+  // service itself.
-+  Profile* profile = browser_window_->GetProfile();
-+  if (!service_->reconciled() && !SessionRestore::IsRestoring(profile) &&
-+      !browser_window_->CreatedBySessionRestore()) {
-+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-+        FROM_HERE, base::BindOnce(
-+                       [](base::WeakPtr<WorkspaceTabController> self) {
-+                         if (self) {
-+                           self->service_->EnsureReconciled();
-+                         }
-+                       },
-+                       weak_factory_.GetWeakPtr()));
-+  }
++  // Deferred: BrowserWindowFeatures::Init() runs before this window's
++  // startup or session-restore tabs have been inserted, so there would be
++  // nothing to adopt yet.
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&WorkspaceTabController::AdoptTabsInWindow,
++                                weak_factory_.GetWeakPtr()));
 +}
 +
 +WorkspaceTabController::~WorkspaceTabController() {
@@ -286,21 +275,16 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +  if (!model || model->empty()) {
 +    return;
 +  }
-+  const int active_index = model->active_index();
-+  tabs::TabInterface* tab = model->GetTabAtIndex(active_index);
++  tabs::TabInterface* tab = model->GetTabAtIndex(model->active_index());
 +  if (!tab) {
 +    return;
 +  }
 +  const tabs::TabHandle handle = tab->GetHandle();
-+  base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
 +
 +  const std::string entry_id = service_->FindEntryIdForTab(handle);
 +  if (!entry_id.empty()) {
-+    // Unpin: entry disappears, the tab lives on as a plain Today tab.
++    // Unpin: the entry disappears and the tab lives on as a plain Today tab.
 +    service_->RemoveEntry(entry_id);
-+    if (model->IsTabPinned(active_index)) {
-+      model->SetTabPinned(active_index, false);
-+    }
 +    return;
 +  }
 +
@@ -312,223 +296,251 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +  const std::string id =
 +      service_->AddEntry(WorkspaceEntry::Section::kPinned, url,
 +                         contents ? contents->GetTitle() : std::u16string());
-+  if (id.empty()) {
++  if (!id.empty()) {
++    BindTabToEntry(tab, id);
++  }
++}
++
++void WorkspaceTabController::OpenEntry(const std::string& entry_id) {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (!model) {
 +    return;
 +  }
-+  service_->BindTab(handle, id);
-+  if (!model->IsTabPinned(active_index)) {
-+    model->SetTabPinned(active_index, true);
-+  }
-+}
-+
-+// static
-+bool WorkspaceTabController::MaybeHandleCloseTab(
-+    BrowserWindowInterface* browser_window) {
-+  WorkspaceTabController* controller = From(browser_window);
-+  return controller && controller->UnloadActiveWorkspaceTab();
-+}
-+
-+bool WorkspaceTabController::UnloadActiveWorkspaceTab() {
-+  TabStripModel* model = browser_window_->GetTabStripModel();
-+  if (!model || model->empty()) {
-+    return false;
-+  }
-+  const int index = model->active_index();
-+  tabs::TabInterface* tab = model->GetTabAtIndex(index);
-+  if (!tab || !service_->IsWorkspaceTab(tab->GetHandle())) {
-+    return false;
-+  }
-+  const tabs::TabHandle handle = tab->GetHandle();
-+
-+  // A foreground tab cannot be discarded; move the user somewhere sensible
-+  // first (Arc: clearing a pinned tab lands you on the next Today tab).
-+  DeactivateTabAt(index);
-+
-+  service_->MarkPendingReset(handle);
-+  if (!WorkspaceService::DiscardTabForWorkspace(tab)) {
-+    // Not eligible (audio, capture, ...): recreate as a fresh background
-+    // discarded tab at the entry URL. This always unloads, at the cost of
-+    // dropping that tab's history — same as Arc archiving it.
-+    const std::string entry_id = service_->FindEntryIdForTab(handle);
-+    const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
-+    if (!entry) {
-+      return true;
-+    }
-+    const GURL entry_url = entry->url;
-+    base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
-+    service_->UnbindTab(handle);
-+    const int tab_index = model->GetIndexOfTab(tab);
-+    if (tab_index >= 0) {
-+      model->CloseWebContentsAt(tab_index, TabCloseTypes::CLOSE_NONE);
-+    }
-+    content::WebContents* new_contents = chrome::AddAndReturnTabAt(
-+        browser_window_, entry_url, model->IndexOfFirstNonPinnedTab(),
-+        /*foreground=*/false, /*group=*/std::nullopt, /*pinned=*/true);
-+    if (new_contents) {
-+      if (tabs::TabInterface* new_tab =
-+              model->GetTabForWebContents(new_contents)) {
-+        service_->BindTab(new_tab->GetHandle(), entry_id);
-+        WorkspaceService::DiscardTabForWorkspace(new_tab);
-+      }
-+    }
-+  }
-+  return true;
-+}
-+
-+void WorkspaceTabController::DeactivateTabAt(int index) {
-+  TabStripModel* model = browser_window_->GetTabStripModel();
-+  if (model->active_index() != index) {
-+    return;
-+  }
-+  const auto activate = [model](int i) {
-+    model->ActivateTabAt(i,
-+                         TabStripUserGestureDetails(
-+                             TabStripUserGestureDetails::GestureType::kOther));
-+  };
-+
-+  // Prefer the first unpinned (Today) tab.
-+  const int first_unpinned = model->IndexOfFirstNonPinnedTab();
-+  for (int i = first_unpinned; i < model->count(); ++i) {
-+    if (i != index) {
-+      activate(i);
++  const tabs::TabHandle bound =
++      service_->FindTabForEntryInWindow(entry_id, browser_window_);
++  if (tabs::TabInterface* tab = bound.Get()) {
++    const int index = model->GetIndexOfTab(tab);
++    if (index >= 0) {
++      model->ActivateTabAt(
++          index, TabStripUserGestureDetails(
++                     TabStripUserGestureDetails::GestureType::kOther));
 +      return;
 +    }
 +  }
 +
-+  // helium-fork: Today is empty, but every entry keeps a real pinned tab in
-+  // the model, so the sidebar still shows favorites the user never closed.
-+  // Landing on a blank new tab while they sit right there reads as a bug --
-+  // and it compounds, because closing that new tab empties Today again. Fall
-+  // back to an entry tab before creating anything.
-+  //
-+  // Loaded ones only. Activating a discarded tab reloads it, and closing a tab
-+  // must not pull pages back in: clearing entries one by one would otherwise
-+  // load a page per keystroke. When every entry is unloaded -- which is the
-+  // state right after a restart, where reconciliation rebuilds them all as
-+  // discarded background tabs -- the new tab below stays the right answer.
-+  // Entries are ordered favorites-first, so this lands on a favorite when
-+  // there is one. Membership in the entry model is deliberately not required:
-+  // anything loaded up here beats manufacturing a blank tab.
-+  for (int i = 0; i < first_unpinned; ++i) {
-+    if (i == index) {
-+      continue;
-+    }
-+    tabs::TabInterface* tab = model->GetTabAtIndex(i);
-+    content::WebContents* contents = tab ? tab->GetContents() : nullptr;
-+    if (!contents || contents->WasDiscarded()) {
-+      continue;
-+    }
-+    activate(i);
++  const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
++  if (!entry) {
++    return;
++  }
++  // Appended, never positioned: an entry's tab is not drawn in Today, so its
++  // index is invisible and there is nothing to keep in order.
++  pending_bind_entry_id_ = entry_id;
++  chrome::AddAndReturnTabAt(browser_window_, entry->url, /*index=*/-1,
++                            /*foreground=*/true, /*group=*/std::nullopt,
++                            /*pinned=*/false);
++  pending_bind_entry_id_.clear();
++}
++
++void WorkspaceTabController::AdoptTabsInWindow() {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (!model) {
 +    return;
 +  }
 +
-+  // Nothing left to land on: open a fresh NTP in the foreground.
-+  base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
-+  chrome::AddTabAt(browser_window_, GURL(chrome::kChromeUINewTabPageURL),
-+                   /*index=*/-1, /*foreground=*/true);
++  std::vector<tabs::TabHandle> unclaimed;
++  for (int i = 0; i < model->count(); ++i) {
++    tabs::TabInterface* tab = model->GetTabAtIndex(i);
++    if (tab && !service_->IsWorkspaceTab(tab->GetHandle())) {
++      unclaimed.push_back(tab->GetHandle());
++    }
++  }
++
++  // Pass A -- exact URL. Runs over every entry before pass B starts, so an
++  // exact match always wins over a same-origin one.
++  std::erase_if(unclaimed, [&](tabs::TabHandle handle) {
++    tabs::TabInterface* tab = handle.Get();
++    if (!tab) {
++      return true;
++    }
++    if (const WorkspaceEntry* entry = service_->FindEntryByUrlUnboundInWindow(
++            tab->GetURL(), browser_window_)) {
++      BindTabToEntry(tab, entry->id);
++      return true;
++    }
++    return false;
++  });
++
++  // Pass B -- same origin. An entry's URL is the one it was pinned at, and a
++  // restored tab is wherever the user left it, so exact matching misses the
++  // common case. The tab is left where it is; only the binding is restored.
++  for (tabs::TabHandle handle : unclaimed) {
++    tabs::TabInterface* tab = handle.Get();
++    if (!tab) {
++      continue;
++    }
++    const GURL origin = tab->GetURL().DeprecatedGetOriginAsURL();
++    for (const WorkspaceEntry& entry : service_->entries()) {
++      if (entry.url.DeprecatedGetOriginAsURL() == origin &&
++          service_->FindTabForEntryInWindow(entry.id, browser_window_) ==
++              tabs::TabHandle::Null()) {
++        BindTabToEntry(tab, entry.id);
++        break;
++      }
++    }
++  }
++}
++
++void WorkspaceTabController::BindTabToEntry(tabs::TabInterface* tab,
++                                            const std::string& entry_id) {
++  if (!tab || entry_id.empty()) {
++    return;
++  }
++  service_->BindTab(tab->GetHandle(), entry_id);
++  CaptureFavicon(tab, entry_id);
++}
++
++void WorkspaceTabController::CaptureFavicon(tabs::TabInterface* tab,
++                                            const std::string& entry_id) {
++  if (!tab || entry_id.empty()) {
++    return;
++  }
++  const ui::ImageModel favicon =
++      tabs::TabData::FromTabInterface(tab).favicon;
++  if (!favicon.IsImage()) {
++    return;
++  }
++
++  // Store the densest representation the icon has rather than the 1x one.
++  // A sidebar row draws the icon at gfx::kFaviconSize dip, so a 16x16 bitmap
++  // is stretched to 32 physical pixels on a Retina display and looks soft.
++  // WorkspaceEntryView recovers the scale from the stored pixel width, so
++  // this needs no schema change.
++  const gfx::ImageSkia image = favicon.GetImage().AsImageSkia();
++  // image_reps() returns by value, so keep a copy: a pointer into that
++  // temporary vector dangles the moment the loop ends.
++  gfx::ImageSkiaRep best;
++  for (const gfx::ImageSkiaRep& rep : image.image_reps()) {
++    if (!rep.is_null() && (best.is_null() || rep.scale() > best.scale())) {
++      best = rep;
++    }
++  }
++  if (best.is_null()) {
++    return;
++  }
++  std::optional<std::vector<uint8_t>> png =
++      gfx::PNGCodec::EncodeBGRASkBitmap(best.GetBitmap(),
++                                        /*discard_transparency=*/false);
++  if (png && !png->empty() && png->size() <= kMaxFaviconBytes) {
++    service_->SetEntryFavicon(
++        entry_id, std::string(base::as_string_view(base::span(*png))));
++  }
++}
++
++void WorkspaceTabController::UnpinTab(tabs::TabHandle handle) {
++  tabs::TabInterface* tab = handle.Get();
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (!tab || !model || model->closing_all()) {
++    return;
++  }
++  const int index = model->GetIndexOfTab(tab);
++  if (index < 0 || !model->IsTabPinned(index)) {
++    return;
++  }
++  base::AutoReset<bool> guard(&suppress_pin_observer_, true);
++  model->SetTabPinned(index, false);
 +}
 +
 +void WorkspaceTabController::OnTabStripModelChanged(
 +    TabStripModel* tab_strip_model,
 +    const TabStripModelChange& change,
 +    const TabStripSelectionChange& selection) {
-+  // Reset-to-origin on activation. CHANGE_REASON_REPLACED activations are
-+  // discard replacements (including our own unloads) — navigating there
-+  // would defeat the unload, so they are skipped; the reset happens on the
-+  // next real activation.
-+  if (selection.active_tab_changed() && selection.new_tab &&
-+      !(selection.reason & TabStripModelObserver::CHANGE_REASON_REPLACED)) {
-+    tabs::TabInterface* tab = selection.new_tab;
-+    const tabs::TabHandle handle = tab->GetHandle();
-+    if (service_->TakePendingReset(handle)) {
-+      const WorkspaceEntry* entry =
-+          service_->FindEntryById(service_->FindEntryIdForTab(handle));
-+      if (entry && tab->GetContents() && tab->GetURL() != entry->url) {
-+        content::NavigationController::LoadURLParams params(entry->url);
-+        params.transition_type = ui::PAGE_TRANSITION_AUTO_BOOKMARK;
-+        tab->GetContents()->GetController().LoadURLWithParams(params);
-+      }
++  if (change.type() == TabStripModelChange::kInserted) {
++    if (pending_bind_entry_id_.empty()) {
++      return;
 +    }
-+  }
-+
-+  // Uphold the invariant when an entry's tab is destroyed through a path we
-+  // do not control (context menu close, close-other-tabs, ...): re-create it
-+  // as a background discarded pinned tab.
-+  if (change.type() != TabStripModelChange::kRemoved || in_self_mutation_ ||
-+      tab_strip_model->closing_all()) {
++    for (const TabStripModelChange::ContentsWithIndex& inserted :
++         change.GetInsert()->contents) {
++      BindTabToEntry(inserted.tab, pending_bind_entry_id_);
++    }
++    pending_bind_entry_id_.clear();
 +    return;
 +  }
++
++  if (change.type() != TabStripModelChange::kRemoved) {
++    return;
++  }
++  // Closing an entry's tab just unbinds it. The entry stays in the sidebar,
++  // drawn from its persisted title and favicon, and clicking it opens the
++  // entry URL again.
 +  for (const TabStripModelChange::RemovedTab& removed :
 +       change.GetRemove()->contents) {
 +    if (!TabRemoveReasonUtils::WillDeleteTab(removed.remove_reason)) {
 +      continue;
 +    }
 +    const tabs::TabHandle handle = removed.tab->GetHandle();
-+    const std::string entry_id = service_->FindEntryIdForTab(handle);
-+    if (entry_id.empty()) {
-+      continue;
-+    }
++    // Last chance to keep the icon: the tab is about to go away, and whatever
++    // it is showing now is what the user will expect the sidebar row to show.
++    CaptureFavicon(removed.tab, service_->FindEntryIdForTab(handle));
++    last_favicon_.erase(handle);
 +    service_->UnbindTab(handle);
-+    // TabStripModel forbids re-entrant mutation from observer callbacks
-+    // (see the guard CHECK in tab_strip_model.cc), so the re-creation is
-+    // posted.
-+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-+        FROM_HERE, base::BindOnce(&WorkspaceTabController::RecreateEntryTab,
-+                                  weak_factory_.GetWeakPtr(), entry_id));
 +  }
 +}
 +
-+void WorkspaceTabController::RecreateEntryTab(const std::string& entry_id) {
-+  TabStripModel* model = browser_window_->GetTabStripModel();
-+  if (!model || model->closing_all()) {
++void WorkspaceTabController::OnTabChangedAt(tabs::TabInterface* tab,
++                                            int index,
++                                            TabChangeType change_type) {
++  if (!tab || change_type != TabChangeType::kAll) {
 +    return;
 +  }
-+  const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
-+  if (!entry ||
-+      service_->FindTabForEntry(entry_id) != tabs::TabHandle::Null()) {
++  const tabs::TabHandle handle = tab->GetHandle();
++  const std::string entry_id = service_->FindEntryIdForTab(handle);
++  if (entry_id.empty()) {
 +    return;
 +  }
-+  base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
-+  content::WebContents* new_contents = chrome::AddAndReturnTabAt(
-+      browser_window_, entry->url, model->IndexOfFirstNonPinnedTab(),
-+      /*foreground=*/false, /*group=*/std::nullopt, /*pinned=*/true);
-+  if (!new_contents) {
++
++  // The entry's URL stays the one it was pinned at, but its title and icon
++  // follow the page: an entry with no tab has to be recognisable after a
++  // restart, and the last thing the user saw is what they will recognise.
++  const tabs::TabData data = tabs::TabData::FromTabInterface(tab);
++  service_->SetEntryTitle(entry_id, data.title);
++
++  const auto it = last_favicon_.find(handle);
++  if (it != last_favicon_.end() && it->second == data.favicon) {
 +    return;
 +  }
-+  if (tabs::TabInterface* new_tab = model->GetTabForWebContents(new_contents)) {
-+    service_->BindTab(new_tab->GetHandle(), entry_id);
-+    WorkspaceService::DiscardTabForWorkspace(new_tab);
-+  }
++  last_favicon_[handle] = data.favicon;
++  CaptureFavicon(tab, entry_id);
 +}
 +
 +void WorkspaceTabController::OnTabPinnedStateChanged(tabs::TabInterface* tab,
 +                                                     int index) {
-+  if (in_self_mutation_ || !tab) {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (suppress_pin_observer_ || !tab || !model || !model->IsTabPinned(index)) {
 +    return;
 +  }
-+  TabStripModel* model = browser_window_->GetTabStripModel();
 +  const tabs::TabHandle handle = tab->GetHandle();
-+  const bool pinned = model->IsTabPinned(index);
-+  const std::string entry_id = service_->FindEntryIdForTab(handle);
 +
-+  if (pinned && entry_id.empty()) {
-+    // Native pin (context menu / drag into the pinned zone) — record an
-+    // entry so native pinning and Cmd+D mean the same thing.
++  // Something pinned a tab natively -- the context menu, an extension, a
++  // restored session. There is no view for a pinned tab any more (the
++  // sidebar draws entries, not the pinned collection), and a non-empty
++  // pinned region breaks TabStripModel::empty(). So record the intent as an
++  // entry and take the pin back.
++  //
++  // Recording runs synchronously because it touches no TabStripModel state;
++  // doing it in the posted task instead would leave a frame in which the tab
++  // is neither in the sidebar nor in Today.
++  if (service_->FindEntryIdForTab(handle).empty()) {
 +    const GURL url = tab->GetURL();
-+    if (!url.is_valid()) {
-+      return;
++    if (url.is_valid()) {
++      if (const WorkspaceEntry* existing =
++              service_->FindEntryByUrlUnboundInWindow(url, browser_window_)) {
++        BindTabToEntry(tab, existing->id);
++      } else {
++        content::WebContents* contents = tab->GetContents();
++        const std::string id = service_->AddEntry(
++            WorkspaceEntry::Section::kPinned, url,
++            contents ? contents->GetTitle() : std::u16string());
++        if (!id.empty()) {
++          BindTabToEntry(tab, id);
++        }
++      }
 +    }
-+    content::WebContents* contents = tab->GetContents();
-+    const std::string id =
-+        service_->AddEntry(WorkspaceEntry::Section::kPinned, url,
-+                           contents ? contents->GetTitle() : std::u16string());
-+    if (!id.empty()) {
-+      service_->BindTab(handle, id);
-+    }
-+  } else if (!pinned && !entry_id.empty()) {
-+    // Native unpin — the entry goes away, tab becomes a plain Today tab.
-+    service_->RemoveEntry(entry_id);
 +  }
++
++  // TabStripModel forbids re-entrant mutation from an observer callback.
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&WorkspaceTabController::UnpinTab,
++                                weak_factory_.GetWeakPtr(), handle));
 +}
 +
 +}  // namespace helium_workspace
@@ -536,7 +548,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,105 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -544,9 +556,14 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 +#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_CONTROLLER_H_
 +#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_CONTROLLER_H_
 +
++#include <map>
++#include <string>
++
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "components/tabs/public/tab_interface.h"
++#include "ui/base/models/image_model.h"
 +#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 +
 +class BrowserWindowInterface;
@@ -555,17 +572,22 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 +
 +class WorkspaceService;
 +
-+// Per-window behavior of the workspace sidebar entries (Arc pinned-tab
-+// semantics):
-+//   - Cmd+D toggles the active tab between a plain tab and a workspace
-+//     Pinned entry (IDC_HELIUM_WS_TOGGLE_PIN).
-+//   - Cmd+W on an entry's tab unloads it (discard) instead of closing;
-+//     the entry survives and the next activation returns to the entry URL.
-+//   - Entry tabs closed through any other path are re-created as background
-+//     discarded pinned tabs, upholding the invariant that every entry is
-+//     backed by a real pinned tab.
-+//   - Native pin/unpin (context menu, dragging across the pinned boundary)
-+//     is kept in sync with the entry model in both directions.
++// Per-window half of the workspace sidebar. Entries themselves are profile
++// data owned by WorkspaceService; this class is what turns them into tabs in
++// one particular window, and what keeps that window's tab strip in the shape
++// the sidebar assumes:
++//   - Cmd+D toggles the active tab between a plain tab and a Pinned entry
++//     (IDC_HELIUM_WS_TOGGLE_PIN). It does not pin anything natively.
++//   - Clicking a sidebar entry activates this window's tab for it, or opens
++//     an ordinary foreground tab at the entry URL and binds it.
++//   - On window creation, tabs restored at an entry's URL are adopted so the
++//     sidebar shows them instead of Today showing them twice.
++//   - Title and favicon are written back to the entry as its tab navigates,
++//     so an entry with no tab can still be drawn after a cold start.
++//   - Any tab that becomes natively pinned is un-pinned again and recorded
++//     as an entry instead. The pinned region must stay empty: it is what
++//     makes TabStripModel::empty() -- and therefore "closing the last tab
++//     closes the window" -- correct.
 +class WorkspaceTabController : public TabStripModelObserver {
 + public:
 +  DECLARE_USER_DATA(WorkspaceTabController);
@@ -581,32 +603,49 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 +  // IDC_HELIUM_WS_TOGGLE_PIN. No-op on non-tab windows.
 +  void TogglePinActiveTab();
 +
-+  // Returns true if Cmd+W was consumed (active tab is a workspace entry and
-+  // was unloaded instead of closed).
-+  static bool MaybeHandleCloseTab(BrowserWindowInterface* browser_window);
++  // Activates this window's tab for |entry_id|, or opens one at the entry
++  // URL. Each window keeps its own tab for an entry.
++  void OpenEntry(const std::string& entry_id);
 +
 + private:
-+  bool UnloadActiveWorkspaceTab();
-+  // Ensures the active tab is not |index| by activating a reasonable
-+  // neighbor (first non-pinned tab, or a fresh NTP when there is none).
-+  void DeactivateTabAt(int index);
-+  // Re-creates |entry_id|'s backing tab as a background discarded pinned
-+  // tab. Posted (never called re-entrantly) because TabStripModel forbids
-+  // mutation from within observer notifications.
-+  void RecreateEntryTab(const std::string& entry_id);
++  // Binds tabs already open in this window to entries with the same URL, so
++  // a restored session does not show the same page twice.
++  void AdoptTabsInWindow();
++  // Posted from OnTabPinnedStateChanged(); see the class comment.
++  void UnpinTab(tabs::TabHandle handle);
++
++  // Binds |tab| to |entry_id| and takes its icon right away. Every binding
++  // goes through here: an icon captured only on the next change notification
++  // leaves the entry blank in any other window until the page happens to
++  // navigate again.
++  void BindTabToEntry(tabs::TabInterface* tab, const std::string& entry_id);
++  // Writes |tab|'s current favicon onto its entry, if it has one. Safe to
++  // call at any time; a tab with no icon yet leaves the entry untouched.
++  void CaptureFavicon(tabs::TabInterface* tab, const std::string& entry_id);
 +
 +  // TabStripModelObserver:
 +  void OnTabStripModelChanged(
 +      TabStripModel* tab_strip_model,
 +      const TabStripModelChange& change,
 +      const TabStripSelectionChange& selection) override;
++  void OnTabChangedAt(tabs::TabInterface* tab,
++                      int index,
++                      TabChangeType change_type) override;
 +  void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
 +
 +  const raw_ptr<BrowserWindowInterface> browser_window_;
 +  const raw_ptr<WorkspaceService> service_;
-+  // Re-entrancy guard for model mutations we perform ourselves (pin/unpin,
-+  // re-creation) so the observer hooks do not feed back.
-+  bool in_self_mutation_ = false;
++  // Re-entrancy guard for the un-pin we perform ourselves, so it does not
++  // feed back into OnTabPinnedStateChanged().
++  bool suppress_pin_observer_ = false;
++  // Set immediately before chrome::AddAndReturnTabAt() so the kInserted
++  // notification -- which that call fires synchronously, before returning --
++  // can bind the new tab. Binding after the call instead would leave the tab
++  // unbound for a frame, and it would flash into the Today section.
++  std::string pending_bind_entry_id_;
++  // Last favicon written back per bound tab, so navigation only pays for PNG
++  // encoding when the icon actually changed rather than on every title tick.
++  std::map<tabs::TabHandle, ui::ImageModel> last_favicon_;
 +
 +  ui::ScopedUnownedUserData<WorkspaceTabController> scoped_unowned_user_data_;
 +  base::WeakPtrFactory<WorkspaceTabController> weak_factory_{this};
@@ -631,89 +670,24 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
 +++ src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
-@@ -12,6 +12,8 @@
- #include "base/functional/bind.h"
- #include "chrome/app/chrome_command_ids.h"
- #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-+#include "chrome/browser/ui/helium_workspace/workspace_service.h"
-+#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
- #include "chrome/browser/ui/tabs/tab_data.h"
- #include "chrome/browser/ui/tabs/tab_strip_model.h"
- #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
-@@ -39,6 +41,46 @@ constexpr base::TimeDelta kShowGateCap =
- constexpr int kMinHudCount = 3;
- constexpr int kMaxHudCount = 9;
- 
-+// helium-fork: a workspace entry whose tab has been unloaded. Closing a
-+// favorite or pinned tab discards it rather than removing it, so it stays in
-+// the model to keep its place in the sidebar — but it is not something the
-+// switcher can switch *to*. Cycling onto one used to reopen the page the user
-+// had just closed.
-+//
-+// The test is "discarded and bound to an entry", which cannot tell a
-+// user-initiated unload from a memory-saver or OOM discard, so a favorite the
-+// browser unloaded on its own drops out of the cycle as well. WorkspaceService
-+// does record the user-initiated case (MarkPendingReset), but only as a
-+// one-shot token consumed on the next activation -- not a state readable here.
-+bool IsDormantWorkspaceEntry(Profile* profile, tabs::TabInterface* tab) {
-+  if (!profile || !tab) {
-+    return false;
-+  }
-+  content::WebContents* contents = tab->GetContents();
-+  if (!contents || !contents->WasDiscarded()) {
-+    return false;
-+  }
-+  helium_workspace::WorkspaceService* service =
-+      helium_workspace::WorkspaceServiceFactory::GetForProfile(profile);
-+  return service && service->IsWorkspaceTab(tab->GetHandle());
-+}
-+
-+// helium-fork: model indices of the tabs the switcher may cycle through.
-+std::vector<int> CyclableTabIndices(TabStripModel* model, Profile* profile) {
-+  std::vector<int> indices;
-+  if (!model) {
-+    return indices;
-+  }
-+  const int count = model->count();
-+  indices.reserve(count);
-+  for (int i = 0; i < count; ++i) {
-+    if (!IsDormantWorkspaceEntry(profile, model->GetTabAtIndex(i))) {
-+      indices.push_back(i);
-+    }
-+  }
-+  return indices;
-+}
-+
- }  // namespace
- 
- DEFINE_USER_DATA(HeliumTabSwitcherController);
-@@ -94,6 +136,25 @@ bool HeliumTabSwitcherController::Handle
+@@ -94,6 +94,16 @@ bool HeliumTabSwitcherController::Handle
      return false;
    }
  
-+  // helium-fork: with nothing to cycle to the command must be swallowed
-+  // rather than declined. Declining hands it back to the default
-+  // `IDC_SELECT_NEXT_TAB`, which walks the tab strip model, and a closed
-+  // favorite is still sitting in that model as a dormant entry: selecting one
-+  // reopened the page the user had just closed. Declining for a reason that is
-+  // not about the tabs (the HUD pref) still falls through.
-+  //
-+  // A single cyclable tab is not "nothing": the HUD still comes up showing
-+  // that one card, so holding Ctrl gives the same acknowledgement it gives
-+  // anywhere else, and cycling within a one-entry list is a no-op. Keep this
-+  // test `empty()` rather than a count -- it is what guarantees
++  // helium-fork: a single tab is not "nothing" -- the HUD still comes up
++  // showing that one card, so holding Ctrl gives the same acknowledgement it
++  // gives anywhere else, and cycling within a one-entry list is a no-op.
++  // Keep this test `empty()` rather than a count: it is what guarantees
 +  // `TabSwitcherHudView` never receives an empty card list, whose constructor
 +  // would index `cards_.size() - 1`.
-+  if (!cycling_ && CyclableTabIndices(GetTabStripModel(),
-+                                      browser_window_->GetProfile())
-+                           .empty()) {
++  if (!cycling_ && (!GetTabStripModel() || GetTabStripModel()->empty())) {
 +    return true;
 +  }
 +
    if (!cycling_ && !StartCycling()) {
      return false;
    }
-@@ -104,7 +165,7 @@ bool HeliumTabSwitcherController::Handle
+@@ -104,7 +114,7 @@ bool HeliumTabSwitcherController::Handle
  
  bool HeliumTabSwitcherController::StartCycling() {
    TabStripModel* model = GetTabStripModel();
@@ -722,24 +696,7 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
      return false;
    }
  
-@@ -115,9 +176,13 @@ bool HeliumTabSwitcherController::StartC
- 
-   // Snapshot tabs in MRU order (the active tab has the most recent
-   // last-active time, so it naturally sorts first).
--  const int count = model->count();
--  std::vector<int> indices(count);
--  std::iota(indices.begin(), indices.end(), 0);
-+  // helium-fork: unloaded workspace entries are skipped — see
-+  // `IsDormantWorkspaceEntry`.
-+  std::vector<int> indices =
-+      CyclableTabIndices(model, browser_window_->GetProfile());
-+  if (indices.empty()) {
-+    return false;
-+  }
-   std::sort(indices.begin(), indices.end(), [model](int a, int b) {
-     return model->GetWebContentsAt(a)->GetLastActiveTimeTicks() >
-            model->GetWebContentsAt(b)->GetLastActiveTimeTicks();
-@@ -199,8 +264,9 @@ void HeliumTabSwitcherController::ShowHu
+@@ -199,8 +209,9 @@ void HeliumTabSwitcherController::ShowHu
      }
      cards.push_back(tabs::TabData::FromTabInterface(tab));
    }
@@ -750,7 +707,7 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
      CancelCycling();
      return;
    }
-@@ -353,7 +419,10 @@ void HeliumTabSwitcherController::OnTabS
+@@ -353,7 +364,10 @@ void HeliumTabSwitcherController::OnTabS
    std::erase_if(mru_tabs_,
                  [](const tabs::TabHandle& handle) { return !handle.Get(); });
  
