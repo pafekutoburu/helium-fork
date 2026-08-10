@@ -266,10 +266,11 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_model.cc
 +++ src/chrome/browser/ui/tabs/tab_strip_model.cc
-@@ -46,6 +46,10 @@
+@@ -46,6 +46,11 @@
  #include "chrome/browser/glic/public/glic_enabling.h"
  #include "chrome/browser/lifetime/browser_shutdown.h"
  #include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
++#include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_service.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
@@ -277,7 +278,51 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
  #include "chrome/browser/performance_manager/public/user_tuning/user_tuning_utils.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/reading_list/reading_list_model_factory.h"
-@@ -2498,6 +2502,29 @@ bool TabStripModel::IsContextMenuCommand
+@@ -132,6 +137,27 @@ namespace {
+ 
+ TabGroupModelFactory* factory_instance = nullptr;
+ 
++// helium-fork: workspace_blank_tab.h spells the new tab page's scheme and
++// hosts as literals so the predicate can be unit tested without //chrome/common
++// in the test target. This is where the two spellings meet, so this is where
++// they are held to each other.
++static_assert(helium_workspace::kNewTabScheme == content::kChromeUIScheme);
++static_assert(helium_workspace::kNewTabHost == chrome::kChromeUINewTabHost);
++static_assert(helium_workspace::kNewTabPageHost ==
++              chrome::kChromeUINewTabPageHost);
++
++// helium-fork: whether closing |contents| would cost the user nothing, which
++// is what decides between handing back an empty tab and letting the window go.
++// Read from the *visible* URL rather than the committed one: it is the virtual
++// URL, and it is already set while a tab is still pending, so pressing the
++// close accelerator twice in quick succession judges the second press against
++// the tab that is on its way in rather than against nothing at all.
++bool IsBlankNewTab(content::WebContents* contents) {
++  return contents && helium_workspace::IsBlankNewTabState(
++                         contents->GetVisibleURL(),
++                         contents->GetController().GetEntryCount());
++}
++
+ // Works similarly to base::AutoReset but checks for access from the wrong
+ // thread as well as ensuring that the previous value of the re-entrancy guard
+ // variable was false.
+@@ -1381,6 +1407,15 @@ void TabStripModel::CloseWebContentsAt(i
+   ReentrancyCheck::ValidateNotReentrant(&reentrancy_guard_);
+ 
+   CHECK(ContainsIndex(index));
++  // helium-fork: a window vanishing is a surprise when the user did not
++  // realise the tab they just closed was the last one, so hand back an empty
++  // tab instead and let a second close -- of a tab that by then holds nothing
++  // -- take the window. Ordering matters: adding the tab here lifts count()
++  // past the upstream flag's own threshold below, so the two never both fire,
++  // and the flag keeps its stronger "never close" meaning when it is set.
++  if (!closing_all_ && count() < 2 && !IsBlankNewTab(GetWebContentsAt(index))) {
++    delegate()->AddTabAt(GURL(), -1, true);
++  }
+   if (base::CommandLine::ForCurrentProcess()->
+           GetSwitchValueASCII("close-window-with-last-tab") == "never" &&
+           !closing_all_ && count() < 2)
+@@ -2498,6 +2533,29 @@ bool TabStripModel::IsContextMenuCommand
        return false;
      }
  
@@ -307,7 +352,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      case CommandCloseOtherTabs:
      case CommandCloseTabsToLeft:
      case CommandCloseTabsToRight: {
-@@ -2679,6 +2706,36 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -2679,6 +2737,36 @@ void TabStripModel::ExecuteContextMenuCo
        break;
      }
  
@@ -344,7 +389,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      case CommandCloseTab: {
        base::UmaHistogramCounts1000("Tab.ContextMenu.CloseTab.SelectedTabsCount",
                                     selection_model_.size());
-@@ -2741,6 +2798,21 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -2741,6 +2829,21 @@ void TabStripModel::ExecuteContextMenuCo
  
        base::RecordAction(UserMetricsAction("TabContextMenu_TogglePinned"));
  
@@ -366,7 +411,24 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
        std::vector<int> indices = GetIndicesForCommand(context_index);
        std::vector<tab_groups::TabGroupId> groups_to_delete =
            GetGroupsDestroyedFromRemovingIndices(indices);
-@@ -3291,6 +3363,19 @@ bool TabStripModel::WillContextMenuMuteS
+@@ -3228,6 +3331,16 @@ void TabStripModel::ExecuteCloseTabs(
+     uint32_t close_types) {
+   const std::vector<tabs::TabInterface*> tabs_to_close =
+       std::move(get_tabs_to_close).Run();
++  // helium-fork: the same rule as CloseWebContentsAt, for the paths that close
++  // a whole selection in one go -- the close accelerator among them.
++  // |tabs_to_close| was captured just above, so the tab added here is not one
++  // of them. This has to stay ahead of the ReentrancyCheck below: AddTabAt
++  // changes the model, which is exactly what that guard forbids.
++  if (!closing_all_ && !tabs_to_close.empty() &&
++      static_cast<int>(tabs_to_close.size()) == count() &&
++      !(count() == 1 && IsBlankNewTab(tabs_to_close[0]->GetContents()))) {
++    delegate()->AddTabAt(GURL(), -1, true);
++  }
+   if (base::CommandLine::ForCurrentProcess()->
+           GetSwitchValueASCII("close-window-with-last-tab") == "never" &&
+           static_cast<int>(tabs_to_close.size()) == count())
+@@ -3291,6 +3404,19 @@ bool TabStripModel::WillContextMenuMuteS
  
  bool TabStripModel::WillContextMenuPin(int index) {
    std::vector<int> indices = GetIndicesForCommand(index);
@@ -398,3 +460,130 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.h
      CommandLast
    };
    // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/histograms.xml:TabContextMenuCommand)
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -6000,6 +6000,8 @@ if (enable_dice_support) {
+ # tabs, and a window is only ever compared by pointer.
+ test("helium_workspace_unittests") {
+   sources = [
++    "helium_workspace/workspace_blank_tab.h",
++    "helium_workspace/workspace_blank_tab_unittest.cc",
+     "helium_workspace/workspace_entry.cc",
+     "helium_workspace/workspace_entry.h",
+     "helium_workspace/workspace_entry_unittest.cc",
+Index: src/chrome/browser/ui/helium_workspace/workspace_blank_tab.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_blank_tab.h
+@@ -0,0 +1,49 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_BLANK_TAB_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_BLANK_TAB_H_
++
++#include <string_view>
++
++#include "url/gurl.h"
++
++namespace helium_workspace {
++
++// The scheme and the two hosts the new tab page answers on. The browser
++// navigates new tabs to `chrome://newtab`, a URL handler pair rewrites that to
++// `chrome://new-tab-page` and reverse-rewrites it back, so one and the same
++// tab reports `new-tab-page` as its committed URL and `newtab` as its virtual
++// one. Which host a caller sees depends on where it reads the URL from, so
++// both count.
++//
++// These are literals rather than chrome::kChromeUINewTabHost and friends so
++// that the predicate below can be tested without dragging //chrome/common into
++// the test target. tab_strip_model.cc has the real constants in scope and
++// static_asserts them against these, so an upstream rename fails the build
++// rather than quietly turning this predicate into "never".
++inline constexpr std::string_view kNewTabScheme = "chrome";
++inline constexpr std::string_view kNewTabHost = "newtab";
++inline constexpr std::string_view kNewTabPageHost = "new-tab-page";
++
++// Whether a tab is the browser's own new tab page with nothing behind it.
++//
++// This is the state a window is left in when closing its last tab hands the
++// user a fresh tab instead of taking the window away. Recognising that state
++// is what lets the *next* close actually close the window, so the rule reads
++// as "closing the last tab costs you nothing, closing the nothing costs you
++// the window".
++//
++// |entry_count| is the tab's navigation entry count: zero while the new tab is
++// still pending, one once it commits. Anything above that means the user has
++// navigated, and the tab now holds something they could lose.
++inline bool IsBlankNewTabState(const GURL& visible_url, int entry_count) {
++  return entry_count <= 1 && visible_url.scheme() == kNewTabScheme &&
++         (visible_url.host() == kNewTabHost ||
++          visible_url.host() == kNewTabPageHost);
++}
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_BLANK_TAB_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_blank_tab_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_blank_tab_unittest.cc
+@@ -0,0 +1,55 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace helium_workspace {
++namespace {
++
++// The virtual URL of a new tab, which is what the browser navigated to.
++TEST(WorkspaceBlankTabTest, PendingNewTabIsBlank) {
++  EXPECT_TRUE(IsBlankNewTabState(GURL("chrome://newtab/"), 0));
++}
++
++TEST(WorkspaceBlankTabTest, CommittedNewTabIsBlank) {
++  EXPECT_TRUE(IsBlankNewTabState(GURL("chrome://newtab/"), 1));
++}
++
++// The committed URL of the same tab: a URL handler rewrites `chrome://newtab`
++// to this and reverse-rewrites it back, so both hosts have to be recognised.
++TEST(WorkspaceBlankTabTest, RewrittenNewTabHostIsBlank) {
++  EXPECT_TRUE(IsBlankNewTabState(GURL("chrome://new-tab-page/"), 1));
++}
++
++// Going to a site and back leaves the new tab page on screen with history
++// behind it. Closing that is not free, so it must not pass for blank.
++TEST(WorkspaceBlankTabTest, NewTabWithHistoryBehindItIsNotBlank) {
++  EXPECT_FALSE(IsBlankNewTabState(GURL("chrome://new-tab-page/"), 2));
++}
++
++TEST(WorkspaceBlankTabTest, OrdinaryPageIsNotBlank) {
++  EXPECT_FALSE(IsBlankNewTabState(GURL("https://example.com/"), 1));
++}
++
++// A tab with no visible entry at all reports an empty URL. Treating that as
++// blank would let a window close while a real navigation was still in flight.
++TEST(WorkspaceBlankTabTest, EmptyUrlIsNotBlank) {
++  EXPECT_FALSE(IsBlankNewTabState(GURL(), 0));
++}
++
++// Same scheme, different WebUI: only the new tab page is disposable.
++TEST(WorkspaceBlankTabTest, OtherWebUiPageIsNotBlank) {
++  EXPECT_FALSE(IsBlankNewTabState(GURL("chrome://settings/"), 1));
++}
++
++// A site cannot dress up as the new tab page by borrowing its host.
++TEST(WorkspaceBlankTabTest, MatchingHostOnAnotherSchemeIsNotBlank) {
++  EXPECT_FALSE(IsBlankNewTabState(GURL("https://newtab/"), 1));
++}
++
++}  // namespace
++}  // namespace helium_workspace
