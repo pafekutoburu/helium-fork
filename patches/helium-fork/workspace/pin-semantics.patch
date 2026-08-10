@@ -206,7 +206,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,325 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -380,17 +380,49 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +  if (model->active_index() != index) {
 +    return;
 +  }
++  const auto activate = [model](int i) {
++    model->ActivateTabAt(i,
++                         TabStripUserGestureDetails(
++                             TabStripUserGestureDetails::GestureType::kOther));
++  };
++
 +  // Prefer the first unpinned (Today) tab.
 +  const int first_unpinned = model->IndexOfFirstNonPinnedTab();
 +  for (int i = first_unpinned; i < model->count(); ++i) {
 +    if (i != index) {
-+      model->ActivateTabAt(
-+          i, TabStripUserGestureDetails(
-+                 TabStripUserGestureDetails::GestureType::kOther));
++      activate(i);
 +      return;
 +    }
 +  }
-+  // No Today tab: open a fresh NTP in the foreground.
++
++  // helium-fork: Today is empty, but every entry keeps a real pinned tab in
++  // the model, so the sidebar still shows favorites the user never closed.
++  // Landing on a blank new tab while they sit right there reads as a bug --
++  // and it compounds, because closing that new tab empties Today again. Fall
++  // back to an entry tab before creating anything.
++  //
++  // Loaded ones only. Activating a discarded tab reloads it, and closing a tab
++  // must not pull pages back in: clearing entries one by one would otherwise
++  // load a page per keystroke. When every entry is unloaded -- which is the
++  // state right after a restart, where reconciliation rebuilds them all as
++  // discarded background tabs -- the new tab below stays the right answer.
++  // Entries are ordered favorites-first, so this lands on a favorite when
++  // there is one. Membership in the entry model is deliberately not required:
++  // anything loaded up here beats manufacturing a blank tab.
++  for (int i = 0; i < first_unpinned; ++i) {
++    if (i == index) {
++      continue;
++    }
++    tabs::TabInterface* tab = model->GetTabAtIndex(i);
++    content::WebContents* contents = tab ? tab->GetContents() : nullptr;
++    if (!contents || contents->WasDiscarded()) {
++      continue;
++    }
++    activate(i);
++    return;
++  }
++
++  // Nothing left to land on: open a fresh NTP in the foreground.
 +  base::AutoReset<bool> self_mutation(&in_self_mutation_, true);
 +  chrome::AddTabAt(browser_window_, GURL(chrome::kChromeUINewTabPageURL),
 +                   /*index=*/-1, /*foreground=*/true);
@@ -608,7 +640,7 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
  #include "chrome/browser/ui/tabs/tab_data.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
-@@ -39,6 +41,41 @@ constexpr base::TimeDelta kShowGateCap =
+@@ -39,6 +41,46 @@ constexpr base::TimeDelta kShowGateCap =
  constexpr int kMinHudCount = 3;
  constexpr int kMaxHudCount = 9;
  
@@ -616,8 +648,13 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
 +// favorite or pinned tab discards it rather than removing it, so it stays in
 +// the model to keep its place in the sidebar — but it is not something the
 +// switcher can switch *to*. Cycling onto one used to reopen the page the user
-+// had just closed. A tab discarded for any other reason is still a live tab
-+// the user opened and belongs in the list.
++// had just closed.
++//
++// The test is "discarded and bound to an entry", which cannot tell a
++// user-initiated unload from a memory-saver or OOM discard, so a favorite the
++// browser unloaded on its own drops out of the cycle as well. WorkspaceService
++// does record the user-initiated case (MarkPendingReset), but only as a
++// one-shot token consumed on the next activation -- not a state readable here.
 +bool IsDormantWorkspaceEntry(Profile* profile, tabs::TabInterface* tab) {
 +  if (!profile || !tab) {
 +    return false;
@@ -650,26 +687,42 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
  }  // namespace
  
  DEFINE_USER_DATA(HeliumTabSwitcherController);
-@@ -94,6 +131,18 @@ bool HeliumTabSwitcherController::Handle
+@@ -94,6 +136,25 @@ bool HeliumTabSwitcherController::Handle
      return false;
    }
  
-+  // helium-fork: with fewer than two tabs worth cycling to there is nothing to
-+  // do — and the command must be swallowed rather than declined. Declining
-+  // hands it back to the default `IDC_SELECT_NEXT_TAB`, which walks the tab
-+  // strip model, and a closed favorite is still sitting in that model as a
-+  // dormant entry: selecting one reopened the page the user had just closed.
-+  // Other reasons to decline (the HUD pref, no widget) still fall through.
++  // helium-fork: with nothing to cycle to the command must be swallowed
++  // rather than declined. Declining hands it back to the default
++  // `IDC_SELECT_NEXT_TAB`, which walks the tab strip model, and a closed
++  // favorite is still sitting in that model as a dormant entry: selecting one
++  // reopened the page the user had just closed. Declining for a reason that is
++  // not about the tabs (the HUD pref) still falls through.
++  //
++  // A single cyclable tab is not "nothing": the HUD still comes up showing
++  // that one card, so holding Ctrl gives the same acknowledgement it gives
++  // anywhere else, and cycling within a one-entry list is a no-op. Keep this
++  // test `empty()` rather than a count -- it is what guarantees
++  // `TabSwitcherHudView` never receives an empty card list, whose constructor
++  // would index `cards_.size() - 1`.
 +  if (!cycling_ && CyclableTabIndices(GetTabStripModel(),
 +                                      browser_window_->GetProfile())
-+                           .size() < 2) {
++                           .empty()) {
 +    return true;
 +  }
 +
    if (!cycling_ && !StartCycling()) {
      return false;
    }
-@@ -115,9 +164,13 @@ bool HeliumTabSwitcherController::StartC
+@@ -104,7 +165,7 @@ bool HeliumTabSwitcherController::Handle
+ 
+ bool HeliumTabSwitcherController::StartCycling() {
+   TabStripModel* model = GetTabStripModel();
+-  if (!model || model->count() < 2) {
++  if (!model || model->empty()) {
+     return false;
+   }
+ 
+@@ -115,9 +176,13 @@ bool HeliumTabSwitcherController::StartC
  
    // Snapshot tabs in MRU order (the active tab has the most recent
    // last-active time, so it naturally sorts first).
@@ -680,9 +733,32 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
 +  // `IsDormantWorkspaceEntry`.
 +  std::vector<int> indices =
 +      CyclableTabIndices(model, browser_window_->GetProfile());
-+  if (indices.size() < 2) {
++  if (indices.empty()) {
 +    return false;
 +  }
    std::sort(indices.begin(), indices.end(), [model](int a, int b) {
      return model->GetWebContentsAt(a)->GetLastActiveTimeTicks() >
             model->GetWebContentsAt(b)->GetLastActiveTimeTicks();
+@@ -199,8 +264,9 @@ void HeliumTabSwitcherController::ShowHu
+     }
+     cards.push_back(tabs::TabData::FromTabInterface(tab));
+   }
+-  if (cards.size() != mru_tabs_.size() || cards.size() < 2) {
++  if (cards.size() != mru_tabs_.size() || cards.empty()) {
+     // A tab died between snapshot and display; keep it simple and bail.
++    // helium-fork: `empty()`, not a count -- a lone card is a legitimate HUD.
+     CancelCycling();
+     return;
+   }
+@@ -353,7 +419,10 @@ void HeliumTabSwitcherController::OnTabS
+   std::erase_if(mru_tabs_,
+                 [](const tabs::TabHandle& handle) { return !handle.Get(); });
+ 
+-  if (mru_tabs_.size() < 2) {
++  // helium-fork: closing tabs down to one does not end the cycle -- the HUD
++  // just keeps showing the survivor. Only losing every tab cancels it, which
++  // also keeps `mru_tabs_.size() - 1` below well-defined.
++  if (mru_tabs_.empty()) {
+     CancelCycling();
+     return;
+   }

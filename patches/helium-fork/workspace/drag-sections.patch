@@ -168,7 +168,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
  #include "chrome/browser/tab_list/tab_removed_reason.h"
  #include "chrome/browser/ui/browser_tabstrip.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -215,6 +216,12 @@ void WorkspaceTabController::OnTabStripM
+@@ -247,6 +248,12 @@ void WorkspaceTabController::OnTabStripM
    // boundary changes the entry's section (Arc: dragging into the top grid
    // makes a favorite, dragging out demotes it).
    if (change.type() == TabStripModelChange::kMoved && !in_self_mutation_) {
@@ -181,7 +181,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
      const TabStripModelChange::Move* move = change.GetMove();
      if (move->tab &&
          move->to_index < tab_strip_model->IndexOfFirstNonPinnedTab()) {
-@@ -232,7 +239,9 @@ void WorkspaceTabController::OnTabStripM
+@@ -264,7 +271,9 @@ void WorkspaceTabController::OnTabStripM
              ++favorites_before;
            }
          }
@@ -192,7 +192,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
          const WorkspaceEntry::Section target =
              into_favorites ? WorkspaceEntry::Section::kFavorite
                             : WorkspaceEntry::Section::kPinned;
-@@ -276,6 +285,12 @@ void WorkspaceTabController::OnTabStripM
+@@ -308,6 +317,12 @@ void WorkspaceTabController::OnTabStripM
  }
  
  void WorkspaceTabController::RecreateEntryTab(const std::string& entry_id) {
@@ -205,7 +205,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    TabStripModel* model = browser_window_->GetTabStripModel();
    if (!model || model->closing_all()) {
      return;
-@@ -298,7 +313,52 @@ void WorkspaceTabController::RecreateEnt
+@@ -330,7 +345,52 @@ void WorkspaceTabController::RecreateEnt
    }
  }
  
@@ -258,7 +258,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    if (enforce_order_pending_) {
      return;
    }
-@@ -311,6 +371,9 @@ void WorkspaceTabController::ScheduleEnf
+@@ -343,6 +403,9 @@ void WorkspaceTabController::ScheduleEnf
  
  void WorkspaceTabController::EnforceSectionOrder() {
    enforce_order_pending_ = false;
@@ -1710,7 +1710,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
      // The next layout update should allow the view to be shown by the host.
      visual_data.should_hide = false;
    }
-@@ -373,8 +437,114 @@ void DraggedTabsContainer::ResetDragStat
+@@ -373,8 +437,126 @@ void DraggedTabsContainer::ResetDragStat
    animating_views_start_offsets_.clear();
    drag_start_animation_.Reset(0.0);
    dragging_views_bounds_ = gfx::Rect();
@@ -1793,19 +1793,31 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
 +  // leading end.
 +  static constexpr float kLineThickness = 2.0f;
 +  static constexpr float kDotRadius = 3.0f;
++  // helium-fork: the dot is *stroked*, and Skia centres a stroke on its path,
++  // so the ink actually reaches half a stroke width beyond the radius. Sizing
++  // the margins off kDotRadius alone left a pixel of it clipped at every edge.
++  static constexpr float kDotOuter = kDotRadius + kLineThickness / 2.0f;
 +
 +  const gfx::Rect& bounds = *drop_indicator_bounds_;
-+  // helium-fork: the dot is what decides how much room the marker needs — it
-+  // reaches a radius above and below the line. Sitting the marker exactly on
-+  // the first row's top edge put that half outside the host, and the host
-+  // clips, so the dot came out sliced in half. Keep the whole marker within
-+  // the paintable area instead of anchoring it exactly on the row edge; a
-+  // couple of pixels of drift beats a marker that changes shape at the ends.
-+  const float y = std::clamp(bounds.y() - kLineThickness / 2.0f,
-+                             kDotRadius - kLineThickness / 2.0f,
-+                             std::max(0.0f, host_view_->height() - kDotRadius -
-+                                                kLineThickness / 2.0f));
-+  const float left = bounds.x();
++  // helium-fork: the dot is what decides how much room the marker needs, and
++  // the host clips to its own bounds. Sitting the marker exactly on the first
++  // row's top edge put the dot's upper half outside the host, so it came out
++  // sliced. Keep the whole marker within the paintable area instead of
++  // anchoring it exactly on the row edge; a couple of pixels of drift beats a
++  // marker that changes shape at the ends.
++  const float y_min = kDotOuter - kLineThickness / 2.0f;
++  const float y_max = host_view_->height() - kDotOuter - kLineThickness / 2.0f;
++  // std::clamp is UB when the bounds invert, which a host too short to hold
++  // the marker would do. Pin to the top rather than trip the hardened check.
++  const float y =
++      y_max < y_min ? y_min
++                    : std::clamp(bounds.y() - kLineThickness / 2.0f, y_min,
++                                 y_max);
++  // The dot leads the line, so it is the dot's *centre* that has to clear the
++  // host's left edge, not the line's start. The pinned container lays its
++  // full-width rows out at x = 0, so without this every row loses a pixel off
++  // the dot; Today escapes it only by having horizontal padding.
++  const float dot_cx = std::max(bounds.x() + kDotRadius, kDotOuter);
 +  const float right = bounds.right();
 +
 +  cc::PaintFlags flags;
@@ -1814,18 +1826,18 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
 +      host_view_->GetColorProvider()->GetColor(kColorVerticalTabDropIndicator));
 +
 +  flags.setStyle(cc::PaintFlags::kFill_Style);
-+  canvas->DrawRect(gfx::RectF(left + kDotRadius, y,
-+                              right - left - kDotRadius, kLineThickness),
-+                   flags);
++  canvas->DrawRect(
++      gfx::RectF(dot_cx, y, std::max(0.0f, right - dot_cx), kLineThickness),
++      flags);
 +
 +  flags.setStyle(cc::PaintFlags::kStroke_Style);
 +  flags.setStrokeWidth(kLineThickness);
-+  canvas->DrawCircle(gfx::PointF(left + kDotRadius, y + kLineThickness / 2.0f),
-+                     kDotRadius, flags);
++  canvas->DrawCircle(gfx::PointF(dot_cx, y + kLineThickness / 2.0f), kDotRadius,
++                     flags);
  }
  
  void DraggedTabsContainer::UpdateDraggingViewTransforms(
-@@ -392,6 +562,14 @@ void DraggedTabsContainer::UpdateDraggin
+@@ -392,6 +574,14 @@ void DraggedTabsContainer::UpdateDraggin
          dragged_view, bounding_box_for_point, visual_data.offset));
  
      dragged_view->SetTransform(transform);
@@ -1840,7 +1852,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
    }
  }
  
-@@ -402,6 +580,11 @@ gfx::Rect DraggedTabsContainer::GetDragg
+@@ -402,6 +592,11 @@ gfx::Rect DraggedTabsContainer::GetDragg
    return bounding_box_for_point;
  }
  
@@ -1852,7 +1864,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
  gfx::Rect DraggedTabsContainer::GetDraggingViewsBounds() const {
    gfx::Rect box_for_point = dragging_views_bounds_;
    box_for_point.Offset(
-@@ -473,8 +656,11 @@ DraggedTabsContainer::GetVisualDataForDr
+@@ -473,8 +668,11 @@ DraggedTabsContainer::GetVisualDataForDr
    // the end position.
    const bool should_hide =
        it->second.should_hide && !drag_start_animation_.is_animating();
@@ -1866,7 +1878,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
    if (view.GetTransform().IsIdentity()) {
      // If a drag recently ended the child will still be in
      // `dragging_views_` but will not have a transformation, which let's
-@@ -575,6 +761,10 @@ void DraggedTabsContainer::HandleTabDrag
+@@ -575,6 +773,10 @@ void DraggedTabsContainer::HandleTabDrag
    const views::ProposedLayout& drag_layout = GetLayoutForDrag();
    const auto* target = GetTargetForTabDrag(drag_layout, dragged_tab_bounds);
  
@@ -1877,7 +1889,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
    // A null target implies the drag is at the end of the container. We
    // intentionally invalidate layout here to support resizing the container as
    // the drag exceeds its bounds.
-@@ -587,11 +777,6 @@ void DraggedTabsContainer::HandleTabDrag
+@@ -587,11 +789,6 @@ void DraggedTabsContainer::HandleTabDrag
  const TabCollectionNode* DraggedTabsContainer::GetTargetForTabDrag(
      const views::ProposedLayout& layout,
      const gfx::Rect& dragged_tab_bounds) const {
@@ -1889,7 +1901,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
    // Loop through the layout, until we find the first child view that appears
    // *below* the dragged view(s). If horizontal dragging is supported, then
    // first find the row that the drag lands on, then find the view within that
-@@ -603,7 +788,6 @@ const TabCollectionNode* DraggedTabsCont
+@@ -603,7 +800,6 @@ const TabCollectionNode* DraggedTabsCont
      const auto& child_layout = layout.child_layouts[i];
      const TabCollectionNode* child_node;
      if (GetDragHandler().IsViewDragging(*child_layout.child_view)) {
@@ -1897,7 +1909,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
        continue;
      }
      if (!child_layout.visible ||
-@@ -620,20 +804,20 @@ const TabCollectionNode* DraggedTabsCont
+@@ -620,20 +816,20 @@ const TabCollectionNode* DraggedTabsCont
        }
  
        const int row_y = child_layout.bounds.y();
@@ -1930,7 +1942,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
        return child_node;
      }
    }
-@@ -644,8 +828,7 @@ const TabCollectionNode* DraggedTabsCont
+@@ -644,8 +840,7 @@ const TabCollectionNode* DraggedTabsCont
      const views::ProposedLayout& layout,
      const gfx::Rect& dragged_tab_bounds,
      int row_y,
@@ -1940,7 +1952,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
    gfx::Rect logical_drag_bounds = dragged_tab_bounds;
    if (base::i18n::IsRTL()) {
      logical_drag_bounds.set_x(
-@@ -655,7 +838,6 @@ const TabCollectionNode* DraggedTabsCont
+@@ -655,7 +850,6 @@ const TabCollectionNode* DraggedTabsCont
      const auto& row_child_layout = layout.child_layouts[i];
      const TabCollectionNode* row_child_node;
      if (GetDragHandler().IsViewDragging(*row_child_layout.child_view)) {
@@ -1948,7 +1960,7 @@ Index: src/chrome/browser/ui/views/tabs/common/dragged_tabs_container.cc
        continue;
      }
      if (!row_child_layout.visible ||
-@@ -671,13 +853,9 @@ const TabCollectionNode* DraggedTabsCont
+@@ -671,13 +865,9 @@ const TabCollectionNode* DraggedTabsCont
        return row_child_node;
      }
  
