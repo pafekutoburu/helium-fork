@@ -168,7 +168,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
  #include "chrome/browser/tab_list/tab_removed_reason.h"
  #include "chrome/browser/ui/browser_tabstrip.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -247,6 +248,12 @@ void WorkspaceTabController::OnTabStripM
+@@ -294,6 +295,12 @@ void WorkspaceTabController::OnTabStripM
    // boundary changes the entry's section (Arc: dragging into the top grid
    // makes a favorite, dragging out demotes it).
    if (change.type() == TabStripModelChange::kMoved && !in_self_mutation_) {
@@ -181,7 +181,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
      const TabStripModelChange::Move* move = change.GetMove();
      if (move->tab &&
          move->to_index < tab_strip_model->IndexOfFirstNonPinnedTab()) {
-@@ -264,7 +271,9 @@ void WorkspaceTabController::OnTabStripM
+@@ -311,7 +318,9 @@ void WorkspaceTabController::OnTabStripM
              ++favorites_before;
            }
          }
@@ -192,7 +192,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
          const WorkspaceEntry::Section target =
              into_favorites ? WorkspaceEntry::Section::kFavorite
                             : WorkspaceEntry::Section::kPinned;
-@@ -308,6 +317,12 @@ void WorkspaceTabController::OnTabStripM
+@@ -363,6 +372,12 @@ void WorkspaceTabController::OnTabStripM
  }
  
  void WorkspaceTabController::RecreateEntryTab(const std::string& entry_id) {
@@ -205,7 +205,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    TabStripModel* model = browser_window_->GetTabStripModel();
    if (!model || model->closing_all()) {
      return;
-@@ -330,7 +345,52 @@ void WorkspaceTabController::RecreateEnt
+@@ -385,7 +400,52 @@ void WorkspaceTabController::RecreateEnt
    }
  }
  
@@ -258,7 +258,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    if (enforce_order_pending_) {
      return;
    }
-@@ -343,6 +403,9 @@ void WorkspaceTabController::ScheduleEnf
+@@ -398,6 +458,9 @@ void WorkspaceTabController::ScheduleEnf
  
  void WorkspaceTabController::EnforceSectionOrder() {
    enforce_order_pending_ = false;
@@ -283,9 +283,9 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
  #include "base/memory/raw_ptr.h"
  #include "base/memory/weak_ptr.h"
  #include "base/scoped_observation.h"
-@@ -47,6 +51,22 @@ class WorkspaceTabController : public Ta
-   // was unloaded instead of closed).
-   static bool MaybeHandleCloseTab(BrowserWindowInterface* browser_window);
+@@ -54,6 +58,22 @@ class WorkspaceTabController : public Ta
+   // already an entry, its URL is unusable, or the favorites cap is full.
+   void AddTabToFavorites(int index);
  
 +  // Drag lifecycle, pushed from the views layer (TabDragHandlerImpl). While
 +  // a tab drag is in progress, section enforcement and index-based section
@@ -306,7 +306,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
   private:
    bool UnloadActiveWorkspaceTab();
    // Ensures the active tab is not |index| by activating a reasonable
-@@ -80,6 +100,11 @@ class WorkspaceTabController : public Ta
+@@ -87,6 +107,11 @@ class WorkspaceTabController : public Ta
    // re-creation) so the observer hooks do not feed back.
    bool in_self_mutation_ = false;
    bool enforce_order_pending_ = false;
