@@ -194,7 +194,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,350 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -468,9 +468,10 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +      continue;
 +    }
 +    const tabs::TabHandle handle = removed.tab->GetHandle();
-+    // Last chance to keep the icon: the tab is about to go away, and whatever
-+    // it is showing now is what the user will expect the sidebar row to show.
-+    CaptureFavicon(removed.tab, service_->FindEntryIdForTab(handle));
++    // Do not read the tab here. By the time kRemoved arrives its TabUIHelper
++    // is already gone, and TabData::FromTabInterface() dereferences it. There
++    // is nothing to capture anyway: the icon a closing tab is showing is the
++    // one its last OnTabChangedAt already persisted.
 +    last_favicon_.erase(handle);
 +    service_->UnbindTab(handle);
 +  }
