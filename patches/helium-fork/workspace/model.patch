@@ -71,13 +71,14 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_entry.cc
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,94 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
 +
++#include "base/base64.h"
 +#include "base/strings/utf_string_conversions.h"
 +
 +namespace helium_workspace {
@@ -90,6 +91,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
 +constexpr char kKeyUrl[] = "url";
 +constexpr char kKeyTitle[] = "title";
 +constexpr char kKeyPosition[] = "position";
++constexpr char kKeyFavicon[] = "favicon";
 +constexpr char kKeyVersion[] = "version";
 +
 +}  // namespace
@@ -107,6 +109,9 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
 +  dict.Set(kKeyUrl, url.spec());
 +  dict.Set(kKeyTitle, title);
 +  dict.Set(kKeyPosition, position);
++  if (!favicon_png.empty()) {
++    dict.Set(kKeyFavicon, base::Base64Encode(favicon_png));
++  }
 +  dict.Set(kKeyVersion, version);
 +  return dict;
 +}
@@ -148,6 +153,14 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
 +    entry.title = base::UTF8ToUTF16(*title);
 +  }
 +  entry.position = dict.FindInt(kKeyPosition).value_or(0);
++  // A corrupt icon is not worth rejecting the entry over — drop it and let
++  // the view fall back to the favicon service.
++  if (const std::string* favicon = dict.FindString(kKeyFavicon)) {
++    if (std::optional<std::vector<uint8_t>> bytes =
++            base::Base64Decode(*favicon)) {
++      entry.favicon_png.assign(bytes->begin(), bytes->end());
++    }
++  }
 +  entry.version = dict.FindInt(kKeyVersion).value_or(kCurrentVersion);
 +  return entry;
 +}
@@ -157,7 +170,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_entry.h
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,60 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -167,6 +180,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
 +
 +#include <optional>
 +#include <string>
++#include <vector>
 +
 +#include "base/values.h"
 +#include "url/gurl.h"
@@ -189,8 +203,9 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
 +  WorkspaceEntry& operator=(const WorkspaceEntry&);
 +  ~WorkspaceEntry();
 +
-+  // Serialization schema version this code writes.
-+  static constexpr int kCurrentVersion = 1;
++  // Serialization schema version this code writes. v2 added |favicon_png|;
++  // v1 entries load unchanged and simply carry no icon.
++  static constexpr int kCurrentVersion = 2;
 +
 +  base::DictValue ToValue() const;
 +
@@ -205,6 +220,11 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
 +  GURL url;                        // Original pinned URL (reset target).
 +  std::u16string title;
 +  int position = 0;                // Sort key within its section.
++  // Raw PNG bytes of the entry's favicon, base64-encoded in the pref. The
++  // sidebar draws entries that have no tab, so without a stored icon a cold
++  // start would show nothing but placeholders until something is clicked.
++  // Empty means "fall back to the favicon service, then to the default".
++  std::string favicon_png;
 +  int version = kCurrentVersion;
 +};
 +
@@ -215,7 +235,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,134 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -250,6 +270,50 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
 +  EXPECT_EQ(decoded->title, original.title);
 +  EXPECT_EQ(decoded->position, original.position);
 +  EXPECT_EQ(decoded->version, WorkspaceEntry::kCurrentVersion);
++}
++
++TEST(WorkspaceEntryTest, FaviconRoundTrips) {
++  WorkspaceEntry original = MakeEntry();
++  // Bytes that are not valid UTF-8, so this also proves the base64 hop is
++  // what makes the icon safe to store in a JSON pref.
++  original.favicon_png = std::string("\x89PNG\r\n\x1a\n\xff\xfe\x00\x01", 13);
++
++  const std::optional<WorkspaceEntry> decoded =
++      WorkspaceEntry::FromValue(original.ToValue());
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ(decoded->favicon_png, original.favicon_png);
++}
++
++TEST(WorkspaceEntryTest, FaviconOptionalAndCorruptionTolerated) {
++  // Absent icon: the key is not even written, and decoding leaves it empty.
++  const WorkspaceEntry without = MakeEntry();
++  EXPECT_FALSE(without.ToValue().contains("favicon"));
++  const std::optional<WorkspaceEntry> decoded_without =
++      WorkspaceEntry::FromValue(without.ToValue());
++  ASSERT_TRUE(decoded_without.has_value());
++  EXPECT_TRUE(decoded_without->favicon_png.empty());
++
++  // A corrupt icon must not cost us the whole entry.
++  base::DictValue corrupt = MakeEntry().ToValue();
++  corrupt.Set("favicon", "!!!! not base64 !!!!");
++  const std::optional<WorkspaceEntry> decoded_corrupt =
++      WorkspaceEntry::FromValue(corrupt);
++  ASSERT_TRUE(decoded_corrupt.has_value());
++  EXPECT_TRUE(decoded_corrupt->favicon_png.empty());
++  EXPECT_EQ(decoded_corrupt->id, without.id);
++}
++
++TEST(WorkspaceEntryTest, VersionOneEntriesStillLoad) {
++  // A profile written by the previous build: no favicon key, version 1.
++  base::DictValue v1 = MakeEntry().ToValue();
++  v1.Remove("favicon");
++  v1.Set("version", 1);
++
++  const std::optional<WorkspaceEntry> decoded = WorkspaceEntry::FromValue(v1);
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ(decoded->version, 1);
++  EXPECT_TRUE(decoded->favicon_png.empty());
++  EXPECT_EQ(decoded->url, MakeEntry().url);
 +}
 +
 +TEST(WorkspaceEntryTest, MissingRequiredFieldsRejected) {
