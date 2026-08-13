@@ -1,0 +1,260 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -436,6 +436,14 @@ constexpr base::TimeDelta kZenModeCursor
+ constexpr base::TimeDelta kZenModeHoverExitGracePeriod =
+     base::Milliseconds(150);
+ 
++// helium-fork: how many BeginFrames viz may hold the sidebar-toggle flip
++// waiting for the renderer's resized frame. Within the hold the previous
++// frame stays on glass and chrome + contents then swap in one activation;
++// past it the aggregator paints the page-colored gutter this exists to
++// prevent. 24 frames is 200ms at 120Hz / 400ms at 60Hz -- comfortably above
++// the ~140ms a heavy page needs, bounded if a renderer wedges.
++constexpr uint32_t kSidebarToggleHoldFrames = 24;
++
+ #if BUILDFLAG(IS_CHROMEOS)
+ // UMA histograms that record animation smoothness for tab loading animation.
+ constexpr char kTabLoadingSmoothnessHistogramName[] =
+@@ -1934,6 +1942,11 @@ void BrowserView::UpdateZenModeRevealFro
+   if (!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) {
+     return;
+   }
++  // helium-fork: the toggle choreography owns the slide animation while it
++  // runs; cursor logic resumes at the next mouse move once it is done.
++  if (sidebar_toggle_phase_ != SidebarTogglePhase::kIdle) {
++    return;
++  }
+ 
+   gfx::Point cursor;
+   // When the cursor leaves the window, start a timer before collapsing.
+@@ -1980,6 +1993,11 @@ void BrowserView::UpdateZenModeReveal(bo
+   if (!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) {
+     return;
+   }
++  // helium-fork: a hover grace timer can fire while the toggle choreography
++  // owns the slide; it must not drive the animation then.
++  if (sidebar_toggle_phase_ != SidebarTogglePhase::kIdle) {
++    return;
++  }
+ 
+   if (!ShouldDrawVerticalTabStrip()) {
+     reveal_side = false;
+@@ -2084,8 +2102,11 @@ void BrowserView::OnSidebarCollapseState
+     tabs::VerticalTabStripCollapseState state) {
+   // helium-fork: keep the reveal ratio in step with the collapse state so the
+   // hidden strip conceals/reveals instantly with the toggle. In zen mode the
+-  // reveal logic owns the animation; do not fight it.
+-  if (zen_mode_enabled_) {
++  // reveal logic owns the animation; do not fight it. While the toggle
++  // choreography runs it owns the animation too -- the completion
++  // notifications fired from inside it must not stomp the slide.
++  if (zen_mode_enabled_ ||
++      sidebar_toggle_phase_ != SidebarTogglePhase::kIdle) {
+     return;
+   }
+   if (state == tabs::VerticalTabStripCollapseState::kExpanded) {
+@@ -2102,6 +2123,98 @@ void BrowserView::OnSidebarCollapseState
+   InvalidateLayout();
+ }
+ 
++bool BrowserView::MaybeHandleSidebarCollapseRequest(bool collapse) {
++  // helium-fork: choreographs the hidden-sidebar toggle. Returns false to let
++  // the caller run the plain instant motion instead: zen mode keeps its own
++  // semantics, and non-vertical layouts, an uninitialized strip, or an
++  // invisible widget have nothing to choreograph.
++  if (zen_mode_enabled_ || !ShouldDrawVerticalTabStrip() ||
++      !vertical_tab_strip_region_view_ ||
++      !vertical_tab_strip_region_view_->GetTabStripView() || !GetWidget() ||
++      !GetWidget()->IsVisible()) {
++    return false;
++  }
++  if (sidebar_toggle_phase_ != SidebarTogglePhase::kIdle) {
++    // A toggle is already in flight (phases last <= ~200ms). Requests landing
++    // in that window necessarily aim at the same direction -- the controller
++    // state only flips when a toggle completes -- so treat them as
++    // already-in-progress.
++    return true;
++  }
++  // A hover grace timer from earlier could otherwise fire mid-choreography
++  // and drive the slide it no longer owns.
++  zen_cursor_exit_timer_.Stop();
++  if (collapse) {
++    // HIDE: flip the layout to floating-over-full-width contents under a viz
++    // hold -- the previous frame stays on glass until the renderer delivers
++    // the full-width frame, then chrome and contents swap in one activation
++    // -- and slide the card out over the new contents.
++    ArmContentsResizeHold();
++    zen_side_chrome_animation_.Reset(1);
++    vertical_tab_strip_region_view_->StartCollapseMotionNow(true);
++    DeprecatedLayoutImmediately();
++    DisarmContentsResizeHold();
++    sidebar_toggle_phase_ = SidebarTogglePhase::kSliding;
++    zen_side_chrome_animation_.Hide();
++  } else {
++    // SHOW: one atomic flip -- the docked sidebar and the resized contents
++    // land on glass in the same activation, with nothing sliding first. A
++    // slide-in was tried and rejected: it reads as a two-step stutter, and
++    // the card-to-docked restyle at the end is exactly the kind of extra
++    // motion this toggle is supposed to avoid. A hover-revealed card is
++    // simply absorbed by the same flip.
++    RunSidebarDockFlip();
++  }
++  return true;
++}
++
++void BrowserView::RunSidebarDockFlip() {
++  sidebar_toggle_phase_ = SidebarTogglePhase::kFlipping;
++  ArmContentsResizeHold();
++  vertical_tab_strip_region_view_->StartCollapseMotionNow(false);
++  DeprecatedLayoutImmediately();
++  DisarmContentsResizeHold();
++  sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
++  UpdateZenModeEventMonitor();
++}
++
++void BrowserView::ArmContentsResizeHold() {
++  if (!multi_contents_view_) {
++    return;
++  }
++  for (ContentsContainerView* pane :
++       multi_contents_view_->contents_container_views()) {
++    for (views::WebView* web_view :
++         {static_cast<views::WebView*>(pane->contents_view()),
++          pane->devtools_web_view()}) {
++      content::WebContents* contents =
++          web_view ? web_view->web_contents() : nullptr;
++      if (!contents) {
++        continue;
++      }
++      if (content::RenderWidgetHostView* rwhv =
++              contents->GetRenderWidgetHostView()) {
++        rwhv->SetForceSpecifiedDeadline(kSidebarToggleHoldFrames);
++        sidebar_hold_web_contents_.push_back(contents->GetWeakPtr());
++      }
++    }
++  }
++}
++
++void BrowserView::DisarmContentsResizeHold() {
++  // Clears exactly what was armed; a tab switched away mid-hold is still
++  // reachable through its WebContents.
++  for (auto& weak : sidebar_hold_web_contents_) {
++    if (content::WebContents* contents = weak.get()) {
++      if (content::RenderWidgetHostView* rwhv =
++              contents->GetRenderWidgetHostView()) {
++        rwhv->SetForceSpecifiedDeadline(std::nullopt);
++      }
++    }
++  }
++  sidebar_hold_web_contents_.clear();
++}
++
+ void BrowserView::UpdateZenCollapseButtonVisibility() {
+   if (toolbar_) {
+     toolbar_->UpdateVerticalTabsCollapseButton();
+@@ -6763,6 +6876,17 @@ void BrowserView::AnimationProgressed(co
+ 
+ void BrowserView::AnimationEnded(const gfx::Animation* animation) {
+   AnimationProgressed(animation);
++  // helium-fork: end of the hidden-sidebar toggle choreography. Only HIDE
++  // slides (the card gliding out over the already-swapped contents); its end
++  // returns ownership of the animation to the hover logic. The collapse
++  // notifications fired during the choreography were swallowed by the phase
++  // guard, so the hover monitor must be (un)installed here -- without this
++  // the edge reveal is dead after every toggle-hide.
++  if (animation == &zen_side_chrome_animation_ &&
++      sidebar_toggle_phase_ == SidebarTogglePhase::kSliding) {
++    sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
++    UpdateZenModeEventMonitor();
++  }
+ }
+ 
+ WebAppFrameToolbarView* BrowserView::web_app_frame_toolbar() {
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -438,6 +438,12 @@ class BrowserView : public BrowserWindow
+ 
+   // Toggles the side chrome (VTS) visibility in zen mode.
+   void ToggleZenModeSideChrome();
++
++  // helium-fork: intercepts VerticalTabStripRegionView::RequestCollapse to
++  // choreograph the hidden-sidebar toggle (slide + atomic contents swap).
++  // Returns false when it does not apply and the plain instant motion should
++  // run instead (zen mode, non-vertical layout, uninitialized strip).
++  bool MaybeHandleSidebarCollapseRequest(bool collapse);
+   void ToggleZenModeTopChrome();
+ 
+   // Returns the widget for anchoring bubbles and dialogs.
+@@ -964,6 +970,13 @@ class BrowserView : public BrowserWindow
+   // helium-fork: keeps the zen side-chrome reveal ratio in step with the
+   // collapse state while the hidden sidebar mode is in charge of it.
+   void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
++  // helium-fork toggle choreography (see MaybeHandleSidebarCollapseRequest).
++  enum class SidebarTogglePhase { kIdle, kSliding, kFlipping };
++  void RunSidebarDockFlip();
++  // Holds the contents' viz surface swap for up to kSidebarToggleHoldFrames
++  // so the toggle's relayout reaches the glass as one atomic activation.
++  void ArmContentsResizeHold();
++  void DisarmContentsResizeHold();
+   bool IsPointInZenTopTrigger(const gfx::Point& point) const;
+   bool IsPointInZenSideTrigger(const gfx::Point& point) const;
+   bool IsPointInZenTopChromeBounds(const gfx::Point& point) const;
+@@ -1490,6 +1503,10 @@ class BrowserView : public BrowserWindow
+ 
+   // helium-fork: collapse-state subscription driving the hidden sidebar mode.
+   base::CallbackListSubscription sidebar_collapse_subscription_;
++  // helium-fork: toggle choreography state.
++  SidebarTogglePhase sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
++  // WebContents whose views currently carry the forced viz deadline.
++  std::vector<base::WeakPtr<content::WebContents>> sidebar_hold_web_contents_;
+ 
+   mutable base::WeakPtrFactory<BrowserView> weak_ptr_factory_{this};
+ };
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -687,6 +687,22 @@ void VerticalTabStripRegionView::Request
+   if (!tab_strip_view_) {
+     return;
+   }
++  // helium-fork: every runtime toggle (Cmd+S, toolbar button, View menu,
++  // drag-to-collapse) funnels through the BrowserView choreography, which
++  // sequences the slide and the atomic contents swap. It returns false when
++  // it does not apply (zen mode, non-vertical layout, ...), in which case the
++  // motion starts directly as before.
++  if (browser_view_ &&
++      browser_view_->MaybeHandleSidebarCollapseRequest(collapse)) {
++    return;
++  }
++  StartCollapseMotionNow(collapse);
++}
++
++void VerticalTabStripRegionView::StartCollapseMotionNow(bool collapse) {
++  if (!tab_strip_view_) {
++    return;
++  }
+   const auto motion =
+       collapse ? TabStripAnimations::kCollapse : TabStripAnimations::kExpand;
+   BrowserAnimationController::From(browser_view_->browser())
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -127,6 +127,12 @@ class VerticalTabStripRegionView final
+   bool IsCollapsing() override;
+   void RequestCollapse(bool collapse) override;
+ 
++  // helium-fork: starts the collapse/expand motion immediately, bypassing the
++  // BrowserView toggle choreography. RequestCollapse() funnels through the
++  // choreography first; the choreography calls this when the layout flip
++  // should actually happen.
++  void StartCollapseMotionNow(bool collapse);
++
+   // views::WidgetObserver:
+   void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
+ 

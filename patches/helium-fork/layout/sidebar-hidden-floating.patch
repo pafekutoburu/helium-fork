@@ -1,0 +1,308 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1645,6 +1645,11 @@ float BrowserView::GetTopChromeRevealRat
+ }
+ 
+ float BrowserView::GetSideChromeRevealRatio() const {
++  // helium-fork: the hidden sidebar (collapsed, zen off) floats exactly like
++  // zen's unpinned strip and reuses the same slide animation for its reveal.
++  if (IsSidebarHiddenModeActive()) {
++    return zen_side_chrome_animation_.GetCurrentValue();
++  }
+   if (!zen_mode_enabled_) {
+     return 1.f;
+   }
+@@ -2050,6 +2055,36 @@ bool BrowserView::IsZenModeEnabled() con
+          GetSupportsTabStrip() && GetWidget() && !IsFullscreen();
+ }
+ 
++bool BrowserView::IsSidebarHiddenModeActive() const {
++  // helium-fork: outside zen mode, a collapsed vertical tab strip is fully
++  // hidden (Arc behavior) and reuses zen's floating reveal. Fullscreen is
++  // deliberately allowed: the zen branch disables itself there, so this one
++  // keeps Cmd+S and edge reveal working.
++  if (zen_mode_enabled_ || !GetIsNormalType() || !GetSupportsTabStrip() ||
++      !ShouldDrawVerticalTabStrip()) {
++    return false;
++  }
++  auto* controller = tabs::VerticalTabStripStateController::From(browser_);
++  return controller && controller->GetCollapseState() !=
++                           tabs::VerticalTabStripCollapseState::kExpanded;
++}
++
++void BrowserView::OnSidebarCollapseStateChanged(
++    tabs::VerticalTabStripCollapseState state) {
++  // helium-fork: keep the reveal ratio in step with the collapse state so the
++  // hidden strip conceals/reveals instantly with the toggle. In zen mode the
++  // reveal logic owns the animation; do not fight it.
++  if (zen_mode_enabled_) {
++    return;
++  }
++  if (state == tabs::VerticalTabStripCollapseState::kExpanded) {
++    zen_side_chrome_animation_.Reset(1);
++  } else {
++    zen_side_chrome_animation_.Reset(0);
++  }
++  InvalidateLayout();
++}
++
+ void BrowserView::UpdateZenCollapseButtonVisibility() {
+   if (toolbar_) {
+     toolbar_->UpdateVerticalTabsCollapseButton();
+@@ -5710,6 +5745,16 @@ void BrowserView::AddedToWidget() {
+     } else {
+       horizontal_tab_strip_region_view_->InitializeTabStrip();
+     }
++    // helium-fork: track collapse changes so the hidden (floating) sidebar
++    // conceals and reveals with the toggle; seed the ratio so a session
++    // restored collapsed starts hidden with no first-frame card flash.
++    sidebar_collapse_subscription_ =
++        vertical_tab_strip_state_controller->RegisterOnCollapseChanged(
++            base::BindRepeating(&BrowserView::OnSidebarCollapseStateChanged,
++                                base::Unretained(this)));
++    if (IsSidebarHiddenModeActive()) {
++      zen_side_chrome_animation_.Reset(0);
++    }
+   }
+ 
+   dialog_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -958,6 +958,12 @@ class BrowserView : public BrowserWindow
+   void UpdateZenModeReveal(bool reveal_top, bool reveal_side);
+   void RevealZenModeTopChromeImmediately();
+   bool IsZenModeEnabled() const;
++  // helium-fork: true when the vertical tab strip is collapsed outside zen
++  // mode -- the fully-hidden floating sidebar state (Arc behavior).
++  bool IsSidebarHiddenModeActive() const;
++  // helium-fork: keeps the zen side-chrome reveal ratio in step with the
++  // collapse state while the hidden sidebar mode is in charge of it.
++  void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
+   bool IsPointInZenTopTrigger(const gfx::Point& point) const;
+   bool IsPointInZenSideTrigger(const gfx::Point& point) const;
+   bool IsPointInZenTopChromeBounds(const gfx::Point& point) const;
+@@ -1482,6 +1488,9 @@ class BrowserView : public BrowserWindow
+   std::optional<gfx::Point> zen_last_cursor_;
+   bool zen_mode_enabled_ = false;
+ 
++  // helium-fork: collapse-state subscription driving the hidden sidebar mode.
++  base::CallbackListSubscription sidebar_collapse_subscription_;
++
+   mutable base::WeakPtrFactory<BrowserView> weak_ptr_factory_{this};
+ };
+ 
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -118,12 +118,17 @@ gfx::Rect SlideBoundsFromSide(const gfx:
+ 
+ ZenModeLayoutState GetZenModeLayoutState(
+     const BrowserViewLayoutDelegate& delegate,
+-    bool vertical_tab_strip_active) {
++    bool vertical_tab_strip_active,
++    bool hidden_floating) {
+   ZenModeLayoutState state;
+   state.enabled = delegate.IsZenModeEnabledForLayout();
+-  state.floating_vertical_tab_strip = state.enabled &&
+-                                      vertical_tab_strip_active &&
+-                                      !delegate.IsZenModeSideChromePinned();
++  // helium-fork: a collapsed strip outside zen mode is fully hidden and lays
++  // out exactly like zen's unpinned floating strip: the contents are never
++  // inset, and the strip slides over them on reveal.
++  state.floating_vertical_tab_strip = (state.enabled &&
++                                       vertical_tab_strip_active &&
++                                       !delegate.IsZenModeSideChromePinned()) ||
++                                      hidden_floating;
+   state.top_chrome_ratio = delegate.GetTopChromeRevealRatio();
+   state.side_chrome_ratio = delegate.GetSideChromeRevealRatio();
+ 
+@@ -434,6 +439,14 @@ BrowserViewTabbedLayoutImpl::CalculateHo
+         vertical_tab_strip->GetPreferredSize().width();
+     layout.vertical_tab_strip_collapsed_state =
+         GetVerticalTabStripCollapsedState();
++    // helium-fork: hidden(floating) strips render as a full-width card, so
++    // size them like an expanded strip: at rest the collapsed strip reports
++    // its rail width here, which is not the card geometry we lay out.
++    if (IsVerticalTabStripHiddenFloating()) {
++      preferred_vertical_tab_strip_width = vertical_tab_strip->uncollapsed_width();
++      layout.vertical_tab_strip_collapsed_state =
++          VerticalTabStripCollapsedState::kExpanded;
++    }
+     if (layout.vertical_tab_strip_collapsed_state ==
+         VerticalTabStripCollapsedState::kCollapsed) {
+       // Collapsed tab strip always gets its preferred size.
+@@ -722,6 +735,21 @@ BrowserViewTabbedLayoutImpl::GetVertical
+   return VerticalTabStripCollapsedState::kExpanded;
+ }
+ 
++bool BrowserViewTabbedLayoutImpl::IsVerticalTabStripHiddenFloating() const {
++  // helium-fork: outside zen mode, "collapsed" means the strip is fully
++  // hidden and floats over the contents on reveal (Arc behavior). kExpanding
++  // deliberately counts as docked so the show-toggle lands its final layout
++  // in a single pass.
++  if (layout_data_->tab_strip_type != TabStripType::kVertical ||
++      delegate().IsZenModeEnabledForLayout()) {
++    return false;
++  }
++  const VerticalTabStripCollapsedState state =
++      GetVerticalTabStripCollapsedState();
++  return state == VerticalTabStripCollapsedState::kCollapsed ||
++         state == VerticalTabStripCollapsedState::kCollapsing;
++}
++
+ int BrowserViewTabbedLayoutImpl::GetCollapsedVerticalTabStripRelativeTop()
+     const {
+   // When the top container isn't in the browser view, the exclusion won't apply
+@@ -806,7 +834,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   const bool show_dynamic_tab_strip =
+       ShowDynamicTabStrip(layout_data_->tab_strip_type);
+   const ZenModeLayoutState zen = GetZenModeLayoutState(
+-      delegate(), layout_data_->tab_strip_type == TabStripType::kVertical);
++      delegate(), layout_data_->tab_strip_type == TabStripType::kVertical,
++      IsVerticalTabStripHiddenFloating());
+   std::optional<int> dynamic_tab_strip_top;
+   const HorizontalLayout& horizontal_layout = layout_data_->horizontal_layout;
+   const bool infobar_visible = delegate().IsInfobarVisible();
+@@ -874,6 +903,31 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+         last_vertical_tab_strip_width_ = vertical_tab_strip_width;
+       }
+ 
++      // helium-fork: the toggle is instant (see tab_strip_animations.cc), but
++      // the animation machinery still reports a motion for a frame or two on
++      // its way to the end value, with the strip width part-way there. Force
++      // the strip to the width it is heading for, so the strip and the
++      // contents inset below agree on every frame of the toggle.
++      const bool sidebar_toggle_in_progress =
++          vertical_tab_strip_animation.current_motion ==
++              TabStripAnimations::kExpand ||
++          vertical_tab_strip_animation.current_motion ==
++              TabStripAnimations::kCollapse;
++      if (sidebar_toggle_in_progress && !zen.floating_vertical_tab_strip) {
++        const int target_width =
++            vertical_tab_strip_animation.current_motion ==
++                    TabStripAnimations::kCollapse
++                ? VerticalTabStripRegionView::kCollapsedWidth
++                : views().vertical_tab_strip_region_view->uncollapsed_width();
++        // A narrow window can leave less room than the target asks for; clamp
++        // the same way the horizontal layout clamps the strip.
++        vertical_tab_strip_width = std::clamp(
++            target_width, VerticalTabStripRegionView::kCollapsedWidth,
++            std::max(VerticalTabStripRegionView::kCollapsedWidth,
++                     params.visual_client_area.width() -
++                         horizontal_layout.min_content_width));
++      }
++
+       const int vertical_tab_strip_x =
+           vertical_right_aligned
+               ? params.visual_client_area.right() -
+@@ -908,34 +962,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       }
+ 
+       vertical_tab_strip_width = vertical_tab_strip_bounds.width();
+-      // helium-fork: the toggle is instant (see tab_strip_animations.cc), but
+-      // the animation machinery still reports a motion for a frame or two on
+-      // its way to the end value, and measurement showed the contents picking
+-      // up those in-between widths -- an extra relayout of the page per toggle
+-      // and a frame of visible flicker. Inset by the width the sidebar is
+-      // heading for instead, so the contents are laid out once, at the size
+-      // they keep.
+-      const bool sidebar_toggle_in_progress =
+-          vertical_tab_strip_animation.current_motion ==
+-              TabStripAnimations::kExpand ||
+-          vertical_tab_strip_animation.current_motion ==
+-              TabStripAnimations::kCollapse;
+       if (!zen.floating_vertical_tab_strip) {
++        // The strip width is forced to its toggle target above, so insetting
++        // by it keeps the contents at their final size for every frame of the
++        // instant toggle.
+         int inset_amount = vertical_tab_strip_width;
+-        if (sidebar_toggle_in_progress) {
+-          const int target_width =
+-              vertical_tab_strip_animation.current_motion ==
+-                      TabStripAnimations::kCollapse
+-                  ? VerticalTabStripRegionView::kCollapsedWidth
+-                  : views().vertical_tab_strip_region_view->uncollapsed_width();
+-          // A narrow window can leave less room than the target asks for; the
+-          // width above is clamped the same way.
+-          inset_amount = std::clamp(
+-              target_width, VerticalTabStripRegionView::kCollapsedWidth,
+-              std::max(VerticalTabStripRegionView::kCollapsedWidth,
+-                       params.visual_client_area.width() -
+-                           horizontal_layout.min_content_width));
+-        }
+         if (adjust_for_cracking) {
+           inset_amount -= 1;
+         }
+@@ -944,21 +975,26 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       }
+ 
+       // Let the vertical tab strip animate out over the content.
+-      if (vertical_tab_strip_animation.current_motion) {
+-        const bool vertical_tab_strip_resize_animation =
+-            vertical_tab_strip_animation.current_motion ==
+-                TabStripAnimations::kExpand ||
+-            vertical_tab_strip_animation.current_motion ==
+-                TabStripAnimations::kCollapse;
+-        clip_content_for_animation =
+-            clip_content_for_animation || vertical_tab_strip_resize_animation;
+-        InsetHorizontal(unclipped_contents_region,
+-                        VerticalTabStripRegionView::kCollapsedWidth,
+-                        !vertical_right_aligned);
+-      } else {
+-        InsetHorizontal(unclipped_contents_region,
+-                        horizontal_layout.vertical_tab_strip_width,
+-                        !vertical_right_aligned);
++      // helium-fork: skipped when the strip floats -- the contents are never
++      // inset then, and clipping them for the one-frame motion would cut a
++      // rail-wide sliver off the leading edge.
++      if (!zen.floating_vertical_tab_strip) {
++        if (vertical_tab_strip_animation.current_motion) {
++          const bool vertical_tab_strip_resize_animation =
++              vertical_tab_strip_animation.current_motion ==
++                  TabStripAnimations::kExpand ||
++              vertical_tab_strip_animation.current_motion ==
++                  TabStripAnimations::kCollapse;
++          clip_content_for_animation =
++              clip_content_for_animation || vertical_tab_strip_resize_animation;
++          InsetHorizontal(unclipped_contents_region,
++                          VerticalTabStripRegionView::kCollapsedWidth,
++                          !vertical_right_aligned);
++        } else {
++          InsetHorizontal(unclipped_contents_region,
++                          horizontal_layout.vertical_tab_strip_width,
++                          !vertical_right_aligned);
++        }
+       }
+     }
+     layout.AddChild(views().vertical_tab_strip_region_view,
+@@ -1471,7 +1507,8 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+   const bool show_dynamic_tab_strip =
+       ShowDynamicTabStrip(layout_data_->tab_strip_type);
+   const ZenModeLayoutState zen = GetZenModeLayoutState(
+-      delegate(), layout_data_->tab_strip_type == TabStripType::kVertical);
++      delegate(), layout_data_->tab_strip_type == TabStripType::kVertical,
++      IsVerticalTabStripHiddenFloating());
+ 
+   if (IsParentedTo(views().horizontal_tab_strip_region_view,
+                    views().top_container)) {
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+@@ -101,6 +101,11 @@ class BrowserViewTabbedLayoutImpl : publ
+   // Returns the current state of the vertical tabstrip.
+   VerticalTabStripCollapsedState GetVerticalTabStripCollapsedState() const;
+ 
++  // helium-fork: true when the vertical tab strip is collapsed outside zen
++  // mode. That state lays out like zen's unpinned floating strip: fully
++  // hidden, contents never inset, slides over them on reveal.
++  bool IsVerticalTabStripHiddenFloating() const;
++
+   // These helper functions are called during `DoPreLayoutCalculations()` to set
+   // up `layout_data_`.
+   HorizontalLayout CalculateHorizontalLayout(BrowserLayoutParams& params) const;

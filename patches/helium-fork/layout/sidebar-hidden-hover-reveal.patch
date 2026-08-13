@@ -1,0 +1,102 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1737,6 +1737,10 @@ void BrowserView::OnVerticalTabStripMode
+     horizontal_tab_strip_region_view_->InitializeTabStrip();
+   }
+ 
++  // helium-fork: the hidden sidebar mode's hover monitor follows the
++  // vertical-vs-horizontal switch.
++  UpdateZenModeEventMonitor();
++
+   GetFrameView()->OnTabStripStateChanged();
+ 
+   UpdateTabSearchBubbleHost();
+@@ -1883,7 +1887,9 @@ void BrowserView::UpdateZenModeState() {
+ }
+ 
+ void BrowserView::UpdateZenModeEventMonitor() {
+-  if (!GetWidget() || !IsZenModeEnabled()) {
++  // helium-fork: the hidden sidebar mode needs the same cursor monitor as zen
++  // for its edge hover reveal.
++  if (!GetWidget() || (!IsZenModeEnabled() && !IsSidebarHiddenModeActive())) {
+     zen_mode_event_monitor_.reset();
+     return;
+   }
+@@ -1925,7 +1931,7 @@ bool BrowserView::IsLeavingZenSideGap(co
+ }
+ 
+ void BrowserView::UpdateZenModeRevealFromCursor() {
+-  if (!zen_mode_enabled_) {
++  if (!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) {
+     return;
+   }
+ 
+@@ -1971,7 +1977,7 @@ void BrowserView::UpdateZenModeRevealFro
+ }
+ 
+ void BrowserView::UpdateZenModeReveal(bool reveal_top, bool reveal_side) {
+-  if (!zen_mode_enabled_) {
++  if (!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) {
+     return;
+   }
+ 
+@@ -2014,15 +2020,20 @@ void BrowserView::UpdateZenModeReveal(bo
+     }
+   }
+ 
+-  if (reveal_top) {
+-    if (!zen_top_chrome_animation_.IsShowing()) {
+-      zen_top_chrome_animation_.Show();
+-      if (toolbar_) {
+-        toolbar_->AbortToolbarContainerAnimationsForZenReveal();
++  // helium-fork: only zen may drive the top-chrome animation. In hidden
++  // sidebar mode the top chrome is always visible, and moving its slide
++  // position here would leave stale state for a later zen entry.
++  if (zen_mode_enabled_) {
++    if (reveal_top) {
++      if (!zen_top_chrome_animation_.IsShowing()) {
++        zen_top_chrome_animation_.Show();
++        if (toolbar_) {
++          toolbar_->AbortToolbarContainerAnimationsForZenReveal();
++        }
+       }
++    } else if (zen_top_chrome_animation_.IsShowing()) {
++      zen_top_chrome_animation_.Hide();
+     }
+-  } else if (zen_top_chrome_animation_.IsShowing()) {
+-    zen_top_chrome_animation_.Hide();
+   }
+ 
+   if (reveal_side) {
+@@ -2082,6 +2093,12 @@ void BrowserView::OnSidebarCollapseState
+   } else {
+     zen_side_chrome_animation_.Reset(0);
+   }
++  // The hover monitor exists only while hidden mode (or zen) is active.
++  // Deliberately no immediate cursor re-evaluation: right after a hide the
++  // cursor often still sits inside the old strip bounds (drag-to-collapse,
++  // for one), and re-evaluating now would pop the card straight back out.
++  // The monitor re-evaluates on the next mouse move anyway.
++  UpdateZenModeEventMonitor();
+   InvalidateLayout();
+ }
+ 
+@@ -6695,13 +6712,14 @@ void BrowserView::OnWillChangeFocus(View
+ }
+ void BrowserView::OnDidChangeFocus(View* focused_before, View* focused_now) {
+   UpdateAccessibleNameForRootView();
+-  if (zen_mode_enabled_) {
++  if (zen_mode_enabled_ || IsSidebarHiddenModeActive()) {
+     UpdateZenModeRevealFromCursor();
+   }
+ }
+ 
+ void BrowserView::OnEvent(const ui::Event& event) {
+-  if (!zen_mode_enabled_ || !event.IsMouseEvent()) {
++  if ((!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) ||
++      !event.IsMouseEvent()) {
+     return;
+   }
+   // Mouse exit events can also come from internal view transitions. Only use

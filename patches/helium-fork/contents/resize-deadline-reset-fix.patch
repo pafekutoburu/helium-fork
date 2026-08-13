@@ -1,0 +1,22 @@
+Index: src/chrome/browser/ui/views/frame/contents_web_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/contents_web_view.cc
++++ src/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -98,6 +98,17 @@ void ContentsWebView::SetIsAnimatingBoun
+         rwhv->SetShouldUseDefaultDeadlineOnResize(true);
+       }
+     }
++  } else if (use_default_deadline_when_animating_ && web_contents()) {
++    // helium-fork: also reset the deadline here. The reset below in
++    // OnVisibleBoundsChanged() only runs on the next bounds change *after* the
++    // animation ended; a layout that reaches the final bounds while the
++    // animation is still marked in progress never gets one, and the widget is
++    // then stuck waiting the default deadline on every ordinary resize,
++    // window live-resize included.
++    if (content::RenderWidgetHostView* rwhv =
++            web_contents()->GetRenderWidgetHostView()) {
++      rwhv->SetShouldUseDefaultDeadlineOnResize(false);
++    }
+   }
+ }
+ 

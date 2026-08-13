@@ -332,3 +332,8 @@ helium-fork/workspace/model.patch
 helium-fork/workspace/pin-semantics.patch
 helium-fork/workspace/context-menu.patch
 helium-fork/workspace/sidebar-ui.patch
+helium-fork/layout/instant-sidebar-toggle.patch
+helium-fork/contents/resize-deadline-reset-fix.patch
+helium-fork/layout/sidebar-hidden-floating.patch
+helium-fork/layout/sidebar-hidden-hover-reveal.patch
+helium-fork/layout/sidebar-toggle-choreography.patch

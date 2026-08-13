@@ -1,0 +1,65 @@
+Index: src/chrome/browser/ui/views/animations/tab_strip_animations.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/animations/tab_strip_animations.cc
++++ src/chrome/browser/ui/views/animations/tab_strip_animations.cc
+@@ -49,7 +49,20 @@ TabStripAnimations::TabStripAnimations()
+ TabStripAnimations::~TabStripAnimations() = default;
+ 
+ TabStripAnimations::GroupInfos TabStripAnimations::GenerateAnimations() const {
+-  constexpr int kExpandCollapseDurationMs = 250;
++  // helium-fork: the sidebar toggle lands in one frame instead of animating.
++  //
++  // Animating means relaying the page out every frame (~28 times per toggle,
++  // 57ms each on a heavy page even in an official build) -- that is what made
++  // the scrollbar jitter. And every in-between frame has the renderer lagging
++  // the layout: the page takes a beat to re-render at each new width, and
++  // until it catches up viz displays the old frame with a page-colored gutter
++  // strip beside it. One instant motion means one relayout and one catch-up,
++  // and the BrowserView toggle choreography hides that one entirely by
++  // holding the flip until the renderer's resized frame has activated (see
++  // BrowserView::MaybeHandleSidebarCollapseRequest). These motions are the
++  // substrate that choreography rides on: kExpand/kCollapse still fire, flip
++  // the layout state for one pass, and end.
++  constexpr int kExpandCollapseDurationMs = 0;
+   constexpr gfx::Tween::Type kExpandCollapseTween =
+       gfx::Tween::EASE_IN_OUT_EMPHASIZED;
+   // The sequence goes: one corner disappears, the top animates, and then the
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -908,8 +908,34 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       }
+ 
+       vertical_tab_strip_width = vertical_tab_strip_bounds.width();
++      // helium-fork: the toggle is instant (see tab_strip_animations.cc), but
++      // the animation machinery still reports a motion for a frame or two on
++      // its way to the end value, and measurement showed the contents picking
++      // up those in-between widths -- an extra relayout of the page per toggle
++      // and a frame of visible flicker. Inset by the width the sidebar is
++      // heading for instead, so the contents are laid out once, at the size
++      // they keep.
++      const bool sidebar_toggle_in_progress =
++          vertical_tab_strip_animation.current_motion ==
++              TabStripAnimations::kExpand ||
++          vertical_tab_strip_animation.current_motion ==
++              TabStripAnimations::kCollapse;
+       if (!zen.floating_vertical_tab_strip) {
+         int inset_amount = vertical_tab_strip_width;
++        if (sidebar_toggle_in_progress) {
++          const int target_width =
++              vertical_tab_strip_animation.current_motion ==
++                      TabStripAnimations::kCollapse
++                  ? VerticalTabStripRegionView::kCollapsedWidth
++                  : views().vertical_tab_strip_region_view->uncollapsed_width();
++          // A narrow window can leave less room than the target asks for; the
++          // width above is clamped the same way.
++          inset_amount = std::clamp(
++              target_width, VerticalTabStripRegionView::kCollapsedWidth,
++              std::max(VerticalTabStripRegionView::kCollapsedWidth,
++                       params.visual_client_area.width() -
++                           horizontal_layout.min_content_width));
++        }
+         if (adjust_for_cracking) {
+           inset_amount -= 1;
+         }
