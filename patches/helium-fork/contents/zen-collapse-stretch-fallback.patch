@@ -1,0 +1,221 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1937,6 +1937,11 @@ void BrowserView::UpdateZenModeState() {
+ 
+     if (IsZenModeTopChromePinned()) {
+       zen_top_chrome_animation_.Reset(1);
++      // helium-fork: Reset() does not run the animation to its end, so
++      // AnimationEnded() never fires and the collapse's stretch would outlive
++      // it -- every later resize, a live window drag included, would scale the
++      // page instead of repainting it.
++      SetContentsStretchDuringResize(false);
+     }
+ 
+     UpdateZenModeReveal(/*reveal_top=*/false, /*reveal_side=*/false);
+@@ -2123,7 +2128,17 @@ void BrowserView::UpdateZenModeReveal(bo
+           toolbar_->AbortToolbarContainerAnimationsForZenReveal();
+         }
+       }
++      // helium-fork: revealing only ever makes the contents shorter, and viz
++      // crops rather than gutters in that direction, so there is nothing to
++      // cover -- and changing one's mind mid-collapse must not leave the
++      // stretch armed over ordinary resizes.
++      SetContentsStretchDuringResize(false);
+     } else if (zen_top_chrome_animation_.IsShowing()) {
++      // helium-fork: the collapse grows the contents by the band's height in
++      // one step; until the renderer answers, let viz stretch the frame it has
++      // instead of painting the difference flat. See
++      // RenderWidgetHostView::SetStretchContentDuringResize().
++      SetContentsStretchDuringResize(true);
+       zen_top_chrome_animation_.Hide();
+     }
+   }
+@@ -2139,6 +2154,9 @@ void BrowserView::UpdateZenModeReveal(bo
+ 
+ void BrowserView::RevealZenModeTopChromeImmediately() {
+   zen_top_chrome_animation_.Reset(1);
++  // helium-fork: same as the pinned path -- Reset() skips AnimationEnded(), so
++  // the stretch has to be cleared by hand or it leaks past the collapse.
++  SetContentsStretchDuringResize(false);
+   if (vertical_tab_strip_region_view_) {
+     vertical_tab_strip_region_view_->UpdateInteriorMargin();
+   }
+@@ -2637,6 +2655,29 @@ void BrowserView::ArmContentsResizeHold(
+   }
+ }
+ 
++void BrowserView::SetContentsStretchDuringResize(bool stretch) {
++  if (!multi_contents_view_ || contents_stretch_during_resize_ == stretch) {
++    return;
++  }
++  contents_stretch_during_resize_ = stretch;
++  for (ContentsContainerView* pane :
++       multi_contents_view_->contents_container_views()) {
++    for (views::WebView* web_view :
++         {static_cast<views::WebView*>(pane->contents_view()),
++          pane->devtools_web_view()}) {
++      content::WebContents* contents =
++          web_view ? web_view->web_contents() : nullptr;
++      if (!contents) {
++        continue;
++      }
++      if (content::RenderWidgetHostView* rwhv =
++              contents->GetRenderWidgetHostView()) {
++        rwhv->SetStretchContentDuringResize(stretch);
++      }
++    }
++  }
++}
++
+ void BrowserView::DisarmContentsResizeHold() {
+   // Clears exactly what was armed; a tab switched away mid-hold is still
+   // reachable through its WebContents.
+@@ -7332,6 +7373,12 @@ void BrowserView::AnimationProgressed(co
+ 
+ void BrowserView::AnimationEnded(const gfx::Animation* animation) {
+   AnimationProgressed(animation);
++  // helium-fork: the collapse is over and the renderer has been asked for the
++  // final size, so ordinary resizes -- a live window drag above all -- must go
++  // back to being pinned rather than scaled.
++  if (animation == &zen_top_chrome_animation_) {
++    SetContentsStretchDuringResize(false);
++  }
+   // helium-fork: end of the hidden-sidebar toggle choreography. Only HIDE
+   // slides (the card gliding out over the already-swapped contents); its end
+   // returns ownership of the animation to the hover logic. The collapse
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -1018,6 +1018,10 @@ class BrowserView : public BrowserWindow
+   // so the toggle's relayout reaches the glass as one atomic activation.
+   void ArmContentsResizeHold();
+   void DisarmContentsResizeHold();
++  // helium-fork: while the band retracts, let viz scale the frame it already
++  // has over the strip the contents just grew into rather than paint it flat.
++  // See RenderWidgetHostView::SetStretchContentDuringResize().
++  void SetContentsStretchDuringResize(bool stretch);
+   bool IsPointInZenTopTrigger(const gfx::Point& point) const;
+   bool IsPointInZenSideTrigger(const gfx::Point& point) const;
+   bool IsPointInZenTopChromeBounds(const gfx::Point& point) const;
+@@ -1575,6 +1579,9 @@ class BrowserView : public BrowserWindow
+   SidebarTogglePhase sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
+   // WebContents whose views currently carry the forced viz deadline.
+   std::vector<base::WeakPtr<content::WebContents>> sidebar_hold_web_contents_;
++  // helium-fork: current state of SetContentsStretchDuringResize(), so the
++  // per-pane walk only runs when it actually changes.
++  bool contents_stretch_during_resize_ = false;
+ 
+   mutable base::WeakPtrFactory<BrowserView> weak_ptr_factory_{this};
+ };
+Index: src/content/browser/renderer_host/render_widget_host_view_mac.h
+===================================================================
+--- src.orig/content/browser/renderer_host/render_widget_host_view_mac.h
++++ src/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -151,6 +151,8 @@ class CONTENT_EXPORT RenderWidgetHostVie
+   void SetWindowFrameInScreen(const gfx::Rect& rect) override;
+   void SetForceSpecifiedDeadline(
+       std::optional<uint32_t> deadline_in_frames) override;
++  // helium-fork: see RenderWidgetHostView::SetStretchContentDuringResize().
++  void SetStretchContentDuringResize(bool stretch) override;
+   std::optional<uint32_t> GetForceSpecifiedDeadlineForTesting() override;
+   void TakeFallbackContentFrom(RenderWidgetHostView* view) override;
+   bool IsHTMLFormPopup() const override;
+Index: src/content/browser/renderer_host/render_widget_host_view_mac.mm
+===================================================================
+--- src.orig/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ src/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -1135,6 +1135,14 @@ void RenderWidgetHostViewMac::SetForceSp
+   }
+ }
+ 
++void RenderWidgetHostViewMac::SetStretchContentDuringResize(bool stretch) {
++  if (browser_compositor_) {
++    if (auto* dfh = browser_compositor_->GetDelegatedFrameHost()) {
++      dfh->SetStretchContentDuringResize(stretch);
++    }
++  }
++}
++
+ std::optional<uint32_t>
+ RenderWidgetHostViewMac::GetForceSpecifiedDeadlineForTesting() {
+   if (browser_compositor_) {
+Index: src/content/browser/renderer_host/delegated_frame_host.cc
+===================================================================
+--- src.orig/content/browser/renderer_host/delegated_frame_host.cc
++++ src/content/browser/renderer_host/delegated_frame_host.cc
+@@ -376,7 +376,7 @@ void DelegatedFrameHost::EmbedSurface(
+     current_frame_size_in_dip_ = surface_dip_size_;
+     client_->DelegatedFrameHostGetLayer()->SetShowSurface(
+         new_primary_surface_id, current_frame_size_in_dip_, GetGutterColor(),
+-        deadline_policy, false /* stretch_content_to_fill_bounds */);
++        deadline_policy, stretch_content_during_resize_);
+     if (compositor_)
+       compositor_->OnChildResizing();
+   }
+@@ -387,6 +387,12 @@ void DelegatedFrameHost::SetForceSpecifi
+   force_specified_deadline_ = deadline_in_frames;
+ }
+ 
++void DelegatedFrameHost::SetStretchContentDuringResize(bool stretch) {
++  // Only consulted at the next embed, which is what the caller is about to
++  // cause; nothing to invalidate here.
++  stretch_content_during_resize_ = stretch;
++}
++
+ SkColor DelegatedFrameHost::GetGutterColor() const {
+   // In fullscreen mode resizing is uncommon, so it makes more sense to
+   // make the initial switch to fullscreen mode look better by using black as
+Index: src/content/browser/renderer_host/delegated_frame_host.h
+===================================================================
+--- src.orig/content/browser/renderer_host/delegated_frame_host.h
++++ src/content/browser/renderer_host/delegated_frame_host.h
+@@ -136,6 +136,8 @@ class CONTENT_EXPORT DelegatedFrameHost
+                     const gfx::Size& dip_size,
+                     cc::DeadlinePolicy deadline_policy);
+   void SetForceSpecifiedDeadline(std::optional<uint32_t> deadline_in_frames);
++  // helium-fork: see RenderWidgetHostView::SetStretchContentDuringResize().
++  void SetStretchContentDuringResize(bool stretch);
+   bool HasSavedFrame() const;
+   void AttachToCompositor(ui::Compositor* compositor);
+   void DetachFromCompositor();
+@@ -303,6 +305,8 @@ class CONTENT_EXPORT DelegatedFrameHost
+   FrameEvictionState frame_eviction_state_ = FrameEvictionState::kNotStarted;
+ 
+   std::optional<uint32_t> force_specified_deadline_ = std::nullopt;
++  // helium-fork: see SetStretchContentDuringResize().
++  bool stretch_content_during_resize_ = false;
+ 
+   // Layer responsible for displaying the stale content for the DFHC when the
+   // actual web content frame has been evicted. This will be reset when a new
+Index: src/content/public/browser/render_widget_host_view.h
+===================================================================
+--- src.orig/content/public/browser/render_widget_host_view.h
++++ src/content/public/browser/render_widget_host_view.h
+@@ -336,6 +336,24 @@ class CONTENT_EXPORT RenderWidgetHostVie
+   virtual void SetForceSpecifiedDeadline(
+       std::optional<uint32_t> deadline_in_frames) {}
+ 
++  // helium-fork: while set, a surface embedded before the renderer has produced
++  // a frame at the new size is stretched to fill the view instead of being
++  // pinned top-left with the remainder painted in the page's background color.
++  //
++  // That remainder is what the Arc shell's address bar band leaves behind when
++  // it retracts: the contents grow by the band's height in one step, and a page
++  // slow enough to miss the deadline shows a band-height slab of flat color
++  // along the bottom of the card until it catches up. Stretching is the lesser
++  // artifact -- the growth is 34 of 760 points, so the stale frame is scaled by
++  // ~4.5% for the few frames it is on screen, where the slab is a hard edge
++  // with no content behind it at all.
++  //
++  // Deliberately not the deadline: holding the swap long enough for a slow page
++  // outlasts the band's own animation, so the slide is swallowed and the band
++  // reads as an instant jump. Measured: the gutter goes away either way, but
++  // holding turns 6 animated frames into 1.
++  virtual void SetStretchContentDuringResize(bool stretch) {}
++
+   // Set whether macOS "AutoFill" is allowed for this view.
+   virtual void SetSupportsAutoFill(bool supports) {}
+ 

@@ -352,3 +352,4 @@ helium-fork/layout/arc-card-shadow.patch
 helium-fork/layout/arc-band-tint-store.patch
 helium-fork/renderer/page-colored-root-scrollbar.patch
 helium-fork/contents/mac-visible-viewport-insets.patch
+helium-fork/contents/zen-collapse-stretch-fallback.patch
