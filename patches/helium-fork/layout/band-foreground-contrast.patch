@@ -1,0 +1,1217 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -102,6 +102,7 @@
+ #include "chrome/browser/ui/find_bar/find_bar.h"
+ #include "chrome/browser/ui/focus/browser_focus_controller.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
++#include "chrome/browser/ui/helium/arc_band_colors.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+@@ -2117,6 +2118,66 @@ bool BrowserView::IsSidebarHiddenModeAct
+                            tabs::VerticalTabStripCollapseState::kExpanded;
+ }
+ 
++std::optional<SkColor> BrowserView::GetAddressBarBandTint() const {
++  // helium-fork: the published tint -- the one value every consumer reads.
++  //
++  // This deliberately does NOT recompute. The band's fill is resolved in the
++  // layout pass while the URL text, the field's wash and the toolbar icons are
++  // re-derived from ToolbarView's cached copy, which only UpdateAddressBarBand-
++  // Tint() writes. When this accessor recomputed, any layout triggered by
++  // something else -- and a navigation triggers one as soon as the URL text
++  // changes -- repainted the band in the new page's color without publishing
++  // it, leaving dark text on a black band until the next real publication
++  // ("域名因为黑色背景填充，文字看不到了"). One writer, one value, one frame.
++  return address_bar_band_tint_;
++}
++
++std::optional<SkColor> BrowserView::ComputeAddressBarBandTint() const {
++  // helium-fork: the address bar band belongs to the page, not to the app --
++  // the sidebar and the window frame keep the app's own theme, the band and
++  // the page below it move together.
++  //
++  // The ordering of the sources, and the rule that the band may only change
++  // when the page on screen changes, live in helium::ResolveBandTint().
++  //
++  // Deliberately unclamped: the band's own text and icons are re-derived from
++  // this color (see ToolbarButton::GetForegroundColor and the cascading
++  // background below), so a black page really does get a black band instead
++  // of a grey compromise.
++  if (!ShouldUseContentCardInsets()) {
++    return std::nullopt;
++  }
++  content::WebContents* const contents =
++      const_cast<BrowserView*>(this)->GetActiveWebContents();
++  if (!contents) {
++    return std::nullopt;
++  }
++  return helium::ResolveBandTint(
++      contents->GetThemeColor(),
++      top_container_ ? top_container_->sampled_page_top_color() : std::nullopt,
++      contents->GetBackgroundColor(), address_bar_band_tint_,
++      !top_container_ || top_container_->page_painted());
++}
++
++void BrowserView::UpdateAddressBarBandTint() {
++  const std::optional<SkColor> tint = ComputeAddressBarBandTint();
++  if (tint == address_bar_band_tint_) {
++    return;
++  }
++  address_bar_band_tint_ = tint;
++  if (toolbar_) {
++    toolbar_->SetBandTint(tint);
++  }
++  InvalidateLayout();
++  // The band's children cache their colors and only re-resolve on a theme
++  // change, so the tint has to announce itself as one. This fires per
++  // navigation or tab switch, which is the same cadence at which a web app's
++  // theme color repaints its window.
++  if (views::Widget* const widget = GetWidget()) {
++    widget->ThemeChanged();
++  }
++}
++
+ bool BrowserView::ShouldUseContentCardInsets() const {
+   // helium-fork: every address bar mode lays the contents out as a card,
+   // zen included -- the mode only decides whether the band above the card is
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -447,6 +447,17 @@ class BrowserView : public BrowserWindow
+   // outside the Arc shell. See the definition for why it is not just the
+   // toolbar height.
+   int GetArcShellCaptionBandHeight() const;
++  // helium-fork: the color of the address bar band, sampled from the active
++  // page so the band and the page read as one surface. Nullopt outside the
++  // Arc shell, or when the page has no color to offer.
++  //
++  // This is the published value, not a fresh derivation: the band's fill and
++  // the foregrounds derived from it must never be able to disagree. Only
++  // UpdateAddressBarBandTint() moves it.
++  std::optional<SkColor> GetAddressBarBandTint() const;
++  // helium-fork: re-derives the tint and, if it moved, publishes it -- pushes
++  // it into the toolbar and refreshes the band's colors, in one frame.
++  void UpdateAddressBarBandTint();
+   bool IsZenModeSideChromePinned() const;
+   bool IsZenModeTopChromePinned() const;
+ 
+@@ -1297,6 +1308,16 @@ class BrowserView : public BrowserWindow
+   // leave the Arc shell sidebar top row (same pattern as the tab strip index
+   // above).
+   std::optional<size_t> arc_collapse_button_toolbar_index_;
++
++  // helium-fork: derives the band's tint from the active page. Private, and
++  // called from exactly one place -- UpdateAddressBarBandTint(), which is the
++  // only writer of address_bar_band_tint_. Everything else reads the published
++  // GetAddressBarBandTint().
++  std::optional<SkColor> ComputeAddressBarBandTint() const;
++
++  // helium-fork: last tint pushed into the band, so a re-sample that lands on
++  // the same color does not trigger a theme refresh.
++  std::optional<SkColor> address_bar_band_tint_;
+   std::optional<size_t> arc_back_button_toolbar_index_;
+   std::optional<size_t> arc_forward_button_toolbar_index_;
+   std::optional<size_t> arc_reload_button_toolbar_index_;
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
+@@ -271,50 +271,7 @@ bool BrowserViewLayoutDelegateImpl::IsZe
+ 
+ std::optional<SkColor> BrowserViewLayoutDelegateImpl::GetAddressBarBandTint()
+     const {
+-  // helium-fork: the page's declared theme color wins; failing that, the color
+-  // actually rendered at the top of the viewport; failing that, the document's
+-  // background color.
+-  //
+-  // The middle step is the important one. GetBackgroundColor() reports the
+-  // *document* background, which for a light document carrying a full-bleed
+-  // dark header (films.dance, and Squarespace sites generally) is near-white
+-  // while the strip the band abuts is black -- the band and the page then read
+-  // as two obviously different surfaces, which is the whole complaint.
+-  content::WebContents* const contents = browser_view_->GetActiveWebContents();
+-  if (!contents) {
+-    return std::nullopt;
+-  }
+-  std::optional<SkColor> page_color = contents->GetThemeColor();
+-  if (!page_color && browser_view_->top_container()) {
+-    page_color = browser_view_->top_container()->sampled_page_top_color();
+-  }
+-  if (!page_color) {
+-    page_color = contents->GetBackgroundColor();
+-  }
+-  const ui::ColorProvider* const colors = browser_view_->GetColorProvider();
+-  if (!page_color || !colors) {
+-    return std::nullopt;
+-  }
+-
+-  // Either color can be arbitrary, while the band's text and icons come from
+-  // the browser theme -- so blend the tint back toward the theme's own
+-  // toolbar color until it clears a legibility floor against them. A page
+-  // whose color already contrasts is used verbatim; one that does not (a
+-  // black page under a light theme) lands somewhere in between rather than
+-  // swallowing the omnibox.
+-  constexpr float kMinBandContrast = 4.5f;
+-  constexpr float kBlendStep = 0.2f;
+-  constexpr int kMaxBlendSteps = 8;
+-  const SkColor foreground = colors->GetColor(kColorToolbarText);
+-  const SkColor theme_color = colors->GetColor(kColorToolbar);
+-  SkColor tint = SkColorSetA(*page_color, SK_AlphaOPAQUE);
+-  for (int i = 0; i < kMaxBlendSteps &&
+-                  color_utils::GetContrastRatio(tint, foreground) <
+-                      kMinBandContrast;
+-       ++i) {
+-    tint = color_utils::AlphaBlend(theme_color, tint, kBlendStep);
+-  }
+-  return tint;
++  return browser_view_->GetAddressBarBandTint();
+ }
+ 
+ int BrowserViewLayoutDelegateImpl::GetExtraInfobarOffset() const {
+Index: src/chrome/browser/ui/views/frame/top_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/top_container_view.cc
++++ src/chrome/browser/ui/views/frame/top_container_view.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -31,6 +32,7 @@
+ #include "ui/compositor/layer.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/scoped_canvas.h"
++#include "ui/native_theme/native_theme.h"
+ #include "ui/views/paint_info.h"
+ #include "ui/views/view_class_properties.h"
+ 
+@@ -49,6 +51,18 @@ namespace {
+ // another window.
+ struct PageTint : public base::SupportsUserData::Data {
+   std::optional<SkColor> sampled_top;
++  // helium-fork: which color scheme the page was rendering in when the sample
++  // was taken.
++  //
++  // A sample describes one rendering of the page, and a macOS appearance change
++  // replaces that rendering everywhere at once -- including in tabs that are
++  // hidden and therefore cannot be re-sampled (SamplePageTopColor() needs a
++  // surface). Switching to such a tab published its cached colour, which now
++  // belonged to the *other* appearance: a white band over a dark page, and
++  // after switching back, a black band over a light one. Recording the scheme
++  // lets the sample retire itself instead of every scheme change having to
++  // hunt down every tab.
++  bool sampled_in_dark = false;
+   // Readback is asynchronous; a sample requested before a navigation must not
+   // be allowed to paint the new page with the old page's color.
+   int sample_generation = 0;
+@@ -188,7 +202,37 @@ void TopContainerView::ChildPreferredSiz
+ 
+ std::optional<SkColor> TopContainerView::sampled_page_top_color() const {
+   const PageTint* const tint = FindPageTint(web_contents());
+-  return tint ? tint->sampled_top : std::nullopt;
++  if (!tint || tint->sampled_in_dark != PageColorSchemeIsDark()) {
++    return std::nullopt;
++  }
++  return tint->sampled_top;
++}
++
++bool TopContainerView::PageColorSchemeIsDark() const {
++  // The page's own `prefers-color-scheme`, not the browser's chrome colors --
++  // this exists to say whether a cached sample still describes what the
++  // renderer is drawing, and that is what the renderer keys on.
++  const ui::NativeTheme* const theme = GetNativeTheme();
++  return theme && theme->preferred_color_scheme() ==
++                      ui::NativeTheme::PreferredColorScheme::kDark;
++}
++
++void TopContainerView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  // helium-fork: the appearance just changed under every tab. The active one is
++  // re-read here; the rest retire their own samples through the scheme recorded
++  // on them (see PageTint::sampled_in_dark).
++  //
++  // Posted, not called. Re-reading the colour publishes a tint, and publishing
++  // ends in Widget::ThemeChanged() -- starting a second theme propagation while
++  // views is still walking the tree for this one. That trips
++  // View::PropagateThemeChanged()'s own bookkeeping and takes the browser down
++  // with `DCHECK failed: on_theme_changed_called_` the instant macOS switches
++  // to dark mode. Nothing here needs to happen inside the propagation.
++  resample_on_next_frame_ = true;
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&TopContainerView::OnPageColorMaybeChanged,
++                                weak_factory_.GetWeakPtr()));
+ }
+ 
+ void TopContainerView::WatchPageColors(content::WebContents* contents) {
+@@ -275,6 +319,13 @@ void TopContainerView::OnRenderFrameMeta
+   // closed, and awaiting_first_frame_ keeps it to the first frame after a
+   // commit. Re-sampling on every frame would also make the band follow
+   // scrolling, which this shell has already ruled out.
++  if (resample_on_next_frame_) {
++    // helium-fork: the appearance changed, and this is the first frame the
++    // renderer has produced since. Now -- and not a guessed number of
++    // milliseconds after the switch -- is when its new colours exist to read.
++    resample_on_next_frame_ = false;
++    OnPageColorMaybeChanged();
++  }
+   if (!awaiting_first_frame_) {
+     return;
+   }
+@@ -352,6 +403,17 @@ void TopContainerView::DidFinishNavigati
+     // A new document owns the band's color only once it is the one on screen.
+     page_painted_ = false;
+     awaiting_first_frame_ = true;
++    // The sample belongs to the document that was just replaced. The
++    // generation counter stops an *in-flight* readback from landing on the new
++    // page, but the value already stored is just as wrong, and it now sits at
++    // the head of helium::ResolveBandTint()'s ladder -- leaving it would paint
++    // the new page's band in the old page's color for the whole window between
++    // first frame and first readback. Dropping it hands that window to the new
++    // document's own declared colors instead. (This does not flash the band
++    // back to the toolbar look: the page_painted_ gate above holds the previous
++    // tint until the new page is actually on screen.)
++    EnsurePageTint(navigation_handle->GetWebContents()).sampled_top =
++        std::nullopt;
+     SyncFrameMetadataObservation();
+     // Backstop, in case neither signal arrives. It is blink's own paint-holding
+     // deadline on purpose: that is exactly how long the previous page's pixels
+@@ -379,9 +441,10 @@ void TopContainerView::ReleasePagePaintG
+ 
+ void TopContainerView::OnPageColorMaybeChanged() {
+   SamplePageTopColor();
+-  // The tint is resolved in BrowserViewLayoutImpl's post-layout pass, so a
+-  // repaint alone would not pick it up.
+-  browser_view_->InvalidateLayout();
++  // The band's background is resolved in BrowserViewLayoutImpl's post-layout
++  // pass and its children cache their colors, so this goes through the single
++  // update point rather than just repainting.
++  browser_view_->UpdateAddressBarBandTint();
+ }
+ 
+ void TopContainerView::SamplePageTopColor() {
+@@ -416,7 +479,8 @@ void TopContainerView::SamplePageTopColo
+       strip, gfx::Size(1, 1), kSampleTimeout,
+       base::BindOnce(&TopContainerView::OnPageTopColorSampled,
+                      weak_factory_.GetWeakPtr(), contents->GetWeakPtr(),
+-                     ++EnsurePageTint(contents).sample_generation));
++                     ++EnsurePageTint(contents).sample_generation,
++                     PageColorSchemeIsDark()));
+ }
+ 
+ // static
+@@ -424,6 +488,7 @@ void TopContainerView::OnPageTopColorSam
+     base::WeakPtr<TopContainerView> self,
+     base::WeakPtr<content::WebContents> contents,
+     int generation,
++    bool dark_at_request,
+     const content::CopyFromSurfaceResult& result) {
+   // The tab the sample was taken from may be gone, or may no longer be the one
+   // whose color the band is showing.
+@@ -438,14 +503,29 @@ void TopContainerView::OnPageTopColorSam
+   }
+   const SkColor sampled =
+       SkColorSetA(result.value().bitmap.getColor(0, 0), SK_AlphaOPAQUE);
+-  if (tint.sampled_top == sampled) {
++  // The pixels belong to whichever appearance was on screen when the readback
++  // was *asked for*. Stamping them with the appearance at callback time is a
++  // race the appearance switch loses: the readback issued as macOS returns to
++  // light still captures the dark rendering, and labelling that "light" is how
++  // a dark band survived on a white page. Mismatched samples are thrown away;
++  // the frame the renderer submits for the new appearance triggers another one.
++  if (!self || self->PageColorSchemeIsDark() != dark_at_request) {
++    return;
++  }
++  // Stamp even when the colour is unchanged: a page that looks the same in both
++  // appearances still has to have its sample re-validated, or it stays retired
++  // for the rest of the session.
++  const bool unchanged =
++      tint.sampled_top == sampled && tint.sampled_in_dark == dark_at_request;
++  tint.sampled_in_dark = dark_at_request;
++  if (unchanged) {
+     return;
+   }
+   tint.sampled_top = sampled;
+   // The result is cached on the tab either way; only the tab that is actually
+-  // showing needs a re-layout out of it.
++  // showing needs to republish out of it.
+   if (self && self->web_contents() == contents.get()) {
+-    self->browser_view_->InvalidateLayout();
++    self->browser_view_->UpdateAddressBarBandTint();
+   }
+ }
+ 
+Index: src/chrome/browser/ui/views/toolbar/toolbar_button.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_button.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_button.cc
+@@ -20,12 +20,16 @@
+ #include "chrome/browser/themes/theme_service_factory.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/color/chrome_color_provider_utils.h"
++// helium-fork: one derivation for every foreground drawn on the band.
++#include "chrome/browser/ui/helium/arc_band_colors.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+ #include "chrome/browser/ui/views/chrome_typography.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
++// helium-fork: the Arc shell's band tint reaches buttons through this.
++#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ #include "components/user_education/common/user_education_class_properties.h"
+ #include "third_party/skia/include/core/SkPath.h"
+ #include "third_party/skia/include/core/SkRRect.h"
+@@ -247,6 +251,24 @@ SkColor ToolbarButton::GetForegroundColo
+   if (has_in_product_help_promo_) {
+     return color_provider->GetColor(kColorToolbarFeaturePromoHighlight);
+   }
++  // helium-fork: in the Arc shell the band is painted in the page's color, so
++  // the theme's icon color can be anything from perfect to invisible against
++  // it. On a tinted band, derive the icon color from what is actually behind
++  // the button. Untinted toolbars fall through to the theme unchanged.
++  if (const std::optional<SkColor> band_tint =
++          ToolbarView::GetArcBandTintFor(this)) {
++    const SkColor contrasting = helium::GetBandForegroundColor(*band_tint);
++    switch (state) {
++      case ButtonState::STATE_DISABLED:
++        return SkColorSetA(contrasting, gfx::kDisabledControlAlpha);
++      case ButtonState::STATE_HOVERED:
++      case ButtonState::STATE_PRESSED:
++      case ButtonState::STATE_NORMAL:
++        return contrasting;
++      default:
++        NOTREACHED();
++    }
++  }
+   switch (state) {
+     case ButtonState::STATE_HOVERED:
+       return color_provider->GetColor(kColorToolbarButtonIconHovered);
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -330,6 +330,9 @@ ToolbarView::ToolbarView(Browser* browse
+   }
+   views::SetCascadingColorProviderColor(this, views::kCascadingBackgroundColor,
+                                         kColorToolbar);
++  // helium-fork: SetBandTint() replaces this with a literal page color when
++  // the Arc shell tints the band, which is how the band's own children learn
++  // what they are being drawn on top of.
+ 
+   mouse_watcher_ = std::make_unique<views::MouseWatcher>(
+       std::make_unique<views::MouseWatcherViewHost>(this, gfx::Insets()), this);
+@@ -2033,6 +2036,51 @@ bool ToolbarView::ShouldShowToolbarNewTa
+   return IsDynamicLayout();
+ }
+ 
++namespace {
++
++// helium-fork: a cascading background color that is a literal value rather
++// than a color id -- the Arc shell's band color comes from the page, not from
++// the browser theme.
++class LiteralCascadingColor : public views::CascadingProperty<SkColor> {
++ public:
++  explicit LiteralCascadingColor(SkColor color) : color_(color) {}
++  SkColor GetValue(const views::View* view) const override { return color_; }
++
++ private:
++  const SkColor color_;
++};
++
++}  // namespace
++
++void ToolbarView::SetBandTint(std::optional<SkColor> tint) {
++  // helium-fork: children read this through views::GetCascadingBackgroundColor
++  // and derive a contrasting foreground from it, which is what lets a black
++  // page produce a black band with light icons instead of a grey compromise.
++  band_tint_ = tint;
++  if (tint) {
++    views::SetCascadingProperty(
++        this, views::kCascadingBackgroundColor,
++        std::make_unique<LiteralCascadingColor>(*tint));
++  } else {
++    views::SetCascadingColorProviderColor(
++        this, views::kCascadingBackgroundColor, kColorToolbar);
++  }
++}
++
++// static
++std::optional<SkColor> ToolbarView::GetArcBandTintFor(const views::View* view) {
++  for (const views::View* ancestor = view; ancestor;
++       ancestor = ancestor->parent()) {
++    if (const auto* const toolbar = views::AsViewClass<ToolbarView>(ancestor)) {
++      return toolbar->band_tint();
++    }
++  }
++  // Buttons that have been reparented out of the toolbar -- the collapse and
++  // navigation controls, which live in the sidebar's top row -- are on the app
++  // surface, not the band, and keep the theme's colors.
++  return std::nullopt;
++}
++
+ void ToolbarView::UpdateVerticalTabsCollapseButton() {
+   if (!vertical_tabs_collapse_button_) {
+     return;
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -193,6 +193,23 @@ class ToolbarView : public views::Access
+   // toolbar and the Arc shell sidebar top row. (GetBackButton() exists but
+   // is a private ToolbarButtonProvider override.)
+   ToolbarButton* back_button() const { return back_; }
++  // helium-fork: publishes the Arc shell's band color to this toolbar's
++  // children as their cascading background; nullopt restores the theme's.
++  void SetBandTint(std::optional<SkColor> tint);
++  std::optional<SkColor> band_tint() const { return band_tint_; }
++
++  // helium-fork: the band tint in effect for `view`, or nullopt if it is not
++  // inside a tinted band.
++  //
++  // The children used to answer this by comparing their cascading background
++  // against kColorToolbar, which cannot distinguish "no tint" from "tinted the
++  // same color as the theme's toolbar" -- and in light mode a plain white page
++  // samples to exactly SK_ColorWHITE, which is kColorToolbar. A one-LSB drift
++  // in the sampled color then flipped every consumer between the tinted and
++  // untinted branch at once, one of which fills the omnibox chip with a grey
++  // that has no business being on a white band. Asking for the tint itself has
++  // no such ambiguity.
++  static std::optional<SkColor> GetArcBandTintFor(const views::View* view);
+   ToolbarButton* vertical_tabs_collapse_button() const {
+     return vertical_tabs_collapse_button_;
+   }
+@@ -472,6 +489,9 @@ class ToolbarView : public views::Access
+   const raw_ptr<Browser> browser_;
+   const raw_ptr<BrowserView> browser_view_;
+ 
++  // helium-fork: see SetBandTint() / GetArcBandTintFor().
++  std::optional<SkColor> band_tint_;
++
+   // ToolbarView may or may not serve as the `ToolbarButtonProvider` for a given
+   // browser instance depending on the browser type (e.g. WebApp browsers set
+   // their own in `WebAppFrameToolbarView`). Make this optional to allow
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -11,6 +11,7 @@
+ #include <string_view>
+ #include <utility>
+ 
++#include "base/auto_reset.h"
+ #include "base/containers/adapters.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+@@ -46,6 +47,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
++#include "chrome/browser/ui/helium/arc_band_colors.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
+ #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
+@@ -172,6 +174,8 @@
+ #include "ui/events/event.h"
+ #include "ui/gfx/animation/slide_animation.h"
+ #include "ui/gfx/canvas.h"
++// helium-fork: deriving the field's colors from the Arc shell's band tint.
++#include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/gfx/image/image.h"
+ #include "ui/gfx/paint_vector_icon.h"
+@@ -1088,15 +1092,37 @@ void LocationBarView::OnThemeChanged() {
+     return;
+   }
+ 
++  // helium-fork: RefreshBackground() first, then the push. The push reads the
++  // surface the icons are drawn on, and RefreshBackground() is what moves it --
++  // computing the color before it ran meant a theme change that also moved the
++  // field's fill pushed the color for the *previous* fill.
++  RefreshBackground();
++  RefreshPushedIconColors();
++  RefreshClearAllButtonIcon();
++}
++
++void LocationBarView::RefreshPushedIconColors() {
++  // RefreshBackground() runs once from Init(), before the children this pushes
++  // into exist -- page_action_icon_controller_ is still null there, and
++  // dereferencing it is a startup SEGV. Same guard OnThemeChanged() has always
++  // had; the first real push arrives with the theme change that follows Init().
++  if (!IsInitialized()) {
++    return;
++  }
++  // helium-fork: legacy PageActionIconViews (the bookmark star, and every
++  // ContentSettingImageView) never call GetForegroundColor() -- for an icon
++  // with no label IconLabelBubbleView::IconColorShouldMatchForeground() is
++  // false, so they paint with whatever color was last pushed into them. That
++  // push used to happen only from OnThemeChanged(), which does not run when the
++  // field is focused, so the icons kept the resting color while the field they
++  // sit on changed underneath them.
+   const SkColor icon_color =
+-      GetColorProvider()->GetColor(kColorOmniboxActionIcon);
++      GetBandTint() ? helium::GetBandForegroundColor(GetFieldBackdropColor())
++                    : GetColorProvider()->GetColor(kColorOmniboxActionIcon);
+   page_action_icon_controller_->SetIconColor(icon_color);
+   for (ContentSettingImageView* image_view : content_setting_views_) {
+     image_view->SetIconColor(icon_color);
+   }
+-
+-  RefreshBackground();
+-  RefreshClearAllButtonIcon();
+ }
+ 
+ void LocationBarView::ChildPreferredSizeChanged(views::View* child) {
+@@ -1258,6 +1284,15 @@ SkColor LocationBarView::GetIconLabelBub
+   const auto color_id = ShouldShowKeywordBubble()
+                             ? kColorOmniboxKeywordSeparator
+                             : kColorOmniboxActionIcon;
++  // helium-fork: the other half of the pair. GetIconLabelBubbleBackgroundColor()
++  // below was already taught to answer with the band's surface; this one was
++  // not, so every IconLabelBubbleView in the field that has no label of its own
++  // -- the trailing page action icons -- went on asking the theme for a color
++  // chosen for a toolbar that is not there. On a dark site that is dark grey
++  // strokes on a black band, right next to a URL that had correctly gone white.
++  if (GetBandTint()) {
++    return helium::GetBandForegroundColor(GetFieldBackdropColor());
++  }
+   return GetColorProvider()->GetColor(color_id);
+ }
+ 
+@@ -1265,10 +1300,44 @@ SkAlpha LocationBarView::GetIconLabelBub
+   return 0xFF;
+ }
+ 
++std::optional<SkColor> LocationBarView::GetBandTint() const {
++  // helium-fork: in the Arc shell the band is painted in the page's color, and
++  // the field must derive its own colors from that rather than trust theme
++  // colors that assume the toolbar's own background. Ask the band whether it
++  // has a tint -- comparing the cascading color against kColorToolbar cannot
++  // tell "untinted" from "tinted white", which is every plain page in light
++  // mode.
++  return ToolbarView::GetArcBandTintFor(this);
++}
++
++SkColor LocationBarView::GetFieldBackdropColor() const {
++  const auto* const color_provider = GetColorProvider();
++  const SkColor fallback =
++      color_provider ? color_provider->GetColor(kColorToolbar)
++                     : gfx::kPlaceholderColor;
++  if (background_color_ == gfx::kPlaceholderColor) {
++    // RefreshBackground() has not run yet.
++    return GetBandTint().value_or(fallback);
++  }
++  // The field's fill is transparent at rest under the Arc shell, so what the
++  // text sits on is whatever shows through -- the band. Flattening covers both
++  // that case and the opaque ones in a single expression.
++  return color_utils::GetResultingPaintColor(background_color_,
++                                             GetBandTint().value_or(fallback));
++}
++
+ SkColor LocationBarView::GetIconLabelBubbleBackgroundColor() const {
++  if (GetBandTint()) {
++    return GetFieldBackdropColor();
++  }
+   return GetColorProvider()->GetColor(kColorLocationBarBackground);
+ }
+ 
++// static
++SkColor LocationBarView::GetBandFieldColor(SkColor tint, bool hovered) {
++  return helium::GetBandFieldColor(tint, hovered);
++}
++
+ bool LocationBarView::ShouldHideContentSettingImage() {
+   return ShouldHidePageActionIcons();
+ }
+@@ -1516,9 +1585,13 @@ void LocationBarView::RefreshBackground(
+                              ui::NativeTheme::PreferredContrast::kMore;
+ 
+   const auto* const color_provider = GetColorProvider();
+-  SkColor normal = color_provider->GetColor(kColorLocationBarBackground);
++  const std::optional<SkColor> band_tint = GetBandTint();
++  SkColor normal =
++      band_tint ? GetBandFieldColor(*band_tint, /*hovered=*/false)
++                : color_provider->GetColor(kColorLocationBarBackground);
+   SkColor hovered =
+-      color_provider->GetColor(kColorLocationBarBackgroundHovered);
++      band_tint ? GetBandFieldColor(*band_tint, /*hovered=*/true)
++                : color_provider->GetColor(kColorLocationBarBackgroundHovered);
+ 
+   background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
+   if (is_caret_visible) {
+@@ -1569,6 +1642,27 @@ void LocationBarView::RefreshBackground(
+     permission_dashboard_view_->SetDividerBackgroundColor(background_color_);
+   }
+ 
++  // helium-fork: the URL's own colors are derived from the surface it is drawn
++  // on, but they are only recomputed when the text changes -- so focusing the
++  // field, which swaps that surface out from under it, used to leave the URL
++  // painted for the old one. On a black band that meant white text left sitting
++  // on the near-white focused field: invisible. Re-derive whenever the surface
++  // actually moves. The equality check is also the recursion guard's first
++  // line: EmphasizeURLComponents() can loop back here through Update().
++  if (!refreshing_emphasis_) {
++    const SkColor backdrop = GetFieldBackdropColor();
++    if (backdrop != last_field_backdrop_) {
++      last_field_backdrop_ = backdrop;
++      base::AutoReset<bool> reentrancy_guard(&refreshing_emphasis_, true);
++      omnibox_view_->EmphasizeURLComponents();
++      // The icons that are painted with a pushed color rather than a derived
++      // one hang off the same surface, so they move with the text. Doing it
++      // here rather than in OnThemeChanged() is what makes focusing the field
++      // recolor them: there is no theme change on focus, only this one.
++      RefreshPushedIconColors();
++    }
++  }
++
+   SchedulePaint();
+ }
+ 
+@@ -2286,6 +2380,14 @@ SkColor LocationBarView::GetSecurityChip
+     id = kColorOmniboxSecurityChipDangerous;
+   }
+ 
++  // helium-fork: the danger color has to stay recognisable, so only the plain
++  // text case follows the band. It contrasts against what the chip is drawn
++  // on, which is the field, not the band -- see GetFieldBackdropColor().
++  if (id == kColorOmniboxText) {
++    if (GetBandTint()) {
++      return helium::GetBandForegroundColor(GetFieldBackdropColor());
++    }
++  }
+   return GetColorProvider()->GetColor(id);
+ }
+ 
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -261,6 +261,22 @@ class LocationBarView
+   SkAlpha GetIconLabelBubbleSeparatorAlpha() const override;
+   SkColor GetIconLabelBubbleBackgroundColor() const override;
+ 
++  // helium-fork: the Arc shell's band color when this location bar is sitting
++  // on a page-tinted band, nullopt on a plain themed toolbar.
++  std::optional<SkColor> GetBandTint() const;
++  // The field's own fill on a tinted band -- a quiet wash of the contrasting
++  // color rather than a theme color that assumes a toolbar background.
++  static SkColor GetBandFieldColor(SkColor tint, bool hovered);
++
++  // helium-fork: the opaque color the omnibox text and the security chip are
++  // actually drawn on top of. There are two backgrounds in play and conflating
++  // them is what made the URL vanish: the *band* carries the page's color and
++  // the toolbar buttons sit on it, but the *field* only matches the band while
++  // it is at rest. Focused or mid-edit, upstream deliberately swaps the field
++  // to the popup's theme color so the two read as one surface -- so anything
++  // deriving a foreground for text has to ask this, not GetBandTint().
++  SkColor GetFieldBackdropColor() const;
++
+   // ContentSettingImageViewDelegate:
+   bool ShouldHideContentSettingImage() override;
+   content::WebContents* GetContentSettingWebContents() override;
+@@ -355,6 +371,12 @@ class LocationBarView
+   // Updates the background on a theme change, or dropdown state change.
+   void RefreshBackground();
+ 
++  // helium-fork: pushes the current foreground color into the icons that
++  // paint with a pushed color rather than deriving their own. Called from
++  // RefreshBackground() when the surface under them moves, which is the
++  // only signal that fires on focus.
++  void RefreshPushedIconColors();
++
+   // Updates the visibility state of the Content Blocked icons to reflect what
+   // is actually blocked on the current page. Returns true if the visibility
+   // of at least one of the views in |content_setting_views_| changed.
+@@ -619,6 +641,14 @@ class LocationBarView
+ 
+   SkColor background_color_ = gfx::kPlaceholderColor;
+ 
++  // helium-fork: last value handed to the omnibox's text emphasis, so
++  // RefreshBackground() can re-derive the foreground only when the surface it
++  // contrasts against actually moved. The two are driven by separate signals
++  // (background by focus/hover, emphasis by text edits) and neither orders the
++  // other.
++  SkColor last_field_backdrop_ = gfx::kPlaceholderColor;
++  bool refreshing_emphasis_ = false;
++
+   // The focus manager associated with this view. The focus manager is expected
+   // to outlive this view.
+   raw_ptr<views::FocusManager> focus_manager_ = nullptr;
+Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+@@ -48,6 +48,7 @@
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_band_colors.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
+ #include "chrome/browser/ui/omnibox/clipboard_utils.h"
+@@ -62,6 +63,8 @@
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+ #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++// helium-fork: band-tinted text is derived with color_utils.
++#include "ui/gfx/color_utils.h"
+ #include "chrome/browser/ui/views/omnibox/omnibox_popup_closer.h"
+ #include "chrome/browser/ui/views/omnibox/omnibox_text_view.h"
+ #include "chrome/browser/ui/views/page_action/page_action_container_view.h"
+@@ -1366,8 +1369,26 @@ int OmniboxViewViews::GetOmniboxTextLeng
+ }
+ 
+ void OmniboxViewViews::SetEmphasis(bool emphasize, const gfx::Range& range) {
+-  const SkColor color = GetColorProvider()->GetColor(
++  SkColor color = GetColorProvider()->GetColor(
+       emphasize ? kColorOmniboxText : kColorOmniboxTextDimmed);
++  // helium-fork: on the Arc shell's page-tinted band the widget's color
++  // provider is no help -- providers are per-Widget with no subtree override,
++  // so it still answers with the app theme's near-black text and the URL
++  // disappears into a black band. Re-derive from the surface the text is
++  // actually drawn on, and dim by blending back toward it rather than by
++  // picking a second theme color.
++  //
++  // That surface is the *field*, not the band. They agree at rest -- the field
++  // is transparent there -- but focusing swaps the field to the popup's theme
++  // color while the band stays the page's, and deriving from the band then
++  // produced the worst case available: white text on a near-white field.
++  if (location_bar_view_) {
++    if (location_bar_view_->GetBandTint()) {
++      const helium::BandTextColors colors = helium::GetBandTextColors(
++          location_bar_view_->GetFieldBackdropColor());
++      color = emphasize ? colors.emphasized : colors.dimmed;
++    }
++  }
+   if (range.IsValid()) {
+     ApplyColor(color, range);
+   } else {
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -372,6 +372,7 @@ static_library("ui") {
+     "confirm_bubble.h",
+     "crypto_module_password_dialog.h",
+     "enterprise_startup_dialog.h",
++    "helium/arc_band_colors.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+@@ -6000,6 +6001,8 @@ if (enable_dice_support) {
+ # tabs, and a window is only ever compared by pointer.
+ test("helium_workspace_unittests") {
+   sources = [
++    "helium/arc_band_colors.h",
++    "helium/arc_band_colors_unittest.cc",
+     "helium_workspace/workspace_blank_tab.h",
+     "helium_workspace/workspace_blank_tab_unittest.cc",
+     "helium_workspace/workspace_entry.cc",
+@@ -6028,6 +6031,11 @@ test("helium_workspace_unittests") {
+     "//components/tabs:test_support",
+     "//testing/gmock",
+     "//testing/gtest",
++    # helium-fork: arc_band_colors.h is header-only and deliberately free of
++    # //ui/views, so the color derivations behind the address bar band can be
++    # asserted in this lightweight target. //ui/gfx:color_utils exists for
++    # exactly this ("without importing all the gfx").
++    "//ui/gfx:color_utils",
+     "//url",
+   ]
+ }
+Index: src/chrome/browser/ui/helium/arc_band_colors.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_band_colors.h
+@@ -0,0 +1,140 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_BAND_COLORS_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_BAND_COLORS_H_
++
++#include <optional>
++
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/color_utils.h"
++
++// helium-fork: color derivations for the Arc shell's page-tinted address bar
++// band.
++//
++// Every one of these takes the surface the element is *drawn on* and derives
++// from it. That is the whole point of gathering them here: the band's tint and
++// the field's fill are two different surfaces that happen to agree at rest, and
++// deriving a foreground from the wrong one is invisible text. Keeping the
++// derivations in one place with one input makes the mistake impossible to
++// re-introduce silently -- see the tests in arc_band_colors_unittest.cc.
++//
++// Header-only and free of //ui/views so it can be linked into a lightweight
++// test target (see PROGRESS.md on why anything reaching TestingProfile cannot
++// be built in this tree).
++namespace helium {
++
++// The band's tint: which of the page's colors the band takes, and when it is
++// allowed to take it.
++//
++// `declared_theme_color` is the page's <meta theme-color>, `sampled_top_color`
++// the color actually rendered at the top of the viewport, `declared_background`
++// the document background, and `previous` the tint currently on screen.
++//
++// Order matters twice over:
++//
++//  * The sampled color wins, because it is the only source that reports what is
++//    actually on screen. Both declared colors lie, in opposite directions:
++//    <meta theme-color> is a hint about browser UI and need not equal the page
++//    (YouTube's dark theme declares #212121 over a #0f0f0f page, which read as
++//    "网页是纯黑的，但是顶部背景色是带些灰的"), and the document background lies
++//    about full-bleed dark headers on light documents (films.dance reports
++//    near-white while the strip the band abuts is black, because that black is
++//    an <img> and not a background-color). The band is the page's color, so it
++//    takes the page's pixels whenever they are known.
++//
++//    The two declared colors are what the band shows in the window between a
++//    new document's first frame and its first readback, so the closer one goes
++//    first: the document background is what the page paints behind everything,
++//    while the theme color is free to differ on purpose. Ordering them this way
++//    is what keeps YouTube from stepping #212121 -> #0f0f0f in view.
++//
++//    This ordering only holds because `sampled_top_color` is cleared on a
++//    cross-document navigation (see TopContainerView::DidFinishNavigation). A
++//    stale sample at the head of the ladder would paint the band in the
++//    *previous* page's color; behind the declared colors it was merely unused.
++//
++//  * `page_painted` gates the whole ladder. The declared colors arrive while
++//    the document is being parsed, which is *before* its first frame reaches
++//    the screen -- and Chromium goes on showing the previous page's pixels for
++//    that whole window. Reading them early turned the band black several
++//    hundred milliseconds before the dark page it belonged to appeared. The
++//    band is the page's color, so it may only change when the page does.
++inline std::optional<SkColor> ResolveBandTint(
++    std::optional<SkColor> declared_theme_color,
++    std::optional<SkColor> sampled_top_color,
++    std::optional<SkColor> declared_background,
++    std::optional<SkColor> previous,
++    bool page_painted) {
++  if (!page_painted) {
++    return previous;
++  }
++  std::optional<SkColor> page_color = sampled_top_color;
++  if (!page_color) {
++    page_color = declared_background;
++  }
++  if (!page_color) {
++    page_color = declared_theme_color;
++  }
++  if (!page_color) {
++    // Sticky: a fresh navigation resets the page's declared colors before it
++    // paints anything, and snapping to nullopt here flashed the band back to
++    // the default toolbar look on every reload.
++    return previous;
++  }
++  // The band is a solid surface: every foreground in it is derived from this
++  // color, and deriving from a translucent one is how invisible text happens.
++  return SkColorSetA(*page_color, SK_AlphaOPAQUE);
++}
++
++// The color a glyph on the band is drawn in: an icon's stroke, a chip's text.
++//
++// `backdrop` must be the opaque color the glyph is actually painted on top of,
++// which for anything inside the location bar field is
++// LocationBarView::GetFieldBackdropColor() and not the band's tint -- the two
++// agree at rest and diverge the moment the field is focused.
++//
++// This exists because the derivation was copied into four call sites and one of
++// them was missed: the trailing page action icons and the bookmark star kept
++// reading the theme's icon color, so on a dark site the URL went white while
++// they stayed dark grey and vanished into the band.
++inline SkColor GetBandForegroundColor(SkColor backdrop) {
++  return color_utils::GetColorWithMaxContrast(backdrop);
++}
++
++// The colors the omnibox paints the URL in.
++struct BandTextColors {
++  // The host, and every character while a search term is being typed.
++  SkColor emphasized;
++  // The scheme, path and query -- present but receding.
++  SkColor dimmed;
++};
++
++// `backdrop` must be the opaque color the text is actually painted on top of.
++inline BandTextColors GetBandTextColors(SkColor backdrop) {
++  // Dimming blends back toward the backdrop rather than picking a second theme
++  // color, which would assume a toolbar background that is not there.
++  constexpr float kDimmedTowardBackdrop = 0.62f;
++  const SkColor contrasting = GetBandForegroundColor(backdrop);
++  return {contrasting, color_utils::AlphaBlend(contrasting, backdrop,
++                                               kDimmedTowardBackdrop)};
++}
++
++// The field's own fill on a tinted band -- a quiet wash of the contrasting
++// color rather than a theme color that assumes a toolbar background.
++//
++// Measured references for the hover value: Dia lifts its field by about 8%,
++// Zen's --zen-toolbar-element-bg-hover is rgba(0,0,0,.08)/rgba(255,255,255,.1).
++// At 18% it read as a slab of a different color sitting on the band.
++inline SkColor GetBandFieldColor(SkColor tint, bool hovered) {
++  constexpr float kFieldAlpha = 0.10f;
++  constexpr float kFieldAlphaHovered = 0.08f;
++  return color_utils::AlphaBlend(color_utils::GetColorWithMaxContrast(tint),
++                                 tint,
++                                 hovered ? kFieldAlphaHovered : kFieldAlpha);
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_BAND_COLORS_H_
+Index: src/chrome/browser/ui/helium/arc_band_colors_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_band_colors_unittest.cc
+@@ -0,0 +1,182 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_band_colors.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++// The surfaces a URL can end up drawn on in the Arc shell. The first two are
++// the band itself (the field is transparent at rest); the last two are the
++// focused/editing field, which upstream deliberately swaps to the popup's
++// theme color so the field and the dropdown read as one surface.
++constexpr SkColor kBlackPage = SkColorSetRGB(0x00, 0x00, 0x00);
++constexpr SkColor kWhitePage = SkColorSetRGB(0xFF, 0xFF, 0xFF);
++constexpr SkColor kLightThemeField = SkColorSetRGB(0xFF, 0xFF, 0xFF);
++constexpr SkColor kDarkThemeField = SkColorSetRGB(0x1F, 0x1F, 0x1F);
++
++// WCAG AA for body text. The emphasized color is the host name -- the one
++// piece of the URL a user actually reads.
++constexpr float kMinTextContrast = 4.5f;
++// The dimmed run is scheme/path/query: supporting text, held to AA-large.
++constexpr float kMinDimmedContrast = 3.0f;
++
++class ArcBandColorsTest : public testing::TestWithParam<SkColor> {};
++
++// The invariant that a whole acceptance round was lost to: the foreground is
++// derived from the surface the text sits on, so it is legible on every surface
++// -- not just on the band. Deriving from the band while the field had been
++// swapped to the theme's near-white produced white-on-white.
++TEST_P(ArcBandColorsTest, TextStaysLegibleOnItsOwnBackdrop) {
++  const SkColor backdrop = GetParam();
++  const BandTextColors colors = GetBandTextColors(backdrop);
++
++  EXPECT_GE(color_utils::GetContrastRatio(colors.emphasized, backdrop),
++            kMinTextContrast);
++  EXPECT_GE(color_utils::GetContrastRatio(colors.dimmed, backdrop),
++            kMinDimmedContrast);
++}
++
++// The dimmed run has to actually read as dimmer, or the emphasis carries no
++// information -- blending it all the way to the contrasting color would pass
++// the contrast assertion above while losing the distinction.
++TEST_P(ArcBandColorsTest, DimmedRecedesFromEmphasized) {
++  const SkColor backdrop = GetParam();
++  const BandTextColors colors = GetBandTextColors(backdrop);
++
++  EXPECT_LT(color_utils::GetContrastRatio(colors.dimmed, backdrop),
++            color_utils::GetContrastRatio(colors.emphasized, backdrop));
++}
++
++INSTANTIATE_TEST_SUITE_P(AllBackdrops,
++                         ArcBandColorsTest,
++                         testing::Values(kBlackPage,
++                                         kWhitePage,
++                                         kLightThemeField,
++                                         kDarkThemeField));
++
++// An icon on the band is held to the same bar as the text next to it. The bug
++// this pins down shipped once: the trailing page action icons and the bookmark
++// star kept the theme's icon color while the URL beside them went white, so on
++// a dark site they were dark grey strokes on a black band.
++TEST_P(ArcBandColorsTest, IconStaysLegibleOnItsOwnBackdrop) {
++  const SkColor backdrop = GetParam();
++  EXPECT_GE(color_utils::GetContrastRatio(GetBandForegroundColor(backdrop),
++                                          backdrop),
++            kMinTextContrast);
++}
++
++// Icons and the emphasized run of the URL sit on the same surface and are read
++// as one row, so they have to be the same color. Keeping this as an assertion
++// is what stops a second derivation from being introduced next to the first.
++TEST_P(ArcBandColorsTest, IconAgreesWithEmphasizedText) {
++  const SkColor backdrop = GetParam();
++  EXPECT_EQ(GetBandForegroundColor(backdrop),
++            GetBandTextColors(backdrop).emphasized);
++}
++
++// The field's wash has to be visible enough to read as a field on hover and
++// quiet enough that the band still reads as one surface with the page. 18% was
++// rejected in testing as "a slab of a different color"; Dia and Zen both sit
++// near 8%.
++TEST(ArcBandFieldColorTest, HoverWashIsQuiet) {
++  for (const SkColor tint : {kBlackPage, kWhitePage}) {
++    const SkColor hovered = GetBandFieldColor(tint, /*hovered=*/true);
++    const float lift = color_utils::GetContrastRatio(hovered, tint);
++    // A 8% wash of the max-contrast color. Expressed as a contrast ratio so
++    // the bound holds for both a black and a white band.
++    EXPECT_GT(lift, 1.0f) << "the wash must be visible at all";
++    EXPECT_LT(lift, 1.6f) << "the wash must not read as a separate surface";
++  }
++}
++
++// At rest the field is not painted at all under the Arc shell, but the value is
++// still what the icon-label bubbles blend against, so it must stay on the same
++// side of the band as the hover value rather than flipping polarity.
++TEST(ArcBandFieldColorTest, RestAndHoverAgreeOnDirection) {
++  for (const SkColor tint : {kBlackPage, kWhitePage}) {
++    const SkColor rest = GetBandFieldColor(tint, /*hovered=*/false);
++    const SkColor hovered = GetBandFieldColor(tint, /*hovered=*/true);
++    const bool tint_is_dark = color_utils::IsDark(tint);
++    EXPECT_EQ(tint_is_dark, color_utils::GetRelativeLuminance(rest) >
++                                color_utils::GetRelativeLuminance(tint));
++    EXPECT_EQ(tint_is_dark, color_utils::GetRelativeLuminance(hovered) >
++                                color_utils::GetRelativeLuminance(tint));
++  }
++}
++
++// The band is the page's color, so it may only change when the page on screen
++// changes. The declared colors of a document arrive while it is being parsed --
++// several hundred milliseconds before its first frame reaches the screen, all
++// of which Chromium spends still showing the previous page. Reading them early
++// is what turned the address bar black on top of a page that had not loaded
++// yet.
++TEST(ResolveBandTintTest, HoldsPreviousUntilThePageHasPainted) {
++  EXPECT_EQ(kWhitePage,
++            ResolveBandTint(kBlackPage, kBlackPage, kBlackPage, kWhitePage,
++                            /*page_painted=*/false));
++  // Including the case where there is nothing to hold onto yet.
++  EXPECT_EQ(std::nullopt,
++            ResolveBandTint(kBlackPage, kBlackPage, kBlackPage, std::nullopt,
++                            /*page_painted=*/false));
++  // And the same inputs, once the page is up, do move the band.
++  EXPECT_EQ(kBlackPage,
++            ResolveBandTint(kBlackPage, kBlackPage, kBlackPage, kWhitePage,
++                            /*page_painted=*/true));
++}
++
++// The sample is the only source that reports what is actually on screen, so it
++// wins outright. Both declared colors are free to disagree with the page, in
++// opposite directions, and each has been caught doing it on a real site.
++TEST(ResolveBandTintTest, PrefersSampledThenDocumentThenDeclared) {
++  constexpr SkColor kSampled = SkColorSetRGB(0x11, 0x22, 0x33);
++  EXPECT_EQ(kSampled, ResolveBandTint(kBlackPage, kSampled, kWhitePage,
++                                      std::nullopt, /*page_painted=*/true));
++  EXPECT_EQ(kWhitePage, ResolveBandTint(kBlackPage, std::nullopt, kWhitePage,
++                                        std::nullopt, /*page_painted=*/true));
++  EXPECT_EQ(kBlackPage,
++            ResolveBandTint(kBlackPage, std::nullopt, std::nullopt,
++                            std::nullopt, /*page_painted=*/true));
++}
++
++// YouTube's dark theme declares theme-color #212121 over a page that renders
++// #0f0f0f, which the user saw as "网页是纯黑的，但是顶部背景色是带些灰的". Two
++// invariants come out of that one site: the sample beats the declaration, and
++// the pre-readback stand-in is the document background rather than the theme
++// color, so the band does not visibly step from one to the other.
++TEST(ResolveBandTintTest, DeclaredThemeColorNeverOverridesThePixels) {
++  constexpr SkColor kDeclared = SkColorSetRGB(0x21, 0x21, 0x21);
++  constexpr SkColor kRendered = SkColorSetRGB(0x0f, 0x0f, 0x0f);
++  EXPECT_EQ(kRendered, ResolveBandTint(kDeclared, kRendered, kRendered,
++                                       std::nullopt, /*page_painted=*/true));
++  // Before the first readback lands, the document background stands in -- and
++  // on this site it already equals the rendered color, so there is no step.
++  EXPECT_EQ(kRendered, ResolveBandTint(kDeclared, std::nullopt, kRendered,
++                                       std::nullopt, /*page_painted=*/true));
++}
++
++// A reload clears every declared color for a moment. Snapping to nullopt there
++// flashed the whole band back to the default toolbar look.
++TEST(ResolveBandTintTest, StaysOnTheLastColorWhenEverySourceIsEmpty) {
++  EXPECT_EQ(kBlackPage,
++            ResolveBandTint(std::nullopt, std::nullopt, std::nullopt,
++                            kBlackPage, /*page_painted=*/true));
++}
++
++// Every foreground in the band is derived from this color, and deriving from a
++// translucent one is how invisible text happens.
++TEST(ResolveBandTintTest, OutputIsAlwaysOpaque) {
++  constexpr SkColor kTranslucent = SkColorSetARGB(0x40, 0x20, 0x30, 0x40);
++  const std::optional<SkColor> tint =
++      ResolveBandTint(kTranslucent, std::nullopt, std::nullopt, std::nullopt,
++                      /*page_painted=*/true);
++  ASSERT_TRUE(tint.has_value());
++  EXPECT_EQ(SK_AlphaOPAQUE, SkColorGetA(*tint));
++  EXPECT_EQ(SkColorSetRGB(0x20, 0x30, 0x40), *tint);
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/views/frame/top_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/top_container_view.h
++++ src/chrome/browser/ui/views/frame/top_container_view.h
+@@ -77,6 +77,10 @@ class TopContainerView : public views::V
+   // cache handed a freshly activated tab whatever the *previous* tab had
+   // sampled until the new tab's readback returned -- the band showed a color
+   // that was not merely stale but belonged to another page.
++  // Nullopt as well once the appearance has changed under it: a sample
++  // describes one rendering, and a hidden tab cannot be re-sampled at the
++  // moment macOS switches to dark mode, so it would otherwise hand the band a
++  // colour from the other appearance the next time it is activated.
+   std::optional<SkColor> sampled_page_top_color() const;
+ 
+   // helium-fork: whether the document that is currently on screen has produced
+@@ -93,6 +97,11 @@ class TopContainerView : public views::V
+   // together.
+   bool page_painted() const { return page_painted_; }
+ 
++  // views::View:
++  // helium-fork: a macOS appearance change re-renders every page. The active
++  // tab is re-read here; hidden ones retire their own samples.
++  void OnThemeChanged() override;
++
+   // content::WebContentsObserver:
+   void DidChangeThemeColor() override;
+   void OnBackgroundColorChanged() override;
+@@ -141,12 +150,19 @@ class TopContainerView : public views::V
+   // change has to ask for one.
+   void OnPageColorMaybeChanged();
+ 
++  // helium-fork: the color scheme the *page* is rendering in right now, which
++  // is what a cached sample has to still agree with to be usable.
++  bool PageColorSchemeIsDark() const;
++
+   // helium-fork: asks the compositor for the top strip of the viewport.
+   void SamplePageTopColor();
+   static void OnPageTopColorSampled(
+       base::WeakPtr<TopContainerView> self,
+       base::WeakPtr<content::WebContents> contents,
+       int generation,
++      // The appearance the readback was requested under; the result is
++      // discarded if it no longer matches (see the .cc).
++      bool dark_at_request,
+       const content::CopyFromSurfaceResult& result);
+ 
+   // helium-fork: releases the page_painted() gate. Called from the frame
+@@ -171,6 +187,10 @@ class TopContainerView : public views::V
+   raw_ptr<content::RenderWidgetHost> observed_widget_ = nullptr;
+ 
+   // helium-fork: see page_painted().
++  // helium-fork: set by OnThemeChanged(), consumed by the first frame the
++  // renderer submits afterwards -- the only signal that says its new colours
++  // are ready to be read.
++  bool resample_on_next_frame_ = false;
+   bool page_painted_ = true;
+   // Only the *first* frame after a commit opens the gate; metadata arrives for
+   // every frame the renderer submits, including the old document's.

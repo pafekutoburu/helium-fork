@@ -1,0 +1,317 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -225,7 +225,9 @@
+ #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_coordinator.h"
+ #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
+ #include "chrome/browser/ui/views/toolbar/reload_control.h"
++#include "chrome/browser/ui/views/toolbar/reload_button.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
++#include "ui/views/layout/flex_layout_types.h"
+ #include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
+ #include "chrome/browser/ui/views/translate/translate_bubble_view.h"
+ #include "chrome/browser/ui/views/update_recommended_message_box.h"
+@@ -2180,39 +2182,147 @@ void BrowserView::UpdateArcSidebarContro
+     return;
+   }
+ 
+-  auto* const controller =
+-      tabs::VerticalTabStripStateController::From(browser_);
+-  const bool wants_sidebar = controller &&
+-                             controller->ShouldDisplayVerticalTabs() &&
+-                             GetIsNormalType();
++  const bool wants_sidebar = IsArcSidebarTopRowOnScreen();
+   ArcSidebarTopContainer* const top_row =
+       vertical_tab_strip_region_view_->arc_top_container();
++  bool moved = false;
++
++  // Record every original toolbar slot BEFORE moving any of them, and only
++  // once. Recording as we go is wrong twice over: removing one control shifts
++  // the indices of everything after it, and re-recording on a later pass would
++  // capture those already-shifted values. Both make the controls come back in
++  // reverse order (measured: the collapsed toolbar read collapse/reload/
++  // forward/back). The slots never change afterwards, so once is enough.
++  const auto record_toolbar_slot = [&](views::View* view,
++                                       std::optional<size_t>& slot) {
++    if (view && !slot.has_value() && view->parent() == toolbar_) {
++      slot = toolbar_->GetIndexOf(view);
++    }
++  };
++  record_toolbar_slot(collapse_button, arc_collapse_button_toolbar_index_);
++  record_toolbar_slot(toolbar_->back_button(), arc_back_button_toolbar_index_);
++  record_toolbar_slot(toolbar_->forward_button(),
++                      arc_forward_button_toolbar_index_);
++  record_toolbar_slot(toolbar_->reload_button(),
++                      arc_reload_button_toolbar_index_);
+ 
+   if (wants_sidebar) {
+     if (collapse_button->parent() != top_row) {
+-      if (collapse_button->parent() == toolbar_) {
+-        arc_collapse_button_toolbar_index_ =
+-            toolbar_->GetIndexOf(collapse_button);
+-      }
+       // Drop toolbar-edge margins the button may carry over (Fitts margins
+       // from a maximized window); the top row lays it out from scratch.
+       collapse_button->SetLeadingMargin(0);
+       collapse_button->SetTrailingMargin(0);
+       top_row->AddLeadingControl(collapse_button);
++      moved = true;
+     }
+   } else if (collapse_button->parent() != toolbar_) {
+     const size_t insertion_index =
+         std::min(arc_collapse_button_toolbar_index_.value_or(size_t{0}),
+                  toolbar_->children().size());
+     toolbar_->AddChildViewAt(collapse_button, insertion_index);
++    moved = true;
+   }
+ 
+-  toolbar_->UpdateToolbarLayout();
++  // helium-fork: back/forward/reload live at the trailing end of the sidebar's
++  // top row, right-aligned, in EVERY address bar mode.
++  //
++  // They are sidebar controls, not band controls. An earlier round put them in
++  // the band whenever the band existed and only moved them into the row in the
++  // hidden mode; that was wrong, and the correction has been asked for three
++  // times. Arc agrees: with its toolbar enabled the toolbar carries the URL
++  // and its trailing icons only -- the navigation buttons stay in the sidebar.
++  //
++  // Any of them may be absent under the WebUI toolbar features. In the row
++  // they carry an allocation order so a narrow sidebar drops reload first,
++  // then forward; back and the collapse button always stay. On the way out
++  // they are restored to their original toolbar slots with the toolbar's own
++  // both-axes preferred spec (matching ToolbarView::Init).
++  const auto place_nav_control = [&](ToolbarButton* button,
++                                     std::optional<size_t>& toolbar_index,
++                                     int row_flex_order) {
++    if (!button) {
++      return;
++    }
++    if (wants_sidebar) {
++      if (button->parent() == top_row) {
++        return;
++      }
++      button->SetLeadingMargin(0);
++      button->SetTrailingMargin(0);
++      button->SetProperty(
++          views::kFlexBehaviorKey,
++          views::FlexSpecification(views::LayoutOrientation::kHorizontal,
++                                   views::MinimumFlexSizeRule::kPreferred,
++                                   views::MaximumFlexSizeRule::kPreferred)
++              .WithOrder(row_flex_order));
++      top_row->AddTrailingControl(button);
++      moved = true;
++    } else if (button->parent() != toolbar_) {
++      button->SetProperty(
++          views::kFlexBehaviorKey,
++          views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
++                                   views::MaximumFlexSizeRule::kPreferred));
++      toolbar_->AddChildViewAt(button,
++                               std::min(toolbar_index.value_or(size_t{0}),
++                                        toolbar_->children().size()));
++      moved = true;
++    }
++  };
++  // AddTrailingControl() appends, so call order is left-to-right: the row
++  // reads back / forward / reload against its right edge. The flex orders run
++  // the other way -- lower is laid out first, so reload (4) is the first to be
++  // dropped when the sidebar is too narrow, then forward (3); back (2) stays.
++  place_nav_control(toolbar_->back_button(), arc_back_button_toolbar_index_,
++                    /*row_flex_order=*/2);
++  place_nav_control(toolbar_->forward_button(),
++                    arc_forward_button_toolbar_index_, /*row_flex_order=*/3);
++  place_nav_control(toolbar_->reload_button(), arc_reload_button_toolbar_index_,
++                    /*row_flex_order=*/4);
++
++  // This runs on every reveal-animation frame; only pay for a relayout when
++  // something actually changed host.
++  if (moved) {
++    toolbar_->UpdateToolbarLayout();
++  }
++}
++
++bool BrowserView::IsArcSidebarTopRowOnScreen() const {
++  // helium-fork: whether the sidebar's top row is somewhere the user can see
++  // and click it. Docked, obviously; and also while the hidden sidebar is
++  // revealed as a floating card, which is the case the collapse button used to
++  // fall through -- it went back to the toolbar the moment the sidebar hid, so
++  // the hover-revealed card came up with an empty top row and the Favorites
++  // placeholder sitting directly under the traffic lights.
++  //
++  // A commanded hide is the exception. There the layout flips to the collapsed
++  // geometry in one atomic step and the card then slides out *over* it, so the
++  // reveal ratio stays at 1 for the whole 200ms slide -- which left the four
++  // controls in the departing card while the toolbar had already moved to its
++  // collapsed x. The URL sat at a third position for the length of the slide
++  // and jumped again when they finally arrived: "cmd+s 开合，域名的位置会闪…
++  // 中间有跳动". The hand-off belongs in the same atomic flip as the geometry;
++  // the card is on its way off screen and nobody reads its top row. Only
++  // kSliding is tested, so the hover-revealed card above is untouched.
++  if (sidebar_toggle_phase_ == SidebarTogglePhase::kSliding) {
++    return false;
++  }
++  auto* const controller =
++      tabs::VerticalTabStripStateController::From(browser_);
++  if (!controller || !controller->ShouldDisplayVerticalTabs() ||
++      !GetIsNormalType()) {
++    return false;
++  }
++  return !IsSidebarHiddenModeActive() || GetSideChromeRevealRatio() > 0.0f;
+ }
+ 
+ void BrowserView::OnSidebarCollapseStateChanged(
+     tabs::VerticalTabStripCollapseState state) {
+-  // helium-fork: keep the reveal ratio in step with the collapse state so the
++  // helium-fork: the collapse button changes host with the sidebar (top row
++  // while it is on screen, toolbar leading edge once it is hidden), so this
++  // runs before the early return below -- the move belongs inside the same
++  // atomic flip as everything else the choreography does.
++  UpdateArcSidebarControlPlacement();
++  // keep the reveal ratio in step with the collapse state so the
+   // hidden strip conceals/reveals instantly with the toggle -- in every
+   // address bar mode, zen included, since zen no longer owns the sidebar.
+   // While the toggle choreography runs it owns the animation -- the
+@@ -2266,10 +2376,20 @@ bool BrowserView::MaybeHandleSidebarColl
+     // -- and slide the card out over the new contents.
+     ArmContentsResizeHold();
+     zen_side_chrome_animation_.Reset(1);
++    // helium-fork: entering the phase before the flip, not after it. The
++    // collapse and navigation controls hand off from the card's top row to the
++    // toolbar on this predicate (IsArcSidebarTopRowOnScreen), and the hand-off
++    // has to land inside the atomic flip below -- deferred to the end of the
++    // slide it moved the URL a second time, 200ms after the geometry moved it.
++    sidebar_toggle_phase_ = SidebarTogglePhase::kSliding;
+     vertical_tab_strip_region_view_->StartCollapseMotionNow(true);
++    // The collapse-state notification that would normally do this arrives on
++    // the next tick, which is after the flip below. Doing it here is what puts
++    // the hand-off and the geometry in the same frame; the notification's own
++    // call is idempotent.
++    UpdateArcSidebarControlPlacement();
+     DeprecatedLayoutImmediately();
+     DisarmContentsResizeHold();
+-    sidebar_toggle_phase_ = SidebarTogglePhase::kSliding;
+     zen_side_chrome_animation_.Hide();
+   } else {
+     // SHOW: one atomic flip -- the docked sidebar and the resized contents
+@@ -2287,6 +2407,9 @@ void BrowserView::RunSidebarDockFlip() {
+   sidebar_toggle_phase_ = SidebarTogglePhase::kFlipping;
+   ArmContentsResizeHold();
+   vertical_tab_strip_region_view_->StartCollapseMotionNow(false);
++  // Symmetric with the hide path: hand the controls back inside the flip
++  // rather than a tick later, so the URL moves once.
++  UpdateArcSidebarControlPlacement();
+   DeprecatedLayoutImmediately();
+   DisarmContentsResizeHold();
+   sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
+@@ -6983,6 +7106,10 @@ void BrowserView::AnimationProgressed(co
+     // ties it to the top chrome, the hidden sidebar ties it to the floating
+     // card -- so route every frame through the single write point.
+     UpdateCaptionButtonsOpacityForChromeState();
++    // The floating card carries the top row's controls while it is revealed,
++    // so the hand-off rides the same ratio. This is a no-op on all but the
++    // two frames where the ratio leaves or reaches zero.
++    UpdateArcSidebarControlPlacement();
+   }
+ }
+ 
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -975,9 +975,12 @@ class BrowserView : public BrowserWindow
+   // mode -- the fully-hidden floating sidebar state (Arc behavior).
+   bool IsSidebarHiddenModeActive() const;
+   // helium-fork: moves the toolbar's sidebar-bound controls (the collapse
+-  // button) into the Arc shell top row while the vertical layout is active,
+-  // and returns them to their recorded toolbar slots otherwise.
++  // button and back/forward/reload) into the Arc shell top row while that row
++  // is on screen, and returns them to their recorded toolbar slots otherwise.
+   void UpdateArcSidebarControlPlacement();
++  // helium-fork: whether the Arc shell's sidebar top row is visible and
++  // clickable -- docked, or hidden but revealed as a floating card.
++  bool IsArcSidebarTopRowOnScreen() const;
+   // helium-fork: single write point for the macOS window-control opacity.
+   // Zen fades them with the top chrome, the hidden sidebar fades them with
+   // the floating card, and every other state keeps them fully shown.
+@@ -1283,9 +1286,13 @@ class BrowserView : public BrowserWindow
+   // fullscreen mode. See BrowserView::ReparentTopContainerForEndOfImmersive.
+   std::optional<size_t> horizontal_tab_strip_region_insertion_index_;
+ 
+-  // helium-fork: toolbar slot the collapse button returns to when it leaves
+-  // the Arc shell sidebar top row (same pattern as the tab strip index above).
++  // helium-fork: toolbar slots the sidebar-bound controls return to when they
++  // leave the Arc shell sidebar top row (same pattern as the tab strip index
++  // above).
+   std::optional<size_t> arc_collapse_button_toolbar_index_;
++  std::optional<size_t> arc_back_button_toolbar_index_;
++  std::optional<size_t> arc_forward_button_toolbar_index_;
++  std::optional<size_t> arc_reload_button_toolbar_index_;
+ 
+   // The Toolbar containing the navigation buttons, menus and the address bar.
+   raw_ptr<ToolbarView> toolbar_ = nullptr;
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -1868,7 +1868,9 @@ void ToolbarView::LayoutCommon() {
+   if (features::IsWebUIBackForwardButtonEnabled()) {
+     toolbar_webview_->SetBackButtonLeadingMargin(
+         collapse_button_on_leading_edge ? 0 : margin);
+-  } else {
++  } else if (back_ && back_->parent() == this) {
++    // helium-fork: the button takes no toolbar edge margins while it lives
++    // in the Arc shell sidebar top row.
+     back_->SetLeadingMargin(collapse_button_on_leading_edge ? 0 : margin);
+   }
+ 
+@@ -2038,11 +2040,12 @@ void ToolbarView::UpdateVerticalTabsColl
+ 
+   auto* controller =
+       tabs::VerticalTabStripStateController::From(browser_view_->browser());
+-  const bool zen_hide = browser_view_->IsZenModeEnabledForLayout() &&
+-                        !browser_view_->IsZenModeSideChromePinned();
++  // helium-fork: the collapse button is the only way back to a hidden
++  // sidebar, so the Arc shell always offers it -- zen included. Upstream hid
++  // it whenever zen's side chrome was unpinned, which in this fork is exactly
++  // the state where it is needed most.
+   const bool should_show = controller && IsVerticalLayout() &&
+-                           show_vertical_tabs_collapse_button_.GetValue() &&
+-                           !zen_hide;
++                           show_vertical_tabs_collapse_button_.GetValue();
+   vertical_tabs_collapse_button_->SetVisible(should_show);
+ 
+   if (!should_show) {
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -189,8 +189,10 @@ class ToolbarView : public views::Access
+     return extensions_container_;
+   }
+   ToolbarButton* forward_button() const { return forward_; }
+-  // helium-fork: exposed so BrowserView can move the button between this
+-  // toolbar and the Arc shell sidebar top row.
++  // helium-fork: exposed so BrowserView can move these buttons between this
++  // toolbar and the Arc shell sidebar top row. (GetBackButton() exists but
++  // is a private ToolbarButtonProvider override.)
++  ToolbarButton* back_button() const { return back_; }
+   ToolbarButton* vertical_tabs_collapse_button() const {
+     return vertical_tabs_collapse_button_;
+   }
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -1538,8 +1538,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       const BrowserLayoutExclusionArea& side_exclusion =
+           vertical_right_aligned ? browser_params.trailing_exclusion
+                                  : browser_params.leading_exclusion;
++      // The reservation uses the bare content width -- the exclusion's
++      // horizontal padding is a toolbar aesthetic, and spending it here
++      // starves the row's flex spacer at the default sidebar width.
+       const int exclusion_width =
+-          base::ClampCeil(side_exclusion.ContentWithPadding().width());
++          base::ClampCeil(side_exclusion.content.width());
+       const int exclusion_height =
+           base::ClampCeil(side_exclusion.ContentWithPadding().height());
+       const int side_distance_from_client_edge =

@@ -1,0 +1,621 @@
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -66,6 +66,7 @@
+ #include "chrome/browser/ui/tabs/public/tab_features.h"
+ #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+@@ -101,6 +102,8 @@
+ #include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
+ #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
+ #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
++// helium-fork: the Arc band's field radius is concentric with the card's.
++#include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ #include "chrome/browser/ui/views/user_education/browser_help_bubble.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+@@ -324,6 +327,19 @@ void LocationBarView::Init() {
+   // not prepared for that.
+   DCHECK(GetWidget());
+ 
++  // helium-fork: hover has to mean "the pointer is anywhere in the field",
++  // including on its icons.
++  //
++  // Without this, RootView delivers the exit only to whichever descendant was
++  // last under the pointer, so leaving the field from one of its icons told
++  // nobody -- the hover tween never ran down and the revealed icons stayed put
++  // until an unrelated relayout removed them ("鼠标移走之后，icon 就该消失的，
++  // 但现在没有，且网页往下滚动之后，这些 icon 又消失了"). RootView only
++  // notifies an ancestor when the new target is outside it
++  // (NotifyEnterExitOfDescendant breaks on `p->Contains(sibling)`), so this
++  // costs nothing on icon-to-icon moves.
++  SetNotifyEnterExitOnChild(true);
++
+   // Note that children with layers are *not* clipped, because focus rings have
+   // to draw outside the parent's bounds.
+   SetPaintToLayer();
+@@ -597,6 +613,16 @@ bool LocationBarView::IsInitialized() co
+ }
+ 
+ int LocationBarView::GetBorderRadius() const {
++  // helium-fork: on the Arc band the field is concentric with the card it sits
++  // in rather than carrying its own flat 8. One chain, three radii: the system
++  // window radius, the card at radius - kHeliumBasePadding, and the field at
++  // one more inset in again. A change to the system radius then moves all of
++  // them together instead of leaving a mismatched pill in the corner.
++  if (ShouldMinimizeArcChrome()) {
++    return std::max(0, GetPaddedFrameRadius() -
++                           GetLayoutConstant(
++                               LayoutConstant::kHeliumBasePadding));
++  }
+   return ComputeBorderRadius(size());
+ }
+ 
+@@ -613,8 +639,9 @@ std::unique_ptr<views::Background> Locat
+     gfx::Size size,
+     SkBlendMode blend_mode,
+     bool antialias,
+-    bool should_border_scale) {
+-  const int radius = ComputeBorderRadius(size);
++    bool should_border_scale,
++    std::optional<int> radius_override) {
++  const int radius = radius_override.value_or(ComputeBorderRadius(size));
+   auto painter =
+       stroke_color == SK_ColorTRANSPARENT
+           ? views::Painter::CreateSolidRoundRectPainter(
+@@ -789,6 +816,37 @@ gfx::Size LocationBarView::CalculatePref
+   }
+ 
+   const int min_width = GetMinimumSize().width();
++
++  // helium-fork: in the Arc shell the field takes a fixed share of the band
++  // rather than the whole of it. Filling the band is upstream's way of pushing
++  // the trailing toolbar buttons to the right edge -- but it also means the
++  // hover wash and the focus ring are drawn across the entire width of the
++  // window, which is what made a quiet 8% tint read as a slab. The toolbar has
++  // a dedicated flexible spacer for the right-alignment job (see ToolbarView),
++  // leaving the width free to be chosen.
++  //
++  // Two fifths, measured against the *toolbar's* width rather than
++  // `available_size`: the latter is whatever FlexLayout has left to offer at
++  // this point in its allocation, so it shrinks as extensions appear and the
++  // field would drift with them. (Sizing to the domain instead was tried and
++  // came out too small beside the empty band: "现在网址栏的宽度有些小了,我觉得
++  // 宽度占工具栏总长度的 2/5 比较适合". The golden ratio's 0.382 lands within
++  // 20px of this on a 1074pt band, so it is not worth a second knob.)
++  //
++  // This runs ahead of the kOmniboxResizingPrioritization branch below, whose
++  // whole purpose is the opposite: take all the space that is offered.
++  if (ShouldMinimizeArcChrome()) {
++    constexpr float kBandFraction = 2.0f / 5.0f;
++    const int band_width = parent() ? parent()->width() : 0;
++    int width = std::max(static_cast<int>(band_width * kBandFraction),
++                         min_width);
++    if (available_size.width().is_bounded()) {
++      width = std::min(
++          width, std::max(min_width, available_size.width().value()));
++    }
++    return gfx::Size(width, height);
++  }
++
+   if (base::FeatureList::IsEnabled(features::kOmniboxResizingPrioritization)) {
+     // If space is bounded, take all available space down to the min width.
+     if (available_size.width().is_bounded()) {
+@@ -912,6 +970,25 @@ void LocationBarView::Layout(PassKey) {
+     }
+   }
+ 
++  // helium-fork: at rest the Arc field is the site settings icon and the
++  // domain, nothing else -- the trailing decoration containers stay out of the
++  // layout until hover or focus reveals them. Permission chips and
++  // content-setting indicators are exempt: they are consent surfaces, not
++  // chrome.
++  //
++  // The leading icon deliberately stays: it is half of the resting state, and
++  // it is also what keeps the domain from moving when the reveal happens. A
++  // decoration appearing on the *leading* side shifts the text; ones appearing
++  // on the trailing side only grow the field to the right.
++  const bool arc_minimal_rest = ComputeArcMinimalRest();
++  // Remember what this pass applied, so UpdateArcMinimalDecorations() can tell
++  // whether a later state change actually needs another one.
++  arc_minimal_rest_ = arc_minimal_rest;
++  // The containers enter the layout at the reveal's current opacity rather than
++  // at full strength, and a decoration that appears mid-reveal gets the same
++  // treatment as the ones already there.
++  UpdateArcRevealOpacity();
++
+   if (ShouldShowKeywordBubble()) {
+     location_icon_view_->SetVisible(false);
+     leading_decorations.AddDecoration(
+@@ -960,6 +1037,10 @@ void LocationBarView::Layout(PassKey) {
+       (info.num_legacy_page_actions_shown == 0) && !all_page_actions_migrated
+           ? 4
+           : trailing_decorations_edge_padding;
++  // helium-fork: see arc_minimal_rest above -- both page action containers
++  // sit out the rest state and fade back with the hover/focus reveal.
++  page_action_icon_container_->SetVisible(!arc_minimal_rest);
++  page_action_container_->SetVisible(!arc_minimal_rest);
+   add_trailing_decoration(page_action_icon_container_,
+                           /*intra_item_padding=*/0,
+                           /*edge_padding=*/
+@@ -1269,6 +1350,128 @@ SkAlpha LocationBarView::GetIconLabelBub
+   return 0xFF;
+ }
+ 
++bool LocationBarView::ShouldMinimizeArcChrome() const {
++  // helium-fork: the Dia/Zen field treatment -- at rest nothing but the
++  // domain. Skipped for popup windows and under high-contrast preferences
++  // (a hidden field boundary is an accessibility regression there).
++  if (is_popup_mode_ || !browser_ || !browser_->is_type_normal()) {
++    return false;
++  }
++  // View::GetNativeTheme() DCHECKs without a widget (ui/views/view.cc), and
++  // this is reached from GetBorderRadius() in the constructor, before the
++  // field has one. Nothing is painted yet at that point, so answering "no" is
++  // both safe and correct; the first real layout asks again.
++  if (!GetWidget()) {
++    return false;
++  }
++  if (GetNativeTheme()->preferred_contrast() ==
++      ui::NativeTheme::PreferredContrast::kMore) {
++    return false;
++  }
++  auto* const controller =
++      tabs::VerticalTabStripStateController::From(browser_);
++  return controller && controller->ShouldDisplayVerticalTabs();
++}
++
++bool LocationBarView::IsArcChromeRevealed() const {
++  return hover_animation_.IsShowing() ||
++         hover_animation_.GetCurrentValue() > 0.0 ||
++         (omnibox_view_ && omnibox_view_->HasFocus()) ||
++         GetOmniboxController()->edit_model()->user_input_in_progress();
++}
++
++bool LocationBarView::ComputeArcMinimalRest() const {
++  return ShouldMinimizeArcChrome() && !IsArcChromeRevealed();
++}
++
++void LocationBarView::UpdateArcMinimalDecorations() {
++  // helium-fork: compare against what Layout() last applied rather than
++  // invalidating unconditionally.
++  //
++  // The hover tween decides this state and keeps running for 200ms after the
++  // pointer leaves, so the single invalidation at mouse-exit still computed
++  // "revealed" -- and nothing invalidated again when the tween reached zero,
++  // because AnimationProgressed only repaints. The revealed icons then sat
++  // there until some unrelated relayout swept them up: "鼠标移走之后，icon 就该
++  // 消失的，但现在没有，且网页往下滚动之后，这些 icon 又消失了". Calling this
++  // from the animation callbacks as well makes the flip land on the frame it
++  // actually happens, and the equality check keeps that to one relayout rather
++  // than one per animation frame.
++  if (!ShouldMinimizeArcChrome() ||
++      ComputeArcMinimalRest() == arc_minimal_rest_) {
++    return;
++  }
++  InvalidateLayout();
++}
++
++double LocationBarView::GetArcRevealAmount() const {
++  if (!ShouldMinimizeArcChrome()) {
++    return 1.0;
++  }
++  // Focus and in-progress input are deliberate acts, and upstream snaps the
++  // field's background for them rather than transitioning (OnOmniboxFocused
++  // resets the tween). The decorations snap with it.
++  if ((omnibox_view_ && omnibox_view_->HasFocus()) ||
++      GetOmniboxController()->edit_model()->user_input_in_progress()) {
++    return 1.0;
++  }
++  return hover_animation_.GetCurrentValue();
++}
++
++namespace {
++
++// helium-fork: a Label painting with subpixel anti-aliasing DCHECKs unless it
++// can find an opaque background or an opaque layer above it (Label::PaintText).
++// The reveal fade gives the decoration containers a non-opaque layer, so the
++// labels inside them -- page action chips expand into one at any time -- have
++// to waive that check, exactly as the icon-label crossfade strategy does.
++void WaiveSubpixelOpacityCheck(views::View* view) {
++  if (auto* const label = views::AsViewClass<views::Label>(view)) {
++    label->SetSkipSubpixelRenderingOpacityCheck(true);
++  }
++  for (views::View* child : view->children()) {
++    WaiveSubpixelOpacityCheck(child);
++  }
++}
++
++}  // namespace
++
++void LocationBarView::UpdateArcRevealOpacity() {
++  // helium-fork: the field's wash and the trailing icons are two halves of one
++  // reveal, and they used to read the same animation on two different curves --
++  // the wash tweened over 200ms while the icons rode a boolean that only
++  // flipped once the tween reached exactly zero. Leaving the field, the
++  // background faded out and the icons stayed at full strength behind it for
++  // the whole animation before popping ("背景色先消失，图标后消失"). Driving
++  // their opacity from the same value is what makes them one thing.
++  views::View* const containers[2] = {page_action_icon_container_,
++                                      page_action_container_};
++  const bool minimize = ShouldMinimizeArcChrome();
++  const float amount = static_cast<float>(GetArcRevealAmount());
++  for (size_t i = 0; i < std::size(containers); ++i) {
++    views::View* const container = containers[i];
++    if (!container) {
++      continue;
++    }
++    if (!minimize) {
++      if (arc_reveal_layer_owned_[i]) {
++        container->DestroyLayer();
++        arc_reveal_layer_owned_[i] = false;
++      } else if (container->layer()) {
++        container->layer()->SetOpacity(1.0f);
++      }
++      continue;
++    }
++    if (!container->layer()) {
++      container->SetPaintToLayer();
++      container->layer()->SetFillsBoundsOpaquely(false);
++      arc_reveal_layer_owned_[i] = true;
++    }
++    WaiveSubpixelOpacityCheck(container);
++    container->layer()->SetOpacity(amount);
++  }
++}
++
+ std::optional<SkColor> LocationBarView::GetBandTint() const {
+   // helium-fork: in the Arc shell the band is painted in the page's color, and
+   // the field must derive its own colors from that rather than trust theme
+@@ -1538,7 +1741,13 @@ int LocationBarView::GetMinimumTrailingW
+ }
+ 
+ gfx::Rect LocationBarView::GetLocalBoundsWithoutEndcaps() const {
+-  const int border_radius = GetBorderRadius();
++  // helium-fork: deliberately the stock metric, not GetBorderRadius(). This
++  // insets the text area by the radius at each end, and the Arc band's larger
++  // concentric radius would quietly cost the domain 3px on either side --
++  // CalculatePreferredSize() does not account for the endcaps, so domains that
++  // fit today would start eliding. The endcap is about keeping text off the
++  // curve, and the curve it has to clear is the same size as before.
++  const int border_radius = ComputeBorderRadius(size());
+   gfx::Rect bounds_without_endcaps(GetLocalBounds());
+   bounds_without_endcaps.Inset(gfx::Insets::VH(0, border_radius));
+   return bounds_without_endcaps;
+@@ -1562,6 +1771,12 @@ void LocationBarView::RefreshBackground(
+       band_tint ? GetBandFieldColor(*band_tint, /*hovered=*/true)
+                 : color_provider->GetColor(kColorLocationBarBackgroundHovered);
+ 
++  // helium-fork: at rest the Arc field has no background at all -- only the
++  // hover tween brings the weak wash in ("默认状态下地址栏只显示网址").
++  if (ShouldMinimizeArcChrome() && !is_caret_visible && !input_in_progress) {
++    normal = SkColorSetA(normal, 0);
++  }
++
+   background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
+   if (is_caret_visible) {
+     // Match the background color to the popup if the Omnibox is visibly
+@@ -1597,12 +1812,23 @@ void LocationBarView::RefreshBackground(
+     SetBackground(CreateRoundRectBackground(
+         background_color_, border_color, size(),
+         /*blend_mode=*/SkBlendMode::kSrcOver,
+-        /*antialias=*/true, /*should_border_scale=*/true));
++        /*antialias=*/true, /*should_border_scale=*/true,
++        /*radius_override=*/GetBorderRadius()));
+   }
+ 
+   // Keep the views::Textfield in sync. It needs an opaque background to
+   // correctly enable subpixel AA.
+-  omnibox_view_->SetBackgroundColor(background_color_);
++  // helium-fork: with the Arc field transparent at rest, the color the text
++  // actually sits on is whatever is behind the field -- the band's tint or the
++  // plain toolbar. GetFieldBackdropColor() is that color, so the AA premise
++  // holds. Stop the textfield painting its own copy of it, though: it uses its
++  // own corner radius rather than the field's capsule, so once the hover wash
++  // made the fill visible the two showed up as a rounded rectangle nested
++  // inside a pill. The surface underneath is opaque in every state -- the band
++  // at rest, the field's own fill once revealed -- so there is nothing here
++  // for subpixel AA to trip over.
++  omnibox_view_->SetBackgroundEnabled(!ShouldMinimizeArcChrome());
++  omnibox_view_->SetBackgroundColor(GetFieldBackdropColor());
+ 
+   // The divider between indicators and request chips should have the same color
+   // as the omnibox.
+@@ -1889,6 +2115,10 @@ void LocationBarView::OnMouseMoved(const
+   OnOmniboxHovered(true);
+ }
+ 
++void LocationBarView::OnMouseEntered(const ui::MouseEvent& event) {
++  OnOmniboxHovered(true);
++}
++
+ void LocationBarView::OnMouseExited(const ui::MouseEvent& event) {
+   OnOmniboxHovered(false);
+ }
+@@ -2079,6 +2309,12 @@ void LocationBarView::ClearInPopupStateT
+ void LocationBarView::AnimationProgressed(const gfx::Animation* animation) {
+   DCHECK_EQ(animation, &hover_animation_);
+   RefreshBackground();
++  // helium-fork: the tween is also what reveals and hides the trailing icons.
++  // Their opacity rides it frame for frame, so the wash and the icons arrive
++  // and leave together; the boolean below only decides which frame they drop
++  // out of the layout on, and by then they are already fully transparent.
++  UpdateArcRevealOpacity();
++  UpdateArcMinimalDecorations();
+ }
+ 
+ void LocationBarView::AnimationEnded(const gfx::Animation* animation) {
+@@ -2130,6 +2366,10 @@ void LocationBarView::OnOmniboxFocused()
+   // the omnibox is intentional, snapping is better than transitioning here.
+   hover_animation_.Reset();
+   RefreshBackground();
++  // helium-fork: focus reveals the decorations without running the tween, so
++  // their opacity has to be re-read here too.
++  UpdateArcRevealOpacity();
++  UpdateArcMinimalDecorations();
+ 
+   // The AI mode page action icon view should only be visible when the omnibox
+   // is focused, so if there is a change in focus, refresh the icon.
+@@ -2150,6 +2390,9 @@ void LocationBarView::OnOmniboxBlurred()
+     views::FocusRing::Get(this)->Refresh();
+   }
+   RefreshBackground();
++  // helium-fork: see OnOmniboxFocused().
++  UpdateArcRevealOpacity();
++  UpdateArcMinimalDecorations();
+ 
+   // The AI mode page action icon view should only be visible when the omnibox
+   // is focused, so if there is a change in focus, refresh the icon.
+@@ -2159,6 +2402,15 @@ void LocationBarView::OnOmniboxBlurred()
+ }
+ 
+ void LocationBarView::OnOmniboxHovered(bool is_hovering) {
++  // helium-fork: an un-hover reported while the cursor is still inside the
++  // field is not one. OmniboxViewViews forwards its own OnMouseExited here, and
++  // that fires when the pointer merely crosses from the URL text onto one of
++  // the field's own icons -- the site settings icon, or any of the ones the
++  // reveal just brought in. IsMouseHovered() tests the field's screen bounds,
++  // which contain its children.
++  if (!is_hovering && IsMouseHovered()) {
++    return;
++  }
+   if (is_hovering) {
+     // Only show the hover animation when omnibox is in unfocused steady state.
+     if (!omnibox_view_->HasFocus()) {
+@@ -2167,6 +2419,7 @@ void LocationBarView::OnOmniboxHovered(b
+   } else {
+     hover_animation_.Hide();
+   }
++  UpdateArcMinimalDecorations();
+ }
+ 
+ void LocationBarView::OnTouchUiChanged() {
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -147,13 +147,16 @@ class LocationBarView
+ 
+   // Returns a background that paints an (optionally stroked) rounded rect with
+   // the given color.
++  // helium-fork: `radius_override` lets the Arc band's field carry the card's
++  // concentric radius instead of the flat kHigh metric.
+   static std::unique_ptr<views::Background> CreateRoundRectBackground(
+       SkColor background_color,
+       SkColor stroke_color,
+       gfx::Size size,
+       SkBlendMode blend_mode = SkBlendMode::kSrcOver,
+       bool antialias = true,
+-      bool should_border_scale = false);
++      bool should_border_scale = false,
++      std::optional<int> radius_override = std::nullopt);
+ 
+   // Returns the delegate.
+   Delegate* delegate() const { return delegate_; }
+@@ -264,6 +267,30 @@ class LocationBarView
+   // helium-fork: the Arc shell's band color when this location bar is sitting
+   // on a page-tinted band, nullopt on a plain themed toolbar.
+   std::optional<SkColor> GetBandTint() const;
++
++  // helium-fork: true in the Arc shell (vertical layout, normal browser
++  // window). The field then keeps its presence to a minimum at rest -- the
++  // site settings icon and the domain, no background and no trailing
++  // decorations -- and reveals the rest on hover or focus (the Dia treatment).
++  // It is also what sizes the field to its content rather than to the band.
++  bool ShouldMinimizeArcChrome() const;
++  // helium-fork: true while hover, focus or in-progress input should bring
++  // the field's chrome back.
++  bool IsArcChromeRevealed() const;
++  // helium-fork: true while the field should show nothing but the site
++  // settings icon and the domain.
++  bool ComputeArcMinimalRest() const;
++  // helium-fork: hover/focus transitions flip the rest/revealed state, which
++  // changes which decorations lay out -- ask for a relayout, but only when it
++  // actually changed.
++  void UpdateArcMinimalDecorations();
++  // helium-fork: the reveal's single curve. 0 at rest, 1 revealed, the hover
++  // tween in between -- every part of the reveal is a function of this one
++  // value, so the parts cannot come and go at different times.
++  double GetArcRevealAmount() const;
++  // helium-fork: applies that curve to the trailing decoration containers, so
++  // they fade with the field's wash instead of popping in and out of it.
++  void UpdateArcRevealOpacity();
+   // The field's own fill on a tinted band -- a quiet wash of the contrasting
+   // color rather than a theme color that assumes a toolbar background.
+   static SkColor GetBandFieldColor(SkColor tint, bool hovered);
+@@ -443,6 +470,10 @@ class LocationBarView
+   bool OnMouseDragged(const ui::MouseEvent& event) override;
+   void OnMouseReleased(const ui::MouseEvent& event) override;
+   void OnMouseMoved(const ui::MouseEvent& event) override;
++  // helium-fork: with SetNotifyEnterExitOnChild(true) the pointer can arrive
++  // straight onto one of the field's icons, in which case this is the only
++  // event the field itself sees -- OnMouseMoved goes to the icon.
++  void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
+   void ShowContextMenu(const gfx::Point& p,
+                        ui::mojom::MenuSourceType source_type) override;
+@@ -642,6 +673,15 @@ class LocationBarView
+   // other.
+   SkColor last_field_backdrop_ = gfx::kPlaceholderColor;
+   bool refreshing_emphasis_ = false;
++  // helium-fork: what the last Layout() applied. See
++  // UpdateArcMinimalDecorations().
++  bool arc_minimal_rest_ = false;
++  // helium-fork: whether the reveal fade owns the layer on each trailing
++  // decoration container (neither of them paints to one on its own today, but
++  // tearing down a layer we did not create would be a silent upstream
++  // regression). Indexed as {page_action_icon_container_,
++  // page_action_container_}. See UpdateArcRevealOpacity().
++  bool arc_reveal_layer_owned_[2] = {false, false};
+ 
+   // The focus manager associated with this view. The focus manager is expected
+   // to outlive this view.
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -525,6 +525,12 @@ void ToolbarView::Init() {
+   if (location_bar_view) {
+     location_bar_view_ = AddChildView(std::move(location_bar_view));
+     location_bar_ = location_bar_view_;
++    // helium-fork: takes over the right-alignment job that the location bar's
++    // unbounded flex used to do, so the field itself can be sized to the
++    // domain (see LocationBarView::CalculatePreferredSize). Only enabled in
++    // the Arc shell's docked band; elsewhere the location bar still fills.
++    arc_trailing_spacer_ = AddChildView(std::make_unique<views::View>());
++    arc_trailing_spacer_->SetVisible(false);
+   } else {
+     location_bar_ = toolbar_webview_->GetLocationBar();
+   }
+@@ -1818,6 +1824,23 @@ void ToolbarView::LayoutCommon() {
+   gfx::Insets interior_margin =
+       GetLayoutInsets(LayoutInset::TOOLBAR_INTERIOR_MARGIN);
+ 
++  // helium-fork: inside the Arc band the toolbar's interior margin is uniform,
++  // so what sits in the card's corner is concentric with it.
++  //
++  // The stock margin is VH(kHeliumBasePadding, kHeliumBasePadding * 2) -- 3 top
++  // and bottom, 6 either side -- which put the field 3pt below the card's top
++  // edge but 6pt in from its left one, with a corner radius (a flat 8) that was
++  // derived from neither: "域名的背景色胶囊的 R 角和窗口 R 角不匹配，且上边和左边
++  // 的边距不一致". Squaring it up at 3 makes the field's radius fall out of the
++  // same chain as everything else on this card: window 17, card 17-3=14, field
++  // 14-3=11. The vertical extent is unchanged, so the band is still 34 tall.
++  // Overridden here rather than in layout_constants.cc because the constant
++  // also feeds the vertical tab strip's grab handle and the PWA custom tab bar.
++  if (IsArcBandHosted()) {
++    interior_margin =
++        gfx::Insets(GetLayoutConstant(LayoutConstant::kHeliumBasePadding));
++  }
++
+   auto* vts_controller = tabs::VerticalTabStripStateController::From(browser_);
+   if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks) &&
+       (contextual_tasks::kShowEntryPoint.Get() ==
+@@ -1923,8 +1946,14 @@ void ToolbarView::UpdateToolbarLayout()
+   const auto flex_preferred =
+       views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+                                views::MaximumFlexSizeRule::kPreferred);
++  // helium-fork: matched to the band's interior margin above. FlexLayout
++  // collapses margins by taking the larger of the two, so leaving this at
++  // kLocationBarMargin (6) would keep the field 6pt in from the card's left
++  // edge no matter what the interior margin says.
+   const int location_bar_margin =
+-      GetLayoutConstant(LayoutConstant::kLocationBarMargin);
++      IsArcBandHosted()
++          ? GetLayoutConstant(LayoutConstant::kHeliumBasePadding)
++          : GetLayoutConstant(LayoutConstant::kLocationBarMargin);
+   // helium-fork: in the Arc shell's hidden address bar mode this whole toolbar
+   // lives inside the ~200pt sidebar, where its natural minimum width (measured
+   // 287pt) does not fit. The address is the point of the row, so it is pinned
+@@ -1939,9 +1968,16 @@ void ToolbarView::UpdateToolbarLayout()
+       : features::HeliumUseCompactLocationWidth()
+           ? views::MinimumFlexSizeRule::kScaleToMinimum
+           : views::MinimumFlexSizeRule::kPreferred;
++  // helium-fork: in the Arc shell's docked band the field is sized to the
++  // domain rather than to the window, so it must stop growing at its preferred
++  // width. `arc_trailing_spacer_` below takes over the right-alignment that the
++  // unbounded rule was doubling as.
++  const bool arc_band = IsArcBandHosted();
++  const auto max_location_bar_flex =
++      arc_band ? views::MaximumFlexSizeRule::kPreferred
++               : views::MaximumFlexSizeRule::kUnbounded;
+   const views::FlexSpecification location_bar_flex_rule =
+-      views::FlexSpecification(min_location_bar_flex,
+-                               views::MaximumFlexSizeRule::kUnbounded)
++      views::FlexSpecification(min_location_bar_flex, max_location_bar_flex)
+           .WithOrder(kLocationBarFlexOrder);
+ 
+   const bool is_compact_layout = IsCompactLayout();
+@@ -1997,6 +2033,26 @@ void ToolbarView::UpdateToolbarLayout()
+                                   location_bar_flex_rule);
+   }
+ 
++  if (arc_trailing_spacer_) {
++    arc_trailing_spacer_->SetVisible(arc_band);
++    if (arc_band) {
++      // Absorbs everything the sized-to-content field leaves behind, which is
++      // what holds the extensions and profile buttons against the right edge.
++      //
++      // The three-argument constructor is mandatory: the two-argument one
++      // applies the rule to BOTH axes, so an unbounded horizontal spacer also
++      // reports that it can grow vertically without limit and the row's
++      // preferred height blows up (measured at 298px the last time this was
++      // written with two arguments).
++      arc_trailing_spacer_->SetProperty(
++          views::kFlexBehaviorKey,
++          views::FlexSpecification(views::LayoutOrientation::kHorizontal,
++                                   views::MinimumFlexSizeRule::kScaleToZero,
++                                   views::MaximumFlexSizeRule::kUnbounded)
++              .WithOrder(1));
++    }
++  }
++
+   // Pinned actions (including downloads) and extensions
+   // should not shrink in compact layout.
+   if (pinned_toolbar_actions_container_) {
+@@ -2088,6 +2144,14 @@ void ToolbarView::SetBandTint(std::optio
+   }
+ }
+ 
++bool ToolbarView::IsArcBandHosted() const {
++  // helium-fork: this toolbar is the Arc shell's address bar band -- the top
++  // strip of the contents card -- rather than the row hosted inside the
++  // sidebar in the hidden address bar mode.
++  return location_bar_view_ && location_bar_view_->ShouldMinimizeArcChrome() &&
++         !arc_sidebar_hosted_;
++}
++
+ // static
+ std::optional<SkColor> ToolbarView::GetArcBandTintFor(const views::View* view) {
+   for (const views::View* ancestor = view; ancestor;
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -214,6 +214,9 @@ class ToolbarView : public views::Access
+   // sidebar instead of being the top chrome band, which is far narrower than
+   // the location bar's minimum width. See LayoutCommon().
+   void SetArcSidebarHosted(bool hosted);
++  // helium-fork: true while this toolbar *is* the Arc shell's band, i.e. the
++  // top strip of the contents card.
++  bool IsArcBandHosted() const;
+ 
+   ToolbarButton* vertical_tabs_collapse_button() const {
+     return vertical_tabs_collapse_button_;
+@@ -455,6 +458,11 @@ class ToolbarView : public views::Access
+   raw_ptr<CustomTabBarView> custom_tab_bar_ = nullptr;
+   raw_ptr<LocationBarView> location_bar_view_ = nullptr;
+ 
++  // helium-fork: empty, non-painting, and the only flexible child in the Arc
++  // shell's band. It exists so the location bar does not have to be flexible
++  // to keep the trailing buttons right-aligned -- see UpdateToolbarLayout().
++  raw_ptr<views::View> arc_trailing_spacer_ = nullptr;
++
+   // An alias for `location_bar_view_` or `toolbar_webview_->GetLocationBar()`.
+   raw_ptr<LocationBar> location_bar_ = nullptr;
+   raw_ptr<ExtensionsToolbarDesktop> extensions_container_ = nullptr;

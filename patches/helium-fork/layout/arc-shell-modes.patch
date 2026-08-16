@@ -1,0 +1,377 @@
+Index: src/chrome/browser/prefs/browser_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/prefs/browser_prefs.cc
++++ src/chrome/browser/prefs/browser_prefs.cc
+@@ -2685,6 +2685,10 @@ void MigrateObsoleteProfilePrefs(PrefSer
+ #if !BUILDFLAG(IS_ANDROID)
+   // Added 07/2026.
+   tabs::MigrateEverythingMenuPinnedToTabstripPref(profile_prefs);
++
++  // helium-fork: pin the profile to the Arc shell and carry zen mode over to
++  // the address bar mode.
++  tabs::ApplyArcShellLayoutPrefs(profile_prefs);
+ #endif
+ 
+   // Added 04/2026.
+Index: src/chrome/browser/ui/browser_command_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_command_controller.cc
++++ src/chrome/browser/ui/browser_command_controller.cc
+@@ -1470,17 +1470,10 @@ void BrowserCommandController::HandleCom
+       break;
+     }
+     case IDC_CTRL_S_SHORTCUT: {
+-      // In zen mode with VTS, Ctrl+S toggles the side chrome visibility
+-      // instead of collapsing the tab strip.
++      // helium-fork: one meaning in every address bar mode -- Ctrl/Cmd+S
++      // shows or hides the sidebar. Zen mode used to intercept this to toggle
++      // its own side-chrome pin; it no longer owns the sidebar at all.
+       PrefService* prefs = profile()->GetPrefs();
+-      auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+-      if (browser_view && browser_view->IsZenModeEnabledForLayout() &&
+-          browser_view->ShouldDrawVerticalTabStrip() &&
+-          ShouldToggleVerticalCollapse(prefs)) {
+-        browser_view->ToggleZenModeSideChrome();
+-        break;
+-      }
+-
+       if (ShouldToggleVerticalCollapse(prefs)) {
+         auto* controller =
+             tabs::VerticalTabStripStateController::From(browser_);
+Index: src/chrome/browser/ui/browser_ui_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_ui_prefs.cc
++++ src/chrome/browser/ui/browser_ui_prefs.cc
+@@ -134,9 +134,15 @@ void RegisterBrowserUserPrefs(user_prefs
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumNativeFrameMaterials, false);
+ 
++  // helium-fork: the Arc shell's address bar shows a domain-only label, and
++  // it is LEFT aligned -- centering was a misread of the design and the user
++  // has corrected it. The two prefs are independent: "minimal" is the
++  // domain-only elision, "centered" is the alignment (see
++  // OmniboxViewViews::UpdateSteadyStateTextAlignment). Both stay
++  // user-settable; only the defaults are the Arc shell's opinion.
+   registry->RegisterBooleanPref(prefs::kHeliumCenteredLocationBar, false);
+ 
+-  registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, false);
++  registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, true);
+ 
+   registry->RegisterBooleanPref(prefs::kHomePageIsNewTabPage, true,
+                                 pref_registration_flags);
+Index: src/chrome/browser/ui/helium/helium_layout_state_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/helium_layout_state_controller.cc
++++ src/chrome/browser/ui/helium/helium_layout_state_controller.cc
+@@ -20,7 +20,9 @@ HeliumLayoutStateController::HeliumLayou
+   pref_change_registrar_.Init(pref_service_);
+ 
+   pref_change_registrar_.AddMultiple(
+-      {prefs::kHeliumLayout, prefs::kHeliumZenMode},
++      // helium-fork: kHeliumZenMode is no longer read -- the address bar mode
++      // subsumes it (see MigrateZenModeToAddressBarMode).
++      {prefs::kHeliumLayout, prefs::kHeliumAddressBarMode},
+       base::BindRepeating(&HeliumLayoutStateController::NotifyStateChanged,
+                           base::Unretained(this)));
+ }
+@@ -50,7 +52,28 @@ bool HeliumLayoutStateController::IsDyna
+ }
+ 
+ bool HeliumLayoutStateController::IsZenModeEnabled() const {
+-  return pref_service_->GetBoolean(prefs::kHeliumZenMode);
++  // helium-fork: zen mode is the "address bar reveals on hover" form of the
++  // Arc shell. Everything downstream of this accessor is unchanged.
++  return GetAddressBarMode() == HeliumAddressBarMode::kAuto;
++}
++
++HeliumAddressBarMode HeliumLayoutStateController::GetAddressBarMode() const {
++  const int value = pref_service_->GetInteger(prefs::kHeliumAddressBarMode);
++  if (value < std::to_underlying(HeliumAddressBarMode::kDocked) ||
++      value > std::to_underlying(HeliumAddressBarMode::kMaxValue)) {
++    return HeliumAddressBarMode::kDocked;
++  }
++  return static_cast<HeliumAddressBarMode>(value);
++}
++
++bool HeliumLayoutStateController::HasAddressBarBand() const {
++  return GetAddressBarMode() != HeliumAddressBarMode::kHidden;
++}
++
++void HeliumLayoutStateController::SetAddressBarMode(
++    HeliumAddressBarMode mode) {
++  pref_service_->SetInteger(prefs::kHeliumAddressBarMode,
++                            std::to_underlying(mode));
+ }
+ 
+ void HeliumLayoutStateController::SetBrowserLayout(HeliumLayoutType layout) {
+Index: src/chrome/browser/ui/helium/helium_layout_state_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/helium_layout_state_controller.h
++++ src/chrome/browser/ui/helium/helium_layout_state_controller.h
+@@ -21,6 +21,20 @@ enum class HeliumLayoutType {
+   kMaxValue = kDynamic,
+ };
+ 
++// helium-fork: the Arc shell has a single layout (the sidebar) and three
++// forms, which differ only in how the address bar band behaves. The band is
++// the one piece of top chrome the shell still has, so this replaces the
++// old zen-mode boolean rather than sitting beside it.
++enum class HeliumAddressBarMode {
++  // The band is always visible above the contents.
++  kDocked = 0,
++  // No band at all; the address entry lives in the sidebar.
++  kHidden = 1,
++  // The band reveals on hover and hides again (what zen mode used to be).
++  kAuto = 2,
++  kMaxValue = kAuto,
++};
++
+ class HeliumLayoutStateController {
+  public:
+   DECLARE_USER_DATA(HeliumLayoutStateController);
+@@ -44,6 +58,19 @@ class HeliumLayoutStateController {
+   void SetBrowserLayout(HeliumLayoutType layout);
+   HeliumLayoutType GetBrowserLayout() const;
+ 
++  // helium-fork: single source of truth for the address bar band's form.
++  // IsZenModeEnabled() is now derived from it (kAuto), so the rest of the
++  // zen machinery keeps working unchanged.
++  HeliumAddressBarMode GetAddressBarMode() const;
++  void SetAddressBarMode(HeliumAddressBarMode mode);
++
++  // helium-fork: whether the shell has a band above the contents at all.
++  // False only in kHidden, where the address entry moves into the sidebar.
++  // Ask this rather than comparing the enum: it is the question every layout
++  // site actually has, and it keeps kHidden from being silently treated as
++  // kDocked (which is what happened when the mode had no consumers).
++  bool HasAddressBarBand() const;
++
+   using StateChangedCallback =
+       base::RepeatingCallback<void(HeliumLayoutStateController*)>;
+   base::CallbackListSubscription RegisterOnStateChanged(
+Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc
++++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc
+@@ -36,6 +36,11 @@ void RegisterProfilePrefs(user_prefs::Pr
+                                 std::to_underlying(HeliumLayoutType::kClassic));
+   registry->RegisterBooleanPref(prefs::kHeliumVerticalRightAligned, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenMode, false);
++  // helium-fork: the Arc shell's only user-facing layout choice.
++  registry->RegisterIntegerPref(
++      prefs::kHeliumAddressBarMode,
++      std::to_underlying(HeliumAddressBarMode::kDocked));
++  registry->RegisterBooleanPref(prefs::kHeliumArcShellMigrated, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenModeTopChromePinned, false);
+ 
+@@ -79,6 +84,38 @@ void MigrateEverythingMenuPinnedToTabstr
+       prefs::kEverythingMenuPinnedToTabstripMigrationComplete, true);
+ }
+ 
++void ApplyArcShellLayoutPrefs(PrefService* profile_prefs) {
++  // helium-fork: the Arc shell is the only layout this fork ships. The other
++  // HeliumLayoutType values stay in the code (they keep the monthly upstream
++  // sync small) but nothing can reach them any more, so the pref is pinned
++  // rather than merely defaulted -- a stale profile would otherwise open in
++  // the classic layout with no way back.
++  if (profile_prefs->GetInitializationStatus() ==
++      PrefService::INITIALIZATION_STATUS_WAITING) {
++    // The store has not loaded; decide on a later launch.
++    return;
++  }
++
++  if (IsVerticalTabsFeatureEnabled() &&
++      profile_prefs->GetInteger(prefs::kHeliumLayout) !=
++          std::to_underlying(HeliumLayoutType::kVertical)) {
++    profile_prefs->SetInteger(prefs::kHeliumLayout,
++                              std::to_underlying(HeliumLayoutType::kVertical));
++  }
++
++  if (profile_prefs->GetBoolean(prefs::kHeliumArcShellMigrated)) {
++    return;
++  }
++  // One-time carry-over: a profile that had zen mode on keeps the
++  // auto-revealing address bar, which is what zen mode now means.
++  if (!profile_prefs->HasPrefPath(prefs::kHeliumAddressBarMode) &&
++      profile_prefs->GetBoolean(prefs::kHeliumZenMode)) {
++    profile_prefs->SetInteger(prefs::kHeliumAddressBarMode,
++                              std::to_underlying(HeliumAddressBarMode::kAuto));
++  }
++  profile_prefs->SetBoolean(prefs::kHeliumArcShellMigrated, true);
++}
++
+ TabSearchPosition GetTabSearchPosition(
+     const BrowserWindowInterface* /*browser_window*/) {
+   return TabSearchPosition::kToolbar;
+Index: src/chrome/browser/ui/tabs/tab_strip_prefs.h
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.h
++++ src/chrome/browser/ui/tabs/tab_strip_prefs.h
+@@ -33,6 +33,10 @@ void MigrateHoverCardMemoryPref(PrefServ
+ // Migrates kEverythingMenuPinnedToTabstrip once per profile.
+ void MigrateEverythingMenuPinnedToTabstripPref(PrefService* profile_prefs);
+ 
++// helium-fork: pins the profile to the Arc shell (vertical layout) and, once
++// per profile, carries an old zen-mode boolean over to the address bar mode.
++void ApplyArcShellLayoutPrefs(PrefService* profile_prefs);
++
+ // Return the value of the preference for TabSearchPosition.
+ TabSearchPosition GetTabSearchPosition(
+     const BrowserWindowInterface* browser_window);
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1668,8 +1668,11 @@ float BrowserView::GetSideChromeRevealRa
+ }
+ 
+ bool BrowserView::IsZenModeSideChromePinned() const {
+-  return zen_mode_enabled_ && browser_->profile()->GetPrefs()->GetBoolean(
+-                                  prefs::kHeliumZenModeSidebarPinned);
++  // helium-fork: the address bar mode governs the address bar band only --
++  // the sidebar is shown or hidden by Cmd+S in every mode. So zen never
++  // auto-hides the sidebar on its own; it is pinned unless the user has
++  // collapsed it, in which case the hidden-sidebar machinery owns the reveal.
++  return zen_mode_enabled_ && !IsSidebarHiddenModeActive();
+ }
+ 
+ bool BrowserView::IsZenModeTopChromePinned() const {
+@@ -1827,22 +1830,13 @@ void BrowserView::OnZenModeTopChromePinn
+   InvalidateLayout();
+ }
+ 
+-// Unpinned sidebar floats in zen mode, so we make sure that VTS is usable
+-// in that state by expanding it when it's attached, not pinned, and collapsed.
+-void BrowserView::MaybeExpandVerticalTabStripForZenMode() {
+-  const bool vertical_initialized =
+-      vertical_tab_strip_region_view_ &&
+-      vertical_tab_strip_region_view_->GetTabStripView() != nullptr;
+-  if (!zen_mode_enabled_ || IsZenModeSideChromePinned() ||
+-      !ShouldDrawVerticalTabStrip() || !vertical_initialized) {
+-    return;
+-  }
+-
+-  auto* controller = tabs::VerticalTabStripStateController::From(browser_);
+-  if (controller && controller->IsCollapsed()) {
+-    controller->RequestCollapse(false);
+-  }
+-}
++// helium-fork: obsolete. It existed because zen mode used to hide the sidebar
++// along with the toolbar, which left a collapsed strip unreachable. The
++// address bar mode governs the band only, so a collapsed sidebar in zen is
++// exactly a collapsed sidebar anywhere else -- reachable by Cmd+S and by the
++// edge reveal -- and force-expanding it here would throw away the state the
++// user chose before entering zen.
++void BrowserView::MaybeExpandVerticalTabStripForZenMode() {}
+ 
+ void BrowserView::UpdateZenModeState() {
+   const bool zen_mode_enabled = IsZenModeEnabled();
+@@ -2085,11 +2079,12 @@ bool BrowserView::IsZenModeEnabled() con
+ }
+ 
+ bool BrowserView::IsSidebarHiddenModeActive() const {
+-  // helium-fork: outside zen mode, a collapsed vertical tab strip is fully
+-  // hidden (Arc behavior) and reuses zen's floating reveal. Fullscreen is
+-  // deliberately allowed: the zen branch disables itself there, so this one
+-  // keeps Cmd+S and edge reveal working.
+-  if (zen_mode_enabled_ || !GetIsNormalType() || !GetSupportsTabStrip() ||
++  // helium-fork: a collapsed vertical tab strip is fully hidden (Arc
++  // behavior) and reuses zen's floating reveal. This holds in every address
++  // bar mode, zen included -- the mode governs the address bar band, not the
++  // sidebar. Fullscreen is deliberately allowed so Cmd+S and edge reveal
++  // keep working there.
++  if (!GetIsNormalType() || !GetSupportsTabStrip() ||
+       !ShouldDrawVerticalTabStrip()) {
+     return false;
+   }
+@@ -2101,12 +2096,11 @@ bool BrowserView::IsSidebarHiddenModeAct
+ void BrowserView::OnSidebarCollapseStateChanged(
+     tabs::VerticalTabStripCollapseState state) {
+   // helium-fork: keep the reveal ratio in step with the collapse state so the
+-  // hidden strip conceals/reveals instantly with the toggle. In zen mode the
+-  // reveal logic owns the animation; do not fight it. While the toggle
+-  // choreography runs it owns the animation too -- the completion
+-  // notifications fired from inside it must not stomp the slide.
+-  if (zen_mode_enabled_ ||
+-      sidebar_toggle_phase_ != SidebarTogglePhase::kIdle) {
++  // hidden strip conceals/reveals instantly with the toggle -- in every
++  // address bar mode, zen included, since zen no longer owns the sidebar.
++  // While the toggle choreography runs it owns the animation -- the
++  // completion notifications fired from inside it must not stomp the slide.
++  if (sidebar_toggle_phase_ != SidebarTogglePhase::kIdle) {
+     return;
+   }
+   if (state == tabs::VerticalTabStripCollapseState::kExpanded) {
+@@ -2125,10 +2119,11 @@ void BrowserView::OnSidebarCollapseState
+ 
+ bool BrowserView::MaybeHandleSidebarCollapseRequest(bool collapse) {
+   // helium-fork: choreographs the hidden-sidebar toggle. Returns false to let
+-  // the caller run the plain instant motion instead: zen mode keeps its own
+-  // semantics, and non-vertical layouts, an uninitialized strip, or an
+-  // invisible widget have nothing to choreograph.
+-  if (zen_mode_enabled_ || !ShouldDrawVerticalTabStrip() ||
++  // the caller run the plain instant motion instead: non-vertical layouts, an
++  // uninitialized strip, or an invisible widget have nothing to choreograph.
++  // Zen used to be excluded here because it owned the sidebar; it no longer
++  // does, and the toggle has to look the same in every address bar mode.
++  if (!ShouldDrawVerticalTabStrip() ||
+       !vertical_tab_strip_region_view_ ||
+       !vertical_tab_strip_region_view_->GetTabStripView() || !GetWidget() ||
+       !GetWidget()->IsVisible()) {
+Index: src/chrome/common/pref_names.h
+===================================================================
+--- src.orig/chrome/common/pref_names.h
++++ src/chrome/common/pref_names.h
+@@ -639,8 +639,20 @@ inline constexpr char kHeliumVerticalRig
+     "helium.browser.vertical_right_aligned";
+ 
+ // A boolean pref set to true if zen mode is enabled.
++// helium-fork: superseded by kHeliumAddressBarMode; still registered so old
++// profiles can be migrated once, but nothing reads it any more.
+ inline constexpr char kHeliumZenMode[] = "helium.browser.zen_mode";
+ 
++// helium-fork: an enum (HeliumAddressBarMode) pref that selects the Arc
++// shell's form -- docked, hidden, or auto-revealing address bar band.
++inline constexpr char kHeliumAddressBarMode[] =
++    "helium.browser.address_bar_mode";
++
++// helium-fork: set once the profile has been converted to the Arc shell
++// (address bar mode seeded from the old zen-mode boolean).
++inline constexpr char kHeliumArcShellMigrated[] =
++    "helium.browser.arc_shell_migrated";
++
+ // A boolean pref set to true if the VTS is pinned (non-floating) in zen mode.
+ inline constexpr char kHeliumZenModeSidebarPinned[] =
+     "helium.browser.zen_mode_sidebar_pinned";
+Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+@@ -254,6 +254,11 @@ OmniboxViewViews::OmniboxViewViews(bool
+     pref_change_registrar_.Add(
+         prefs::kHeliumMinimalLocationBar,
+         base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
++    // helium-fork: alignment now rides this pref instead, so it needs the
++    // same refresh on change.
++    pref_change_registrar_.Add(
++        prefs::kHeliumCenteredLocationBar,
++        base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
+     pref_change_registrar_.Add(
+         omnibox::kPreventUrlElisionsInOmnibox,
+         base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
+@@ -935,8 +940,13 @@ void OmniboxViewViews::UpdateSteadyState
+   if (controller()->edit_model()->focus_state() == OMNIBOX_FOCUS_NONE &&
+       !controller()->edit_model()->user_input_in_progress() &&
+       location_bar_view_ && location_bar_view_->GetProfile()) {
++    // helium-fork: alignment follows the "centered location bar" pref, not
++    // the "minimal" one. Upstream rode both behaviours on kHeliumMinimal-
++    // LocationBar, so turning off centering also turned off the domain-only
++    // elision -- and the Arc shell wants domain-only text that is LEFT
++    // aligned. The two are now independent switches.
+     center_text = location_bar_view_->GetProfile()->GetPrefs()->GetBoolean(
+-        prefs::kHeliumMinimalLocationBar);
++        prefs::kHeliumCenteredLocationBar);
+   }
+ 
+   SetHorizontalAlignment(center_text ? gfx::ALIGN_CENTER : gfx::ALIGN_LEFT);

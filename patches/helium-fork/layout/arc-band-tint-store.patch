@@ -1,0 +1,207 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -373,6 +373,8 @@ static_library("ui") {
+     "crypto_module_password_dialog.h",
+     "enterprise_startup_dialog.h",
+     "helium/arc_band_colors.h",
++    "helium/arc_band_tint_store.cc",
++    "helium/arc_band_tint_store.h",
+     "helium/arc_card_layout.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
+Index: src/chrome/browser/ui/helium/arc_band_tint_store.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_band_tint_store.cc
+@@ -0,0 +1,52 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_band_tint_store.h"
++
++#include <memory>
++
++#include "base/supports_user_data.h"
++#include "content/public/browser/web_contents.h"
++
++namespace helium {
++namespace {
++
++struct BandTint : public base::SupportsUserData::Data {
++  std::optional<SkColor> tint;
++};
++
++constexpr char kBandTintUserDataKey[] = "helium-fork-arc-band-tint";
++
++}  // namespace
++
++void SetPublishedBandTint(content::WebContents* contents,
++                          std::optional<SkColor> tint) {
++  if (!contents) {
++    return;
++  }
++  auto* stored =
++      static_cast<BandTint*>(contents->GetUserData(kBandTintUserDataKey));
++  if (!stored) {
++    // Nothing to erase, and parking a nullopt would allocate on every ordinary
++    // layout of every tab that has no band.
++    if (!tint) {
++      return;
++    }
++    auto owned = std::make_unique<BandTint>();
++    stored = owned.get();
++    contents->SetUserData(kBandTintUserDataKey, std::move(owned));
++  }
++  stored->tint = tint;
++}
++
++std::optional<SkColor> GetPublishedBandTint(content::WebContents* contents) {
++  if (!contents) {
++    return std::nullopt;
++  }
++  auto* const stored =
++      static_cast<BandTint*>(contents->GetUserData(kBandTintUserDataKey));
++  return stored ? stored->tint : std::nullopt;
++}
++
++}  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_band_tint_store.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_band_tint_store.h
+@@ -0,0 +1,41 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_BAND_TINT_STORE_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_BAND_TINT_STORE_H_
++
++#include <optional>
++
++#include "third_party/skia/include/core/SkColor.h"
++
++namespace content {
++class WebContents;
++}
++
++// helium-fork: the published address bar band tint, parked on the tab it
++// belongs to.
++//
++// BrowserView::UpdateAddressBarBandTint() is the single writer of this color
++// and BrowserView::GetAddressBarBandTint() the natural reader, but the root
++// scrollbar needs it from GetRootScrollbarThemeColor() in
++// chrome_content_browser_client.cc -- a file that reaches
++// //chrome/browser/ui/browser.h and no further, and certainly not into
++// //chrome/browser/ui/views. Rather than pull views in there, or grow a second
++// copy of helium::ResolveBandTint()'s ladder (this fork has paid for
++// "one colour, two truths" more than once), the one writer parks its answer
++// where any layer can read it.
++//
++// Keyed on the WebContents rather than the window so a tab dragged into
++// another window keeps its colour, which is the same reason the *sampled*
++// colour lives there (see top_container_view.cc).
++namespace helium {
++
++void SetPublishedBandTint(content::WebContents* contents,
++                          std::optional<SkColor> tint);
++
++std::optional<SkColor> GetPublishedBandTint(content::WebContents* contents);
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_BAND_TINT_STORE_H_
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -103,6 +103,7 @@
+ #include "chrome/browser/ui/focus/browser_focus_controller.h"
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/arc_band_colors.h"
++#include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+@@ -2229,6 +2230,15 @@ void BrowserView::UpdateAddressBarBandTi
+   if (toolbar_) {
+     toolbar_->SetBandTint(tint);
+   }
++  // helium-fork: the page's own scrollbar is painted by the renderer, so the
++  // one writer parks the colour on the tab and asks for the web preferences to
++  // be recomputed. GetRootScrollbarThemeColor() reads it back from there and
++  // it reaches blink as the root scrollbar's track (see arc_band_tint_store.h
++  // for why it travels this way rather than by reading BrowserView directly).
++  if (content::WebContents* const contents = GetActiveWebContents()) {
++    helium::SetPublishedBandTint(contents, tint);
++    contents->OnWebPreferencesChanged();
++  }
+   InvalidateLayout();
+   // The band's children cache their colors and only re-resolve on a theme
+   // change, so the tint has to announce itself as one. This fires per
+Index: src/chrome/browser/ui/views/frame/contents_web_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/contents_web_view.cc
++++ src/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -7,6 +7,7 @@
+ #include "base/debug/dump_without_crashing.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
+ #include "chrome/browser/ui/views/status_bubble_views.h"
+ #include "components/search/ntp_features.h"
+@@ -168,6 +169,15 @@ void ContentsWebView::SetWebContents(con
+ 
+   UpdateIsBlockedByModal();
+ 
++  // helium-fork: the waiting color belongs to the tab, so it has to be re-read
++  // when the tab underneath changes. Without this the incoming tab waits in the
++  // colour of the one being switched away from -- which is the whole defect,
++  // just with a different wrong colour. BrowserView::OnActiveTabChanged has
++  // already published the new tab's tint by the time it swaps the contents in.
++  if (GetWidget()) {
++    UpdateBackgroundColor();
++  }
++
+   if (!status_bubble_) {
+     status_bubble_ = std::make_unique<StatusBubbleViews>(this);
+     status_bubble_->Reposition();
+@@ -199,9 +209,33 @@ void ContentsWebView::DidGetUserInteract
+ #endif
+ 
+ void ContentsWebView::UpdateBackgroundColor() {
+-  const SkColor color = GetColorProvider()->GetColor(
++  SkColor color = GetColorProvider()->GetColor(
+       is_letterboxing() ? kColorWebContentsBackgroundLetterboxing
+                         : kColorWebContentsBackground);
++
++  // helium-fork: what shows while the page has no frame belongs to the page,
++  // not to the browser theme.
++  //
++  // This color is what the compositor draws where the renderer has not
++  // delivered anything -- switching back to a tab whose frame was evicted after
++  // sitting idle, most visibly. Upstream fills it with the theme's web contents
++  // background, which in light mode is white, so returning to a dark page gave
++  // "顶部带子先变成黑色的，然后网页纯白的什么都没有，下一秒网页才出来": the band
++  // already knew the page's color (it is cached per tab) while the area under it
++  // flashed white. The card is one surface; both halves wait in the same color.
++  //
++  // Only the color changes, never the alpha, so this stays browser-side --
++  // RenderWidgetHostViewBase::SetBackgroundColor() only tells the renderer
++  // anything when opacity flips, and the published tint is always opaque.
++  //
++  // Letterboxing keeps the theme color: there the fill is deliberately *not*
++  // the page, it is the frame around a page of a different aspect ratio.
++  if (!is_letterboxing() && web_contents()) {
++    if (const std::optional<SkColor> tint =
++            helium::GetPublishedBandTint(web_contents())) {
++      color = *tint;
++    }
++  }
+   // `color` must be opaque, see RenderWidgetHostView::SetBackgroundColor() for
+   // details.
+   // TODO(crbug.com/456309057): Update this to be a CHECK.

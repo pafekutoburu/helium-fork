@@ -1,0 +1,46 @@
+Index: src/content/browser/renderer_host/render_widget_host_impl.h
+===================================================================
+--- src.orig/content/browser/renderer_host/render_widget_host_impl.h
++++ src/content/browser/renderer_host/render_widget_host_impl.h
+@@ -268,6 +268,12 @@ class CONTENT_EXPORT RenderWidgetHostImp
+   int GetRoutingID() final;
+   RenderWidgetHostViewBase* GetView() override;
+   const RenderWidgetHostViewBase* GetView() const override;
++  // helium-fork: public-interface spelling of render_frame_metadata_provider()
++  // below, so that chrome/browser/ui can observe frame metadata. Defined inline
++  // to keep this fork's footprint to a single file.
++  RenderFrameMetadataProvider* GetRenderFrameMetadataProvider() override {
++    return &render_frame_metadata_provider_;
++  }
+   bool IsCurrentlyUnresponsive() override;
+   bool SynchronizeVisualProperties() override;
+   void AddKeyPressEventCallback(const KeyPressEventCallback& callback) override;
+Index: src/content/public/browser/render_widget_host.h
+===================================================================
+--- src.orig/content/public/browser/render_widget_host.h
++++ src/content/public/browser/render_widget_host.h
+@@ -59,6 +59,7 @@ class FrameSinkId;
+ namespace content {
+ struct GlobalDOMNodeId;
+ struct GlobalRenderFrameHostId;
++class RenderFrameMetadataProvider;
+ class RenderProcessHost;
+ class RenderWidgetHostIterator;
+ class RenderWidgetHostObserver;
+@@ -203,6 +204,16 @@ class CONTENT_EXPORT RenderWidgetHost {
+   virtual RenderWidgetHostView* GetView() = 0;
+   virtual const RenderWidgetHostView* GetView() const = 0;
+ 
++  // helium-fork: the per-widget stream of cc::RenderFrameMetadata. Browser UI
++  // that has to change in lockstep with the page's own pixels needs a signal
++  // that arrives *before* the renderer's compositor frame is activated;
++  // WebContentsObserver::DidFirstVisuallyNonEmptyPaint() cannot serve that role
++  // because it is a presentation-time receipt (blink registers it through
++  // NotifyPresentationTime, so it lands several frames after the page is
++  // already on screen). RenderWidgetHostViewMac keeps its own window
++  // background in step with the page exactly this way.
++  virtual RenderFrameMetadataProvider* GetRenderFrameMetadataProvider() = 0;
++
+   virtual void AddTrackedElementObserver(TrackedElementObserver* observer) = 0;
+   virtual void RemoveTrackedElementObserver(
+       TrackedElementObserver* observer) = 0;

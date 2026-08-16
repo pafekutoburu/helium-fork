@@ -1,0 +1,165 @@
+Index: src/chrome/browser/ui/browser_command_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_command_controller.cc
++++ src/chrome/browser/ui/browser_command_controller.cc
+@@ -846,6 +846,16 @@
+     case IDC_BROWSER_LAYOUT_VERTICAL_RIGHT:
+       ToggleVerticalTabStripRightAligned(browser_);
+       break;
++    // helium-fork: the layout submenu's real entries.
++    case IDC_HELIUM_ADDRESS_BAR_DOCKED:
++      SetAddressBarMode(browser_, HeliumAddressBarMode::kDocked);
++      break;
++    case IDC_HELIUM_ADDRESS_BAR_HIDDEN:
++      SetAddressBarMode(browser_, HeliumAddressBarMode::kHidden);
++      break;
++    case IDC_HELIUM_ADDRESS_BAR_AUTO:
++      SetAddressBarMode(browser_, HeliumAddressBarMode::kAuto);
++      break;
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+     case IDC_TAKE_SCREENSHOT:
+@@ -1798,13 +1808,20 @@
+   command_updater_->UpdateCommandEnabled(IDC_SHOW_AI_MODE_OMNIBOX_BUTTON, true);
+ 
+   // Helium layout menu
++  // helium-fork: the submenu now carries the address bar modes; the stock
++  // four-way layout commands stay disabled so no surviving menu entry (or an
++  // upstream sync bringing one back) can write kHeliumLayout. The right-side
++  // toggle is not a layout switch and stays live.
+   command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_MENU, true);
+-  command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_CLASSIC, true);
+-  command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_DYNAMIC, true);
+-  command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_COMPACT, true);
+-  command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_VERTICAL, true);
++  command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_CLASSIC, false);
++  command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_DYNAMIC, false);
++  command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_COMPACT, false);
++  command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_VERTICAL, false);
+   command_updater_->UpdateCommandEnabled(IDC_BROWSER_LAYOUT_VERTICAL_RIGHT,
+                                          true);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_DOCKED, true);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_HIDDEN, true);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_AUTO, true);
+ 
+   // Window management commands
+   command_updater_->UpdateCommandEnabled(IDC_FORCE_PASTE, true);
+Index: src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/system_menu_model_builder.cc
++++ src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+@@ -160,23 +160,23 @@
+   if (!browser()->profile()->IsOffTheRecord()) {
+     model->AddSeparator(ui::NORMAL_SEPARATOR);
+ 
++    // helium-fork: the layout submenu offers the Arc shell's real layout
++    // choices -- the three address bar modes (the same set the settings page
++    // writes) plus the right-side toggle. The stock four-way layout entries
++    // are gone: the fork has one layout, the sidebar, pinned at startup by
++    // ApplyArcShellLayoutPrefs(), and picking a stock layout here stranded
++    // the browser somewhere the settings page could not undo until a restart.
+     browser_layout_menu_contents_ =
+         std::make_unique<ui::SimpleMenuModel>(&menu_delegate_);
+-
+     browser_layout_menu_contents_->AddCheckItemWithStringId(
+-        IDC_BROWSER_LAYOUT_CLASSIC, IDS_BROWSER_LAYOUT_CLASSIC);
++        IDC_HELIUM_ADDRESS_BAR_DOCKED, IDS_SETTINGS_ADDRESS_BAR_MODE_DOCKED);
+     browser_layout_menu_contents_->AddCheckItemWithStringId(
+-        IDC_BROWSER_LAYOUT_DYNAMIC, IDS_BROWSER_LAYOUT_DYNAMIC);
++        IDC_HELIUM_ADDRESS_BAR_HIDDEN, IDS_SETTINGS_ADDRESS_BAR_MODE_HIDDEN);
+     browser_layout_menu_contents_->AddCheckItemWithStringId(
+-        IDC_BROWSER_LAYOUT_COMPACT, IDS_BROWSER_LAYOUT_COMPACT);
++        IDC_HELIUM_ADDRESS_BAR_AUTO, IDS_SETTINGS_ADDRESS_BAR_MODE_AUTO);
++    browser_layout_menu_contents_->AddSeparator(ui::NORMAL_SEPARATOR);
+     browser_layout_menu_contents_->AddCheckItemWithStringId(
+-        IDC_BROWSER_LAYOUT_VERTICAL, IDS_BROWSER_LAYOUT_VERTICAL);
+-    auto* layout_controller = HeliumLayoutStateController::From(browser());
+-    if (layout_controller && layout_controller->IsVerticalLayout()) {
+-      browser_layout_menu_contents_->AddSeparator(ui::NORMAL_SEPARATOR);
+-      browser_layout_menu_contents_->AddCheckItemWithStringId(
+-          IDC_BROWSER_LAYOUT_VERTICAL_RIGHT, IDS_BROWSER_LAYOUT_VERTICAL_RIGHT);
+-    }
++        IDC_BROWSER_LAYOUT_VERTICAL_RIGHT, IDS_BROWSER_LAYOUT_VERTICAL_RIGHT);
+ 
+     model->AddSubMenuWithStringId(IDC_BROWSER_LAYOUT_MENU,
+                                   IDS_BROWSER_LAYOUT_MENU,
+Index: src/chrome/app/chrome_command_ids.h
+===================================================================
+--- src.orig/chrome/app/chrome_command_ids.h
++++ src/chrome/app/chrome_command_ids.h
+@@ -118,6 +118,11 @@
+ #define IDC_CTRL_S_SHORTCUT             34090
+ #define IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN 34091
+ #define IDC_HELIUM_WS_TOGGLE_PIN        34092
++// helium-fork: the Arc shell's address bar modes, offered from the window
++// context menu's layout submenu (the settings page writes the same pref).
++#define IDC_HELIUM_ADDRESS_BAR_DOCKED   34094
++#define IDC_HELIUM_ADDRESS_BAR_HIDDEN   34095
++#define IDC_HELIUM_ADDRESS_BAR_AUTO     34096
+ 
+ // Tab group Commands
+ #define IDC_ADD_NEW_TAB_TO_GROUP      34100
+Index: src/chrome/browser/ui/browser_commands.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_commands.cc
++++ src/chrome/browser/ui/browser_commands.cc
+@@ -2431,6 +2431,16 @@
+   }
+ }
+ 
++// helium-fork: the window context menu's layout submenu writes the address
++// bar mode -- the fork's real layout choice.
++void SetAddressBarMode(BrowserWindowInterface* browser,
++                       HeliumAddressBarMode mode) {
++  auto* controller = HeliumLayoutStateController::From(browser);
++  if (controller) {
++    controller->SetAddressBarMode(mode);
++  }
++}
++
+ void ToggleVerticalTabStripRightAligned(BrowserWindowInterface* browser) {
+   auto* controller = tabs::VerticalTabStripStateController::From(browser);
+   if (controller) {
+Index: src/chrome/browser/ui/browser_commands.h
+===================================================================
+--- src.orig/chrome/browser/ui/browser_commands.h
++++ src/chrome/browser/ui/browser_commands.h
+@@ -281,6 +281,9 @@
+ void ToggleVerticalTabsExpandOnHover(BrowserWindowInterface* browser);
+ void ToggleCollapseVerticalTabs(BrowserWindowInterface* browser);
+ void SetBrowserLayout(BrowserWindowInterface* browser, HeliumLayoutType layout);
++// helium-fork: see the definition.
++void SetAddressBarMode(BrowserWindowInterface* browser,
++                       HeliumAddressBarMode mode);
+ void ToggleVerticalTabStripRightAligned(BrowserWindowInterface* browser);
+ bool CanCloseFind(BrowserWindowInterface* browser);
+ void CloseFind(BrowserWindowInterface* browser);
+Index: src/chrome/browser/ui/views/frame/system_menu_model_delegate.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/system_menu_model_delegate.cc
++++ src/chrome/browser/ui/views/frame/system_menu_model_delegate.cc
+@@ -78,6 +78,24 @@
+     }
+   }
+ 
++  // helium-fork: the layout submenu now offers the address bar modes.
++  if (command_id == IDC_HELIUM_ADDRESS_BAR_DOCKED ||
++      command_id == IDC_HELIUM_ADDRESS_BAR_HIDDEN ||
++      command_id == IDC_HELIUM_ADDRESS_BAR_AUTO) {
++    auto* layout_controller = HeliumLayoutStateController::From(browser_);
++    if (!layout_controller) {
++      return false;
++    }
++    switch (layout_controller->GetAddressBarMode()) {
++      case HeliumAddressBarMode::kDocked:
++        return command_id == IDC_HELIUM_ADDRESS_BAR_DOCKED;
++      case HeliumAddressBarMode::kHidden:
++        return command_id == IDC_HELIUM_ADDRESS_BAR_HIDDEN;
++      case HeliumAddressBarMode::kAuto:
++        return command_id == IDC_HELIUM_ADDRESS_BAR_AUTO;
++    }
++  }
++
+   if (command_id == IDC_BROWSER_LAYOUT_VERTICAL_RIGHT) {
+     auto* vertical_tab_controller =
+         tabs::VerticalTabStripStateController::From(browser_);

@@ -1,0 +1,976 @@
+Index: src/chrome/browser/ui/views/frame/custom_corners.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/custom_corners.cc
++++ src/chrome/browser/ui/views/frame/custom_corners.cc
+@@ -73,13 +73,19 @@ void CustomCorners::PaintPath(gfx::Canva
+               ? ThemedBackground::ThemeChoice::kToolbarTheme
+               : ThemedBackground::ThemeChoice::kFrameTheme);
+     } else {
+-      ui::ColorId color_id = std::get<ui::ColorId>(choice.color);
++      // helium-fork: a page tint carries its color directly; every other
++      // choice resolves through the color provider.
++      const SkColor base_color =
++          std::holds_alternative<PageTint>(choice.color)
++              ? std::get<PageTint>(choice.color).value()
++              : GetView().GetColorProvider()->GetColor(
++                    std::get<ui::ColorId>(choice.color));
+ 
+       cc::PaintFlags flags;
+       flags.setAntiAlias(anti_alias);
+       flags.setStyle(cc::PaintFlags::kFill_Style);
+       flags.setColor(SkColorSetA(
+-          GetView().GetColorProvider()->GetColor(color_id),
++          base_color,
+           std::clamp(static_cast<int>(255 * choice.opacity), 0, 255)));
+       canvas->DrawPath(path, flags);
+     }
+Index: src/chrome/browser/ui/views/frame/custom_corners.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/custom_corners.h
++++ src/chrome/browser/ui/views/frame/custom_corners.h
+@@ -69,8 +69,15 @@ class CustomCorners : public views::View
+   // Designates that the toolbar theme background should be used.
+   using ToolbarTheme = base::StrongAlias<class ToolbarThemeTag, std::monostate>;
+ 
++  // helium-fork: an explicit color sampled from the page, used by the Arc
++  // shell to let the address bar band take the color of the page below it.
++  // It is a strong alias rather than a bare SkColor so it stays distinct from
++  // `ui::ColorId` (both are integers) in the variant below.
++  using PageTint = base::StrongAlias<class PageTintTag, SkColor>;
++
+   // Specifies which color to be used for the background.
+-  using ColorChoice = std::variant<FrameTheme, ToolbarTheme, ui::ColorId>;
++  using ColorChoice =
++      std::variant<FrameTheme, ToolbarTheme, ui::ColorId, PageTint>;
+ 
+   // Represents a color choice with optional alpha. Special-case logic will be
+   // used to optimize fully opaque and fully transparent surfaces.
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
++++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
+@@ -57,6 +57,12 @@ class BrowserViewLayoutDelegate {
+   virtual float GetSideChromeRevealRatio() const { return 1.f; }
+   virtual bool IsZenModeSideChromePinned() const { return false; }
+   virtual bool IsZenModeTopChromePinned() const { return false; }
++  // helium-fork: the color the Arc shell's address bar band should take so it
++  // reads as part of the page below it. Nullopt leaves the band on the plain
++  // toolbar theme.
++  virtual std::optional<SkColor> GetAddressBarBandTint() const {
++    return std::nullopt;
++  }
+   virtual gfx::NativeView GetHostViewForAnchoring() const = 0;
+   virtual bool HasFindBarController() const = 0;
+   virtual void MoveWindowForFindBarIfNecessary() const = 0;
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
+@@ -8,6 +8,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/find_bar/find_bar.h"
+ #include "chrome/browser/ui/find_bar/find_bar_controller.h"
+ #include "chrome/browser/ui/tabs/features.h"
+@@ -15,6 +16,7 @@
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/frame/browser_widget.h"
+ #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
+ #include "chrome/browser/ui/views/tabs/projects/projects_panel_utils.h"
+@@ -22,6 +24,9 @@
+ #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
+ #include "chrome/common/buildflags.h"
+ #include "chrome/common/pref_names.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/color/color_provider.h"
++#include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/views/view.h"
+ 
+@@ -264,6 +269,54 @@ bool BrowserViewLayoutDelegateImpl::IsZe
+   return browser_view_->IsZenModeSideChromePinned();
+ }
+ 
++std::optional<SkColor> BrowserViewLayoutDelegateImpl::GetAddressBarBandTint()
++    const {
++  // helium-fork: the page's declared theme color wins; failing that, the color
++  // actually rendered at the top of the viewport; failing that, the document's
++  // background color.
++  //
++  // The middle step is the important one. GetBackgroundColor() reports the
++  // *document* background, which for a light document carrying a full-bleed
++  // dark header (films.dance, and Squarespace sites generally) is near-white
++  // while the strip the band abuts is black -- the band and the page then read
++  // as two obviously different surfaces, which is the whole complaint.
++  content::WebContents* const contents = browser_view_->GetActiveWebContents();
++  if (!contents) {
++    return std::nullopt;
++  }
++  std::optional<SkColor> page_color = contents->GetThemeColor();
++  if (!page_color && browser_view_->top_container()) {
++    page_color = browser_view_->top_container()->sampled_page_top_color();
++  }
++  if (!page_color) {
++    page_color = contents->GetBackgroundColor();
++  }
++  const ui::ColorProvider* const colors = browser_view_->GetColorProvider();
++  if (!page_color || !colors) {
++    return std::nullopt;
++  }
++
++  // Either color can be arbitrary, while the band's text and icons come from
++  // the browser theme -- so blend the tint back toward the theme's own
++  // toolbar color until it clears a legibility floor against them. A page
++  // whose color already contrasts is used verbatim; one that does not (a
++  // black page under a light theme) lands somewhere in between rather than
++  // swallowing the omnibox.
++  constexpr float kMinBandContrast = 4.5f;
++  constexpr float kBlendStep = 0.2f;
++  constexpr int kMaxBlendSteps = 8;
++  const SkColor foreground = colors->GetColor(kColorToolbarText);
++  const SkColor theme_color = colors->GetColor(kColorToolbar);
++  SkColor tint = SkColorSetA(*page_color, SK_AlphaOPAQUE);
++  for (int i = 0; i < kMaxBlendSteps &&
++                  color_utils::GetContrastRatio(tint, foreground) <
++                      kMinBandContrast;
++       ++i) {
++    tint = color_utils::AlphaBlend(theme_color, tint, kBlendStep);
++  }
++  return tint;
++}
++
+ int BrowserViewLayoutDelegateImpl::GetExtraInfobarOffset() const {
+ #if BUILDFLAG(IS_MAC)
+   auto* const controller = GetImmersiveModeController();
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h
++++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h
+@@ -48,6 +48,7 @@ class BrowserViewLayoutDelegateImpl : pu
+   float GetSideChromeRevealRatio() const override;
+   bool IsZenModeSideChromePinned() const override;
+   bool IsZenModeTopChromePinned() const override;
++  std::optional<SkColor> GetAddressBarBandTint() const override;
+   gfx::NativeView GetHostViewForAnchoring() const override;
+   bool HasFindBarController() const override;
+   void MoveWindowForFindBarIfNecessary() const override;
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -36,6 +36,7 @@
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
+ #include "chrome/browser/ui/views/frame/main_background_region_view.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view.h"
++#include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+@@ -1808,6 +1809,62 @@ void BrowserViewTabbedLayoutImpl::Config
+     background->SetVisible(true);
+   }
+ 
++  // helium-fork: in the Arc shell the band is the top strip of the contents
++  // card, not a separate bar above it -- rounded where it meets the window,
++  // square where the page begins, and painted flat in the page's own color so
++  // the two read as one surface. (Two things were tried and rejected: an
++  // overlay over the page, which covered the page's top 34pt, and a gradient
++  // fading the band's top edge to transparent, which let the window color bleed
++  // through the top of the card and was the loudest remaining "these are two
++  // rectangles" cue.) This runs ahead of the zen branch because zen is just the
++  // mode where the same band reveals on hover.
++  const bool arc_band =
++      layout_data_->tab_strip_type == TabStripType::kVertical &&
++      views().multi_contents_view->ShouldUseRoundedFrame();
++  // The band is a strip of a card inset from the window, so it has live window
++  // either side of it and above it to spill onto -- which the classic layout,
++  // flush to the window's edges, does not. Clip it to itself.
++  if (auto* const top_container =
++          views::AsViewClass<TopContainerView>(views().top_container)) {
++    top_container->SetArcCardClipEnabled(arc_band);
++  }
++
++  if (arc_band) {
++    const int radius = GetPaddedFrameRadius();
++    CustomCornersBackground::Corners corners;
++    corners[CornerOrientation::kTopLeading] = {
++        CustomCornersBackground::CornerType::kRounded, radius};
++    corners[CornerOrientation::kTopTrailing] = {
++        CustomCornersBackground::CornerType::kRounded, radius};
++    const std::optional<SkColor> tint = delegate().GetAddressBarBandTint();
++    const CustomCornersBackground::ColorChoice color =
++        tint ? CustomCornersBackground::ColorChoice(
++                   CustomCornersBackground::PageTint(*tint))
++             : CustomCornersBackground::ColorChoice(
++                   CustomCornersBackground::ToolbarTheme());
++    background->SetVisible(true);
++    background->SetCorners(corners);
++    background->SetPrimaryColor(color);
++    // The toolbar carries its own CustomCornersBackground and covers the top
++    // container completely, so tinting only the container underneath paints
++    // nothing visible. Give the toolbar the same treatment -- it is the view
++    // that actually draws the band. Only while it is actually parented here,
++    // though: in the hidden address bar mode the toolbar has been reparented
++    // into the sidebar, where the page's color has no business being painted.
++    if (IsParentedTo(views().toolbar, views().top_container)) {
++      if (auto* toolbar_background =
++              views().toolbar->background()
++                  ? views().toolbar->background()
++                        ->AsA<CustomCornersBackground>()
++                  : nullptr) {
++        toolbar_background->SetVisible(true);
++        toolbar_background->SetCorners(corners);
++        toolbar_background->SetPrimaryColor(color);
++      }
++    }
++    return;
++  }
++
+   if (zen_mode && !frame_has_top_border) {
+     if (zen_hiding) {
+       background->SetPrimaryColor(CustomCornersBackground::FrameTheme());
+Index: src/chrome/browser/ui/views/frame/top_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/top_container_view.cc
++++ src/chrome/browser/ui/views/frame/top_container_view.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+ 
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/time/time.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+@@ -13,6 +16,15 @@
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
+ #include "chrome/browser/ui/views/frame/themed_background.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
++// CopyFromSurfaceResult is base::expected<CopyOutputBitmapWithMetadata, ...>,
++// and binding a callback over it needs the complete type.
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_widget_host.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/common/widget/constants.h"
++#include "third_party/skia/include/core/SkBitmap.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_variant.h"
+@@ -22,6 +34,52 @@
+ #include "ui/views/paint_info.h"
+ #include "ui/views/view_class_properties.h"
+ 
++namespace {
++
++// helium-fork: the band's color is a property of the *page*, so what has been
++// learned about a page is cached on the page rather than on the window.
++//
++// A window-wide cache handed a freshly activated tab whatever the *previous*
++// tab had sampled: readback is asynchronous, the new tab's widget is still
++// hidden at the moment WatchPageColors() runs (BrowserView::OnActiveTabChanged
++// swaps the contents into the WebView a hundred lines further down), so
++// SamplePageTopColor() bailed out and left the old value in place. The band
++// then showed a color that was not merely stale, it belonged to another page.
++// Keeping it here also means the value survives a tab being dragged into
++// another window.
++struct PageTint : public base::SupportsUserData::Data {
++  std::optional<SkColor> sampled_top;
++  // Readback is asynchronous; a sample requested before a navigation must not
++  // be allowed to paint the new page with the old page's color.
++  int sample_generation = 0;
++};
++
++constexpr char kPageTintUserDataKey[] = "helium-fork-arc-page-tint";
++
++PageTint* FindPageTint(content::WebContents* contents) {
++  return contents ? static_cast<PageTint*>(
++                        contents->GetUserData(kPageTintUserDataKey))
++                  : nullptr;
++}
++
++PageTint& EnsurePageTint(content::WebContents* contents) {
++  PageTint* tint = FindPageTint(contents);
++  if (!tint) {
++    auto owned = std::make_unique<PageTint>();
++    tint = owned.get();
++    contents->SetUserData(kPageTintUserDataKey, std::move(owned));
++  }
++  return *tint;
++}
++
++content::RenderWidgetHost* WidgetFor(content::WebContents* contents) {
++  content::RenderWidgetHostView* const view =
++      contents ? contents->GetRenderWidgetHostView() : nullptr;
++  return view ? view->GetRenderWidgetHost() : nullptr;
++}
++
++}  // namespace
++
+ TopContainerView::TopContainerView(BrowserView* browser_view)
+     : browser_view_(browser_view) {
+   SetProperty(views::kElementIdentifierKey, kTopContainerElementId);
+@@ -34,7 +92,27 @@ TopContainerView::TopContainerView(Brows
+   SetBackground(std::move(background));
+ }
+ 
+-TopContainerView::~TopContainerView() = default;
++TopContainerView::~TopContainerView() {
++  // helium-fork: the frame metadata provider outlives this view in a plain
++  // window close, so the observation has to be dropped by hand.
++  StopObservingFrameMetadata();
++}
++
++void TopContainerView::SetArcCardClipEnabled(bool enabled) {
++  if (arc_card_clip_enabled_ == enabled) {
++    return;
++  }
++  arc_card_clip_enabled_ = enabled;
++  if (enabled) {
++    SetPaintToLayer();
++    // The band's top corners are rounded, so the layer is not opaque out to
++    // its bounds; claiming otherwise leaves the corners undefined.
++    layer()->SetFillsBoundsOpaquely(false);
++    layer()->SetMasksToBounds(true);
++  } else {
++    DestroyLayer();
++  }
++}
+ 
+ bool TopContainerView::IsPositionInWindowCaption(
+     const gfx::Point& test_point) const {
+@@ -108,5 +186,268 @@ void TopContainerView::ChildPreferredSiz
+   PreferredSizeChanged();
+ }
+ 
++std::optional<SkColor> TopContainerView::sampled_page_top_color() const {
++  const PageTint* const tint = FindPageTint(web_contents());
++  return tint ? tint->sampled_top : std::nullopt;
++}
++
++void TopContainerView::WatchPageColors(content::WebContents* contents) {
++  // helium-fork: called on every active tab change. A page can change its
++  // theme color at any time (dark-mode toggles, per-route colors), and the
++  // band paints in that color, so the change has to reach layout.
++  if (web_contents() == contents) {
++    return;
++  }
++  Observe(contents);
++  // A tab being switched to is already on screen, painted, whatever its
++  // navigation is doing; the gate is about the *current* document's pixels, so
++  // it has to be re-read from the contents rather than carried over.
++  page_paint_timer_.Stop();
++  page_painted_ = !contents || contents->CompletedFirstVisuallyNonEmptyPaint();
++  awaiting_first_frame_ = !page_painted_;
++  SyncFrameMetadataObservation();
++  // The tint the new tab already resolved is cached on the tab itself, so this
++  // publishes it in the same layout pass that swaps the contents in -- no
++  // readback round trip, and nothing of the previous tab's color survives the
++  // switch.
++  OnPageColorMaybeChanged();
++}
++
++void TopContainerView::DidChangeThemeColor() {
++  OnPageColorMaybeChanged();
++}
++
++void TopContainerView::OnBackgroundColorChanged() {
++  OnPageColorMaybeChanged();
++}
++
++void TopContainerView::DOMContentLoaded(
++    content::RenderFrameHost* render_frame_host) {
++  // A fresh tab reports its color only once the document is up; without this
++  // the band would keep the previous page's tint until the next layout.
++  OnPageColorMaybeChanged();
++}
++
++void TopContainerView::DidFirstVisuallyNonEmptyPaint() {
++  // Kept as a backstop only. It used to be the signal that opened the gate,
++  // and that is what made the band trail the page: blink registers this
++  // through NotifyPresentationTime (web_frame_widget_impl.cc), so it is a
++  // receipt for a frame that viz has already *presented* -- the browser hears
++  // about it a compositor round trip plus a mojo hop after the user has seen
++  // the new page, and then still has to lay out and paint. The frame metadata
++  // callback below beats it by that whole margin. ReleasePagePaintGate() is
++  // idempotent, so leaving this wired costs nothing.
++  ReleasePagePaintGate();
++}
++
++void TopContainerView::RenderFrameHostChanged(
++    content::RenderFrameHost* old_host,
++    content::RenderFrameHost* new_host) {
++  // A cross-process navigation moves the page to a different widget, and the
++  // metadata provider lives on the widget.
++  SyncFrameMetadataObservation();
++}
++
++void TopContainerView::RenderViewHostChanged(
++    content::RenderViewHost* old_host,
++    content::RenderViewHost* new_host) {
++  SyncFrameMetadataObservation();
++}
++
++void TopContainerView::OnVisibilityChanged(content::Visibility visibility) {
++  // A tab that was hidden when it became active has no surface to copy from,
++  // so the sample taken at switch time was dropped. This is the retry.
++  if (visibility == content::Visibility::VISIBLE) {
++    SyncFrameMetadataObservation();
++    SamplePageTopColor();
++  }
++}
++
++void TopContainerView::OnRenderFrameMetadataChangedBeforeActivation(
++    const cc::RenderFrameMetadata& metadata) {
++  // helium-fork: this is the earliest point at which the browser knows the new
++  // document has a frame -- the renderer has submitted it and viz has not yet
++  // activated it. Opening the gate here is what lets the band's color land in
++  // the same browser frame the page's own pixels land in.
++  //
++  // It fires for every frame the renderer submits, so it must not do work per
++  // frame: ReleasePagePaintGate() early-returns unless the gate is actually
++  // closed, and awaiting_first_frame_ keeps it to the first frame after a
++  // commit. Re-sampling on every frame would also make the band follow
++  // scrolling, which this shell has already ruled out.
++  if (!awaiting_first_frame_) {
++    return;
++  }
++  awaiting_first_frame_ = false;
++  ReleasePagePaintGate();
++}
++
++void TopContainerView::OnRenderFrameMetadataChangedAfterActivation(
++    base::TimeTicks activation_time) {}
++
++void TopContainerView::OnRenderFrameSubmission() {}
++
++void TopContainerView::OnLocalSurfaceIdChanged(
++    const cc::RenderFrameMetadata& metadata) {}
++
++void TopContainerView::RenderWidgetHostDestroyed(
++    content::RenderWidgetHost* widget_host) {
++  if (observed_widget_ == widget_host) {
++    StopObservingFrameMetadata();
++  }
++}
++
++void TopContainerView::SyncFrameMetadataObservation() {
++  content::RenderWidgetHost* const widget = WidgetFor(web_contents());
++  if (widget == observed_widget_) {
++    return;
++  }
++  StopObservingFrameMetadata();
++  if (!widget) {
++    return;
++  }
++  content::RenderFrameMetadataProvider* const provider =
++      widget->GetRenderFrameMetadataProvider();
++  if (!provider) {
++    return;
++  }
++  observed_widget_ = widget;
++  widget->AddObserver(this);
++  provider->AddObserver(this);
++}
++
++void TopContainerView::StopObservingFrameMetadata() {
++  if (!observed_widget_) {
++    return;
++  }
++  if (content::RenderFrameMetadataProvider* const provider =
++          observed_widget_->GetRenderFrameMetadataProvider()) {
++    provider->RemoveObserver(this);
++  }
++  observed_widget_->RemoveObserver(this);
++  observed_widget_ = nullptr;
++}
++
++void TopContainerView::DocumentOnLoadCompletedInPrimaryMainFrame() {
++  // A document with nothing to paint (about:blank, an empty response) never
++  // reports a first paint, but it *is* on screen -- Chromium stops holding the
++  // previous page's pixels for it. Load completion is the signal that covers
++  // that case; for a document with content it lands at or after the first
++  // paint, so it changes nothing there.
++  ReleasePagePaintGate();
++}
++
++void TopContainerView::DidFinishNavigation(
++    content::NavigationHandle* navigation_handle) {
++  if (!navigation_handle->IsInPrimaryMainFrame() ||
++      !navigation_handle->HasCommitted()) {
++    return;
++  }
++  // Keep the previous page's color until the new page produces one: the
++  // sample generation counter already keeps a stale readback from landing on
++  // the new page, and dropping the color here snapped the band and all its
++  // icons back to the default toolbar look on every reload ("地址栏很清晰的
++  // 自己又跳出来了").
++  if (!navigation_handle->IsSameDocument()) {
++    // A new document owns the band's color only once it is the one on screen.
++    page_painted_ = false;
++    awaiting_first_frame_ = true;
++    SyncFrameMetadataObservation();
++    // Backstop, in case neither signal arrives. It is blink's own paint-holding
++    // deadline on purpose: that is exactly how long the previous page's pixels
++    // can stay on screen, so the band cannot outlast what it is describing.
++    // (A shorter guess here is not a safety net, it is the bug -- a 500ms one
++    // opened the gate 700ms before a deliberately slow page painted, and the
++    // band went black over a still-white page just as before.)
++    page_paint_timer_.Start(
++        FROM_HERE, blink::kNewContentRenderingDelay,
++        base::BindOnce(&TopContainerView::ReleasePagePaintGate,
++                       base::Unretained(this)));
++  }
++  OnPageColorMaybeChanged();
++}
++
++void TopContainerView::ReleasePagePaintGate() {
++  page_paint_timer_.Stop();
++  awaiting_first_frame_ = false;
++  if (page_painted_) {
++    return;
++  }
++  page_painted_ = true;
++  OnPageColorMaybeChanged();
++}
++
++void TopContainerView::OnPageColorMaybeChanged() {
++  SamplePageTopColor();
++  // The tint is resolved in BrowserViewLayoutImpl's post-layout pass, so a
++  // repaint alone would not pick it up.
++  browser_view_->InvalidateLayout();
++}
++
++void TopContainerView::SamplePageTopColor() {
++  // helium-fork: read back the strip of page the band sits against.
++  //
++  // Only the first few rows: a header's text and logo are normally vertically
++  // centered well below them, so this averages background and not content.
++  // The GPU does the averaging by scaling the strip to a single pixel, which
++  // is why the output size is 1x1 rather than a bitmap we would reduce here.
++  constexpr int kSampleStripHeight = 4;
++
++  content::WebContents* const contents = web_contents();
++  if (!contents) {
++    return;
++  }
++  content::RenderWidgetHostView* const view =
++      contents->GetRenderWidgetHostView();
++  if (!view || !view->IsSurfaceAvailableForCopy()) {
++    // Normal at tab-switch time: the incoming tab has not been shown yet, so
++    // it has no surface. OnVisibilityChanged() retries once it does.
++    return;
++  }
++  const gfx::Size viewport = view->GetVisibleViewportSize();
++  if (viewport.IsEmpty()) {
++    return;
++  }
++  const gfx::Rect strip(
++      0, 0, viewport.width(),
++      std::min(kSampleStripHeight, viewport.height()));
++  constexpr base::TimeDelta kSampleTimeout = base::Milliseconds(500);
++  view->CopyFromSurface(
++      strip, gfx::Size(1, 1), kSampleTimeout,
++      base::BindOnce(&TopContainerView::OnPageTopColorSampled,
++                     weak_factory_.GetWeakPtr(), contents->GetWeakPtr(),
++                     ++EnsurePageTint(contents).sample_generation));
++}
++
++// static
++void TopContainerView::OnPageTopColorSampled(
++    base::WeakPtr<TopContainerView> self,
++    base::WeakPtr<content::WebContents> contents,
++    int generation,
++    const content::CopyFromSurfaceResult& result) {
++  // The tab the sample was taken from may be gone, or may no longer be the one
++  // whose color the band is showing.
++  if (!contents || !result.has_value() ||
++      result.value().bitmap.drawsNothing()) {
++    return;
++  }
++  PageTint& tint = EnsurePageTint(contents.get());
++  // A navigation (or another sample) started after this one was requested.
++  if (generation != tint.sample_generation) {
++    return;
++  }
++  const SkColor sampled =
++      SkColorSetA(result.value().bitmap.getColor(0, 0), SK_AlphaOPAQUE);
++  if (tint.sampled_top == sampled) {
++    return;
++  }
++  tint.sampled_top = sampled;
++  // The result is cached on the tab either way; only the tab that is actually
++  // showing needs a re-layout out of it.
++  if (self && self->web_contents() == contents.get()) {
++    self->browser_view_->InvalidateLayout();
++  }
++}
++
+ BEGIN_METADATA(TopContainerView)
+ END_METADATA
+Index: src/chrome/browser/ui/views/frame/top_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/top_container_view.h
++++ src/chrome/browser/ui/views/frame/top_container_view.h
+@@ -5,7 +5,16 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_TOP_CONTAINER_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_TOP_CONTAINER_VIEW_H_
+ 
++#include <optional>
++
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/timer/timer.h"
++#include "content/public/browser/render_frame_metadata_provider.h"
++#include "content/public/browser/render_widget_host_observer.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "third_party/skia/include/core/SkColor.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/gfx/geometry/point.h"
+ #include "ui/views/view.h"
+@@ -15,7 +24,14 @@ class BrowserView;
+ // Container for the BrowserView's tab strip, toolbar, and sometimes bookmark
+ // bar. In Chrome OS immersive fullscreen it stacks on top of other views in
+ // order to slide in and out over the web contents.
+-class TopContainerView : public views::View {
++// helium-fork: the Arc shell's address bar band takes the color of the page
++// below it, so this view follows the active page's color and asks for a
++// re-layout when it changes (the band's background is configured during
++// layout). Observing nothing is the normal state outside the Arc shell.
++class TopContainerView : public views::View,
++                         public content::WebContentsObserver,
++                         public content::RenderFrameMetadataProvider::Observer,
++                         public content::RenderWidgetHostObserver {
+   METADATA_HEADER(TopContainerView, views::View)
+ 
+  public:
+@@ -32,9 +48,135 @@ class TopContainerView : public views::V
+   void PaintChildren(const views::PaintInfo& paint_info) override;
+   void ChildPreferredSizeChanged(views::View* child) override;
+ 
++  // helium-fork: follow `contents` for page color changes; null stops.
++  void WatchPageColors(content::WebContents* contents);
++
++  // helium-fork: clip the band to its own bounds, for the Arc shell where the
++  // band is the top strip of a card inset from the window.
++  //
++  // The toolbar is not collapsed when zen hides the band -- it keeps its full
++  // height and is slid to y = -H..0 inside it -- and the parent's paint
++  // clipping catches only what is painted, not layer-backed descendants (the
++  // extensions container, the pinned-actions container, the app menu button all
++  // have their own layers). Their bottom edges leaked into the live strip of
++  // window above the card. Upstream's mitigation for the same problem is
++  // #if BUILDFLAG(IS_LINUX) on the individual children; a layer that masks to
++  // bounds holds here instead, at every band height and in every mode, which is
++  // the only form of "the band cannot draw outside the card" that does not
++  // depend on getting the arithmetic right.
++  void SetArcCardClipEnabled(bool enabled);
++
++  // helium-fork: the color actually rendered at the top of the page, sampled
++  // from the compositor. Preferred over WebContents::GetBackgroundColor(),
++  // which reports the *document's* background: a page whose <html> is light
++  // but whose first section is a full-bleed dark header (films.dance and every
++  // other Squarespace site, for one) reports near-white while the strip the
++  // band sits against is black. Nullopt until the first sample lands.
++  //
++  // Cached per tab, not per window. Readback is asynchronous, so a window-wide
++  // cache handed a freshly activated tab whatever the *previous* tab had
++  // sampled until the new tab's readback returned -- the band showed a color
++  // that was not merely stale but belonged to another page.
++  std::optional<SkColor> sampled_page_top_color() const;
++
++  // helium-fork: whether the document that is currently on screen has produced
++  // a frame.
++  //
++  // False from the moment a cross-document navigation commits until the new
++  // document's compositor frame reaches the browser. Chromium holds the
++  // previous page's pixels for exactly that window, so the band -- which is the
++  // page's color -- has to hold the previous page's tint for it too. Without
++  // this the band takes the new page's <meta theme-color>, which arrives at
++  // parse time: clicking a link to a dark site turned the address bar black
++  // several hundred milliseconds before the site itself appeared ("地址栏突然
++  // 变黑，但网页还没有加载"). The band's color and the page have to arrive
++  // together.
++  bool page_painted() const { return page_painted_; }
++
++  // content::WebContentsObserver:
++  void DidChangeThemeColor() override;
++  void OnBackgroundColorChanged() override;
++  void DOMContentLoaded(content::RenderFrameHost* render_frame_host) override;
++  void DidFirstVisuallyNonEmptyPaint() override;
++  void DocumentOnLoadCompletedInPrimaryMainFrame() override;
++  void RenderFrameHostChanged(content::RenderFrameHost* old_host,
++                              content::RenderFrameHost* new_host) override;
++  void RenderViewHostChanged(content::RenderViewHost* old_host,
++                             content::RenderViewHost* new_host) override;
++  void OnVisibilityChanged(content::Visibility visibility) override;
++  // helium-fork: deliberately NOT observing scroll.
++  //
++  // DidChangeVerticalScrollDirection used to re-sample here. It fires only on
++  // direction flips, so one "scroll down and back to the top" produced exactly
++  // two samples, taken at two different offsets -- one of the page's clean top,
++  // one of a 4px strip somewhere in the middle of the document, which averages
++  // page background together with body text and comes out a few levels darker.
++  // With three change-only guards in series and a CopyFromSurface whose
++  // callback order is not guaranteed, the band latched alternately onto one or
++  // the other: "把网页往下滚动之后再回到网页顶部之后，顶部地址栏的背景色竟然加了
++  // 一层灰…再重复一次，又变回来了". The band's color is a property of the page,
++  // not of where the page happens to be scrolled to.
++  void DidFinishNavigation(
++      content::NavigationHandle* navigation_handle) override;
++
++  // content::RenderFrameMetadataProvider::Observer:
++  //
++  // helium-fork: this is the whole reason the observer is here. It is the only
++  // signal in content/public that says "the renderer has submitted a frame"
++  // *before* that frame is activated and drawn.
++  void OnRenderFrameMetadataChangedBeforeActivation(
++      const cc::RenderFrameMetadata& metadata) override;
++  void OnRenderFrameMetadataChangedAfterActivation(
++      base::TimeTicks activation_time) override;
++  void OnRenderFrameSubmission() override;
++  void OnLocalSurfaceIdChanged(
++      const cc::RenderFrameMetadata& metadata) override;
++
++  // content::RenderWidgetHostObserver:
++  void RenderWidgetHostDestroyed(content::RenderWidgetHost* widget_host)
++      override;
++
+  private:
++  // helium-fork: the band's tint is resolved during layout, so a page color
++  // change has to ask for one.
++  void OnPageColorMaybeChanged();
++
++  // helium-fork: asks the compositor for the top strip of the viewport.
++  void SamplePageTopColor();
++  static void OnPageTopColorSampled(
++      base::WeakPtr<TopContainerView> self,
++      base::WeakPtr<content::WebContents> contents,
++      int generation,
++      const content::CopyFromSurfaceResult& result);
++
++  // helium-fork: releases the page_painted() gate. Called from the frame
++  // metadata signal, and from the two WebContentsObserver signals that mean
++  // "the new document is what the user is looking at now".
++  void ReleasePagePaintGate();
++
++  // helium-fork: points the frame metadata observation at the active tab's
++  // current widget. The widget changes on cross-process navigations and on tab
++  // switches, and the provider dies with it, so this runs from every signal
++  // that can move it.
++  void SyncFrameMetadataObservation();
++  void StopObservingFrameMetadata();
++
+   // The parent of this view. Not owned.
+   raw_ptr<BrowserView> browser_view_;
++
++  // helium-fork: see SetArcCardClipEnabled().
++  bool arc_card_clip_enabled_ = false;
++
++  // helium-fork: the widget whose frame metadata is being observed, or null.
++  raw_ptr<content::RenderWidgetHost> observed_widget_ = nullptr;
++
++  // helium-fork: see page_painted().
++  bool page_painted_ = true;
++  // Only the *first* frame after a commit opens the gate; metadata arrives for
++  // every frame the renderer submits, including the old document's.
++  bool awaiting_first_frame_ = false;
++  base::OneShotTimer page_paint_timer_;
++  base::WeakPtrFactory<TopContainerView> weak_factory_{this};
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_TOP_CONTAINER_VIEW_H_
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -2982,6 +2982,15 @@ void BrowserView::OnActiveTabChanged(con
+                                      int reason) {
+   DCHECK(new_contents);
+   TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");
++  // helium-fork: the Arc shell's address bar band is tinted with the active
++  // page's color, so the band follows the tab. This lives in the same patch as
++  // WatchPageColors itself -- it spent a round in the patch below this one,
++  // where the method does not exist yet, and was missing from that patch file
++  // entirely, so a clean rebuild of the stack would have silently dropped the
++  // only thing that retints the band on a tab switch.
++  if (top_container_) {
++    top_container_->WatchPageColors(new_contents);
++  }
+   views::WebView* active_contents_view = GetActiveContentsWebView();
+   bool tab_change_in_split_view =
+       IsTabChangeInSplitView(old_contents, new_contents);
+Index: src/chrome/browser/ui/views/frame/multi_contents_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/multi_contents_view.cc
++++ src/chrome/browser/ui/views/frame/multi_contents_view.cc
+@@ -957,7 +957,20 @@ void MultiContentsView::UpdateContentsBo
+         use_system_top_left_radius && is_first_view,
+         use_system_top_right_radius && is_last_view,
+         use_system_bottom_left_radius && is_first_view,
+-        use_system_bottom_right_radius && is_last_view);
++        use_system_bottom_right_radius && is_last_view,
++        // helium-fork: `fuse_top_edge` -- the band sits flush on top of the
++        // contents in the Arc shell, so the card's top corners belong to the
++        // band and the contents' own must go square. `!is_in_split` also keeps
++        // the radius arithmetic in UpdateBorderRoundedCorners() non-negative:
++        // only split view subtracts an inner padding from it.
++        attached_chrome.top && !is_in_split &&
++            browser_view_->ShouldUseContentCardInsets(),
++        // helium-fork: `suppress_outline` -- the Arc card is lifted off the
++        // window by a shadow, not fenced in by a stroke. Deliberately does not
++        // test `attached_chrome.top`: that is true only while the band is on
++        // screen, and the card looks the same either way. Split view keeps its
++        // outline -- there the stroke is what separates the two panes.
++        !is_in_split && browser_view_->ShouldUseContentCardInsets());
+   }
+ }
+ 
+Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/contents_container_view.cc
++++ src/chrome/browser/ui/views/frame/contents_container_view.cc
+@@ -35,6 +35,7 @@
+ #include "chrome/browser/ui/views/new_tab_footer/footer_web_view.h"
+ #include "chrome/common/chrome_features.h"
+ #include "components/search/ntp_features.h"
++#include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+ #include "ui/accessibility/accessibility_features.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+@@ -203,7 +204,9 @@ void ContentsContainerView::UpdateBorder
+                                                    bool round_top_left,
+                                                    bool round_top_right,
+                                                    bool round_bottom_left,
+-                                                   bool round_bottom_right) {
++                                                   bool round_bottom_right,
++                                                   bool fuse_top_edge,
++                                                   bool suppress_outline) {
+   const bool split_changed = is_in_split != is_in_split_;
+   const bool rounded_contents_changed =
+       should_round_contents != should_round_contents_;
+@@ -211,7 +214,9 @@ void ContentsContainerView::UpdateBorder
+       round_top_left_window_corner_ != round_top_left ||
+       round_top_right_window_corner_ != round_top_right ||
+       round_bottom_left_window_corner_ != round_bottom_left ||
+-      round_bottom_right_window_corner_ != round_bottom_right;
++      round_bottom_right_window_corner_ != round_bottom_right ||
++      fuse_top_edge_ != fuse_top_edge;
++  fuse_top_edge_ = fuse_top_edge;
+   is_in_split_ = is_in_split;
+   should_round_contents_ = should_round_contents;
+   round_top_left_window_corner_ = round_top_left;
+@@ -243,10 +248,14 @@ void ContentsContainerView::UpdateBorder
+     }
+ 
+     if (is_in_split) {
++      // The stroke is what separates the two panes -- it is load-bearing here
++      // and is never suppressed.
+       container_outline_->UpdateState(is_active, is_highlighted);
+-    } else if (browser_view_->GetIsNormalType()) {
++    } else if (browser_view_->GetIsNormalType() && !suppress_outline) {
+       container_outline_->UpdateState(false, kColorToolbarContentAreaSeparator);
+     } else {
++      // helium-fork: in the Arc shell the card is lifted off the window by its
++      // shadow, not fenced off by a hairline. Keeping both reads as two edges.
+       container_outline_->SetVisible(false);
+     }
+     if (capture_contents_border_view_) {
+@@ -346,10 +355,20 @@ void ContentsContainerView::UpdateBorder
+       round_bottom_left_window_corner_ ? frame_radius : generic_radius;
+   const int lower_right_radius =
+       round_bottom_right_window_corner_ ? frame_radius : generic_radius;
++  // helium-fork: when the band is fused to the top of the contents the two are
++  // one card, and the card's top corners belong to the band. Rounding them here
++  // as well cuts a `generic_radius` notch out of each side exactly at the seam
++  // -- the card's edge runs straight, bites inward for 8px, then runs straight
++  // again. That notch is what made the band and the page read as two stacked
++  // rectangles rather than one surface.
+   const int upper_left_radius =
+-      round_top_left_window_corner_ ? frame_radius : generic_radius;
++      fuse_top_edge_ ? 0
++                     : (round_top_left_window_corner_ ? frame_radius
++                                                      : generic_radius);
+   const int upper_right_radius =
+-      round_top_right_window_corner_ ? frame_radius : generic_radius;
++      fuse_top_edge_ ? 0
++                     : (round_top_right_window_corner_ ? frame_radius
++                                                       : generic_radius);
+ 
+   const gfx::RoundedCornersF container_rounded_corners(
+       upper_left_radius, upper_right_radius, lower_right_radius,
+@@ -490,6 +509,30 @@ void ContentsContainerView::SetTargetCon
+ 
+   target_content_bounds_ = target_content_bounds;
+   InvalidateLayout(/*avoid_propagate_during_layout=*/true);
++
++  // helium-fork: tell the renderer how much of itself is not on screen.
++  //
++  // This mechanism keeps the contents at their post-animation size and hides
++  // the surplus with the layer clip, which is what keeps the surface -- and so
++  // the LocalSurfaceId -- from changing every frame. But the renderer was never
++  // told, so blink went on laying out against the whole surface: the strip
++  // under the clip held real content, the bottom of the page's scrollbar and
++  // anything anchored to the bottom of the viewport, none of it visible for the
++  // length of the animation ("letterboxd还是会出现，和以前一模一样的问题").
++  //
++  // The insets are exactly the clipped area, so the visible viewport becomes
++  // the strip the user can see while the surface stays put -- both halves of
++  // the problem at once. Nullopt resets them, which is what every ordinary
++  // layout passes.
++  if (content::WebContents* const contents =
++          contents_view_ ? contents_view_->web_contents() : nullptr) {
++    if (content::RenderWidgetHostView* const rwhv =
++            contents->GetRenderWidgetHostView()) {
++      rwhv->SetInsets(target_content_bounds_
++                          ? -target_content_bounds_->ToInsets()
++                          : gfx::Insets());
++    }
++  }
+ }
+ 
+ void ContentsContainerView::SetRoundedCorners(
+Index: src/chrome/browser/ui/views/frame/contents_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/contents_container_view.h
++++ src/chrome/browser/ui/views/frame/contents_container_view.h
+@@ -123,7 +123,19 @@ class ContentsContainerView : public vie
+                               bool round_top_left_window_corner,
+                               bool round_top_right_window_corner,
+                               bool round_bottom_left_window_corner,
+-                              bool round_bottom_right_window_corner);
++                              bool round_bottom_right_window_corner,
++                              // helium-fork: true when top chrome is fused to
++                              // the contents -- the Arc shell's address bar
++                              // band sits flush on top and the two are one
++                              // card, so the contents' top corners must be
++                              // square. Left rounded they bite a notch out of
++                              // the card's side at the seam.
++                              bool fuse_top_edge = false,
++                              // helium-fork: true when the card is drawn with
++                              // a shadow instead of a stroke. Distinct from
++                              // `fuse_top_edge`: it holds whether or not the
++                              // band is on screen.
++                              bool suppress_outline = false);
+ 
+   void ShowCaptureContentsBorder();
+   void HideCaptureContentsBorder();
+@@ -174,6 +186,10 @@ class ContentsContainerView : public vie
+   bool round_top_right_window_corner_ = false;
+   bool round_bottom_left_window_corner_ = false;
+   bool round_bottom_right_window_corner_ = false;
++  // helium-fork: see UpdateBorderAndOverlay(). Kept as a member because
++  // UpdateBorderRoundedCorners() is also reached from ChildVisibilityChanged()
++  // and OnThemeChanged(), which have no parameters to carry it.
++  bool fuse_top_edge_ = false;
+ 
+   raw_ptr<BrowserView> browser_view_ = nullptr;
+ 

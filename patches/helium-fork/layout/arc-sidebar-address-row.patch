@@ -1,0 +1,383 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1752,7 +1752,9 @@ void BrowserView::OnVerticalTabStripMode
+   }
+ 
+   // helium-fork: the collapse button follows the layout between the toolbar
+-  // and the Arc shell sidebar top row.
++  // and the Arc shell sidebar top row, and in the hidden address bar mode the
++  // whole toolbar follows it into the sidebar.
++  UpdateArcAddressBarPlacement();
+   UpdateArcSidebarControlPlacement();
+ 
+   // helium-fork: the hidden sidebar mode's hover monitor follows the
+@@ -1769,6 +1771,13 @@ void BrowserView::OnVerticalTabStripMode
+ 
+ void BrowserView::OnToolbarTabStripStateChanged(
+     HeliumLayoutStateController* controller) {
++  // helium-fork: this is the HeliumLayoutStateController state-changed
++  // callback, and that controller watches kHeliumAddressBarMode -- so this is
++  // where switching to or away from the hidden address bar mode arrives. It
++  // runs before the early return below, which is about the horizontal strip
++  // and has nothing to do with where the toolbar lives.
++  UpdateArcAddressBarPlacement();
++
+   if (!horizontal_tab_strip_region_view_) {
+     return;
+   }
+@@ -2134,6 +2143,13 @@ std::optional<SkColor> BrowserView::GetA
+   if (!ShouldUseContentCardInsets()) {
+     return std::nullopt;
+   }
++  // No band means the toolbar is sitting in the sidebar, which is the app's
++  // surface and never takes the page's color.
++  if (auto* const layout_controller =
++          HeliumLayoutStateController::From(browser_);
++      !layout_controller || !layout_controller->HasAddressBarBand()) {
++    return std::nullopt;
++  }
+   content::WebContents* const contents =
+       const_cast<BrowserView*>(this)->GetActiveWebContents();
+   if (!contents) {
+@@ -2349,6 +2365,65 @@ void BrowserView::UpdateArcSidebarContro
+   }
+ }
+ 
++void BrowserView::UpdateArcAddressBarPlacement() {
++  // helium-fork: HeliumAddressBarMode::kHidden -- Arc's default shape. There is
++  // no band above the page; the address bar moves into the sidebar, under the
++  // top row.
++  //
++  // The whole ToolbarView moves, not just the omnibox. ToolbarView lays out its
++  // own children, so one reparent carries the omnibox and the extensions /
++  // profile / menu buttons along with it, right-aligned in the same row, and
++  // its flex layout drops what a 200pt sidebar cannot fit -- no second layout
++  // to write and no assumptions inside ToolbarView to break. Everything that
++  // skips the band when it is absent is already guarded by
++  // IsParentedTo(toolbar, top_container) in the layout, so the top container
++  // measures zero, stops counting as attached top chrome, and the contents card
++  // closes up on all four sides on its own.
++  if (!toolbar_ || !vertical_tab_strip_region_view_) {
++    return;
++  }
++  views::View* const address_row =
++      vertical_tab_strip_region_view_->arc_address_row();
++  if (!address_row) {
++    return;
++  }
++  auto* const layout_controller = HeliumLayoutStateController::From(browser_);
++  const bool wants_toolbar_in_sidebar =
++      layout_controller && !layout_controller->HasAddressBarBand() &&
++      ShouldDrawVerticalTabStrip() && GetIsNormalType();
++
++  if (wants_toolbar_in_sidebar) {
++    if (toolbar_->parent() == address_row) {
++      return;
++    }
++    address_row->AddChildView(toolbar_.get());
++  } else {
++    if (toolbar_->parent() == top_container_) {
++      return;
++    }
++    top_container_->AddChildViewAt(toolbar_.get(), 0);
++  }
++  // The toolbar keeps its CustomCornersBackground either way: the band's
++  // layout pass reaches for it by type to apply the page tint, and swapping it
++  // out here would leave that with nothing to configure. In the sidebar it
++  // paints kColorToolbar, which is the sidebar's own color, so it disappears.
++  toolbar_->SetArcSidebarHosted(wants_toolbar_in_sidebar);
++  toolbar_->UpdateToolbarLayout();
++  // helium-fork: the page tint is published on the toolbar as a cascading
++  // property, and everything under it -- button icons, the omnibox's own
++  // opaque field fill -- derives a contrasting foreground from it. Moving the
++  // toolbar changes which surface it is standing on, but nothing else asks for
++  // a re-sample: the only callers are the page-color observers. So without
++  // this the toolbar arrived in the white sidebar still carrying the last
++  // page's black, painting a black pill behind the domain and turning every
++  // button icon white-on-white. GetAddressBarBandTint() already answers
++  // nullopt once there is no band, so one unconditional call is the whole fix,
++  // and putting it here rather than at the mode-change callback covers the
++  // layout-change and initialization callers too.
++  UpdateAddressBarBandTint();
++  InvalidateLayout();
++}
++
+ bool BrowserView::IsArcSidebarTopRowOnScreen() const {
+   // helium-fork: whether the sidebar's top row is somewhere the user can see
+   // and click it. Docked, obviously; and also while the hidden sidebar is
+@@ -6199,7 +6274,8 @@ void BrowserView::AddedToWidget() {
+     }
+   }
+ 
+-  // helium-fork: seed the collapse button's home for the initial layout.
++  // helium-fork: seed the sidebar-bound chrome's home for the initial layout.
++  UpdateArcAddressBarPlacement();
+   UpdateArcSidebarControlPlacement();
+ 
+   dialog_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -988,6 +988,9 @@ class BrowserView : public BrowserWindow
+   // helium-fork: whether the Arc shell's sidebar top row is visible and
+   // clickable -- docked, or hidden but revealed as a floating card.
+   bool IsArcSidebarTopRowOnScreen() const;
++  // helium-fork: moves the whole toolbar into the sidebar's address row in
++  // HeliumAddressBarMode::kHidden, and back into the top container otherwise.
++  void UpdateArcAddressBarPlacement();
+   // helium-fork: single write point for the macOS window-control opacity.
+   // Zen fades them with the top chrome, the hidden sidebar fades them with
+   // the floating card, and every other state keeps them fully shown.
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -74,6 +74,7 @@
+ #include "ui/views/controls/separator.h"
+ #include "ui/views/focus/focus_manager.h"
+ #include "ui/views/interaction/element_tracker_views.h"
++#include "ui/views/layout/fill_layout.h"
+ #include "ui/views/layout/flex_layout.h"
+ #include "ui/views/layout/flex_layout_types.h"
+ #include "ui/views/layout/layout_types.h"
+@@ -139,6 +140,25 @@ VerticalTabStripRegionView::VerticalTabS
+       gfx::Insets::TLBR(kArcTopContainerGap, region_horizontal_padding,
+                         kArcTopContainerGap, region_horizontal_padding));
+ 
++  // helium-fork: the address row sits directly under the top row, above the
++  // tabs -- Arc's arrangement. It is empty (and therefore zero-height) in
++  // every mode except kHidden, where BrowserView reparents the toolbar into
++  // it: the toolbar lays out its own children, so it brings the omnibox and
++  // the extensions/profile/menu buttons with it and needs nothing here but a
++  // slot of the right width.
++  arc_address_row_ = AddChildViewAt(std::make_unique<views::View>(), 1);
++  arc_address_row_->SetLayoutManager(std::make_unique<views::FillLayout>());
++  // Belt and braces: the toolbar's flex layout is told to let the location bar
++  // scale to zero in this host, but nothing in the row may ever paint over the
++  // page if some future child refuses to shrink.
++  arc_address_row_->SetPaintToLayer();
++  arc_address_row_->layer()->SetFillsBoundsOpaquely(false);
++  arc_address_row_->layer()->SetMasksToBounds(true);
++  arc_address_row_->SetProperty(
++      views::kMarginsKey,
++      gfx::Insets::TLBR(0, region_horizontal_padding, kArcTopContainerGap,
++                        region_horizontal_padding));
++
+   bottom_button_container_ =
+       AddChildView(std::make_unique<VerticalTabStripBottomContainer>(
+           state_controller_, root_action_item, browser_view->browser(),
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -89,6 +89,11 @@ class VerticalTabStripRegionView final
+   // navigation controls).
+   ArcSidebarTopContainer* arc_top_container() { return arc_top_container_; }
+ 
++  // helium-fork: hosts the toolbar when the address bar has no band of its own
++  // (HeliumAddressBarMode::kHidden -- Arc's default shape). Empty otherwise.
++  // BrowserView::UpdateArcAddressBarPlacement() owns what goes in it.
++  views::View* arc_address_row() { return arc_address_row_; }
++
+   bool IsPositionInWindowCaption(const gfx::Point& point);
+ 
+   void SetHasLeadingExclusionForLayout(bool has_leading_exclusion);
+@@ -254,6 +259,7 @@ class VerticalTabStripRegionView final
+   bool zen_mode_floating_style_ = false;
+ 
+   raw_ptr<ArcSidebarTopContainer> arc_top_container_ = nullptr;
++  raw_ptr<views::View> arc_address_row_ = nullptr;
+   raw_ptr<VerticalTabStripBottomContainer> bottom_button_container_ = nullptr;
+   raw_ptr<views::View> gemini_button_ = nullptr;
+   raw_ptr<views::ResizeArea> resize_area_ = nullptr;
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -1925,8 +1925,18 @@ void ToolbarView::UpdateToolbarLayout()
+                                views::MaximumFlexSizeRule::kPreferred);
+   const int location_bar_margin =
+       GetLayoutConstant(LayoutConstant::kLocationBarMargin);
++  // helium-fork: in the Arc shell's hidden address bar mode this whole toolbar
++  // lives inside the ~200pt sidebar, where its natural minimum width (measured
++  // 287pt) does not fit. The address is the point of the row, so it is pinned
++  // to a preferred width it cannot be compressed below -- FlexLayout would
++  // otherwise satisfy the entire deficit by squeezing the omnibox, which
++  // elided the domain down to a bare "..." while the trailing buttons kept
++  // every pixel they asked for. Non-compressible means the deficit falls on
++  // the higher flex orders instead (extensions, then the rest), which is the
++  // right order to lose things in.
+   const auto min_location_bar_flex =
+-      features::HeliumUseCompactLocationWidth()
++      arc_sidebar_hosted_ ? views::MinimumFlexSizeRule::kPreferred
++      : features::HeliumUseCompactLocationWidth()
+           ? views::MinimumFlexSizeRule::kScaleToMinimum
+           : views::MinimumFlexSizeRule::kPreferred;
+   const views::FlexSpecification location_bar_flex_rule =
+@@ -1961,7 +1971,18 @@ void ToolbarView::UpdateToolbarLayout()
+   if (location_bar_view_) {
+     location_bar_view_->SetProperty(views::kFlexBehaviorKey,
+                                     location_bar_flex_rule);
+-    if (is_compact_layout) {
++    if (arc_sidebar_hosted_) {
++      // helium-fork: a preferred width the sidebar can actually grant. Left at
++      // its natural preferred size the location bar asks for the whole row,
++      // and since it is also the only child allowed to scale to zero it then
++      // absorbs the entire deficit and elides the domain away to "...". This
++      // asks for a domain's worth and lets the trailing buttons keep theirs.
++      constexpr int kArcSidebarLocationBarWidth = 130;
++      location_bar_view_->SetPreferredSize(
++          gfx::Size(kArcSidebarLocationBarWidth, 0));
++      location_bar_view_->SetProperty(views::kMarginsKey,
++                                      gfx::Insets::VH(0, location_bar_margin));
++    } else if (is_compact_layout) {
+       location_bar_view_->SetPreferredSize(gfx::Size(kPreferredCompactWidth, 0));
+       location_bar_view_->SetProperty(
+           views::kMarginsKey, gfx::Insets::TLBR(0, location_bar_margin, 0, 0));
+@@ -2081,6 +2102,29 @@ std::optional<SkColor> ToolbarView::GetA
+   return std::nullopt;
+ }
+ 
++void ToolbarView::SetArcSidebarHosted(bool hosted) {
++  if (arc_sidebar_hosted_ == hosted) {
++    return;
++  }
++  arc_sidebar_hosted_ = hosted;
++  // helium-fork: the Zen row treatment. Inside the sidebar the row is the
++  // domain plus a single extensions-menu button: every pinned extension
++  // collapses into that button's panel, and the avatar and the app menu go
++  // away entirely -- Zen hides its three-dot menu on macOS too, because the
++  // native menu bar already carries everything in it (profiles included).
++  // Undone verbatim when the toolbar moves back to the band.
++  if (extensions_container_) {
++    extensions_container_->SetSuppressPinnedActions(hosted);
++  }
++  if (avatar_) {
++    avatar_->SetVisible(!hosted && show_avatar_button_.GetValue());
++  }
++  if (app_menu_button_) {
++    app_menu_button_->SetVisible(!hosted);
++  }
++  UpdateToolbarLayout();
++}
++
+ void ToolbarView::UpdateVerticalTabsCollapseButton() {
+   if (!vertical_tabs_collapse_button_) {
+     return;
+@@ -2382,7 +2426,8 @@ void ToolbarView::OnShowReloadButtonChan
+ }
+ 
+ void ToolbarView::OnShowAvatarButtonChanged() {
+-  avatar_->SetVisible(show_avatar_button_.GetValue());
++  // helium-fork: the sidebar-hosted row has no avatar regardless of the pref.
++  avatar_->SetVisible(!arc_sidebar_hosted_ && show_avatar_button_.GetValue());
+ }
+ 
+ void ToolbarView::OnShowExtensionsButtonChanged() {
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -210,6 +210,11 @@ class ToolbarView : public views::Access
+   // that has no business being on a white band. Asking for the tint itself has
+   // no such ambiguity.
+   static std::optional<SkColor> GetArcBandTintFor(const views::View* view);
++  // helium-fork: true while this toolbar is hosted inside the Arc shell's
++  // sidebar instead of being the top chrome band, which is far narrower than
++  // the location bar's minimum width. See LayoutCommon().
++  void SetArcSidebarHosted(bool hosted);
++
+   ToolbarButton* vertical_tabs_collapse_button() const {
+     return vertical_tabs_collapse_button_;
+   }
+@@ -438,6 +443,8 @@ class ToolbarView : public views::Access
+   // |location_bar_| is guaranteed to exist. These pointers are owned by the
+   // view hierarchy.
+   raw_ptr<ToolbarButton> vertical_tabs_collapse_button_ = nullptr;
++  // helium-fork: see SetArcSidebarHosted().
++  bool arc_sidebar_hosted_ = false;
+   raw_ptr<ToolbarButton> back_ = nullptr;
+   raw_ptr<ToolbarButton> forward_ = nullptr;
+   raw_ptr<ReloadButton> reload_ = nullptr;
+Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
++++ src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
+@@ -442,7 +442,8 @@ void ExtensionsToolbarDesktop::UpdateIco
+     action_view->ClearProperty(views::kFlexBehaviorKey);
+   }
+ 
+-  if (must_show || (ToolbarActionsModel::CanShowActionsInToolbar(*browser_) &&
++  if (must_show || (!suppress_pinned_actions_ &&
++                    ToolbarActionsModel::CanShowActionsInToolbar(*browser_) &&
+                     model_->IsActionPinned(extension_id))) {
+     GetAnimatingLayoutManager()->FadeIn(action_view);
+   } else {
+@@ -450,6 +451,17 @@ void ExtensionsToolbarDesktop::UpdateIco
+   }
+ }
+ 
++void ExtensionsToolbarDesktop::SetSuppressPinnedActions(bool suppress) {
++  if (suppress_pinned_actions_ == suppress) {
++    return;
++  }
++  suppress_pinned_actions_ = suppress;
++  for (const auto& [action_id, icon] : icons_) {
++    UpdateIconVisibility(action_id);
++  }
++  UpdateContainerVisibility();
++}
++
+ void ExtensionsToolbarDesktop::AnchorAndShowWidgetImmediately(
+     MayBeDangling<views::Widget> widget) {
+   auto iter =
+@@ -499,7 +511,8 @@ ExtensionsToolbarDesktop::GetPoppedOutAc
+ 
+ bool ExtensionsToolbarDesktop::IsActionVisibleOnToolbar(
+     const std::string& action_id) const {
+-  return model_->IsActionPinned(action_id) || ShouldForceVisibility(action_id);
++  return (!suppress_pinned_actions_ && model_->IsActionPinned(action_id)) ||
++         ShouldForceVisibility(action_id);
+ }
+ 
+ void ExtensionsToolbarDesktop::UndoPopOut() {
+@@ -577,7 +590,8 @@ void ExtensionsToolbarDesktop::CreateAct
+   CHECK(icon);
+ 
+   // Set visibility before adding to prevent extraneous animation.
+-  icon->SetVisible(ToolbarActionsModel::CanShowActionsInToolbar(*browser_) &&
++  icon->SetVisible(!suppress_pinned_actions_ &&
++                   ToolbarActionsModel::CanShowActionsInToolbar(*browser_) &&
+                    model_->IsActionPinned(action_id));
+   views::FocusRing::Get(icon.get())->SetOutsetFocusRingDisabled(true);
+   ObserveButton(icon.get());
+Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h
++++ src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h
+@@ -113,6 +113,12 @@ class ExtensionsToolbarDesktop : public
+   void UpdatePinnedActions();
+ 
+ 
++  // helium-fork: collapse every pinned extension into the extensions-menu
++  // button (the Zen treatment). Used while this toolbar is hosted inside the
++  // Arc shell's sidebar, where a ~200pt row has no room for a strip of
++  // per-extension icons; their popups anchor to the menu button instead.
++  void SetSuppressPinnedActions(bool suppress);
++
+   // Updates the container visibility and animation as needed.
+   void UpdateContainerVisibility();
+ 
+@@ -373,6 +379,9 @@ class ExtensionsToolbarDesktop : public
+   // View for every action, does not imply pinned or currently shown.
+   ToolbarIcons icons_;
+ 
++  // helium-fork: see SetSuppressPinnedActions().
++  bool suppress_pinned_actions_ = false;
++
+   // Popped-out extension, if any.
+   std::optional<extensions::ExtensionId> popped_out_action_;
+   // The action that triggered the current popup, if any.

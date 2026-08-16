@@ -1,0 +1,266 @@
+Index: src/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
+===================================================================
+--- src.orig/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
++++ src/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
+@@ -1333,6 +1333,27 @@ mojom::blink::ColorScheme PaintLayerScro
+                         WebFeature::kUsedColorSchemeRootScrollbarsDark);
+       return mojom::blink::ColorScheme::kDark;
+     }
++    // helium-fork: a dark page gets a dark root scrollbar even when the
++    // browser is light.
++    //
++    // The branch above can only turn the root scrollbar dark when *both* the
++    // OS and the browser's toolbar are dark, so with "Show scroll bars:
++    // Always" a black site was left with a near-white track running down the
++    // side of it. Blink already computes the answer from the scroller's own
++    // background for overlay scrollbars
++    // (ScrollableArea::RecalculateOverlayScrollbarColorScheme) and simply
++    // never routes it to the non-overlay ones, so this consults the same
++    // predicate rather than inventing a second one.
++    //
++    // Deliberately escalate-only: it can add dark, never remove it, so a dark
++    // browser showing a white page keeps the dark scrollbar upstream chose
++    // above. No UseCounter -- that metric belongs to the feature above.
++    // Pages that state a color-scheme are excluded by the guard on this
++    // block; what the page asks for wins.
++    if (ColorSchemeFromBackground(layout_box->StyleRef()) ==
++        mojom::blink::ColorScheme::kDark) {
++      return mojom::blink::ColorScheme::kDark;
++    }
+   }
+ 
+   return GetLayoutBox()->StyleRef().UsedColorScheme();
+@@ -1357,6 +1378,17 @@ bool PaintLayerScrollableArea::UsedColor
+     return true;
+   }
+ 
++  // helium-fork: the root scrollbar now also follows the page's background
++  // (see UsedColorSchemeScrollbars above), so a page that swaps its background
++  // from light to dark has to rebuild its scrollbars. Reached from
++  // UpdateAfterStyleChange(), which a script-set background reaches through
++  // the viewport style propagation.
++  if (IsGlobalRootNonOverlayScroller() &&
++      ColorSchemeFromBackground(*old_style) !=
++          ColorSchemeFromBackground(GetLayoutBox()->StyleRef())) {
++    return true;
++  }
++
+   return false;
+ }
+ 
+Index: src/third_party/blink/renderer/core/scroll/scrollable_area.cc
+===================================================================
+--- src.orig/third_party/blink/renderer/core/scroll/scrollable_area.cc
++++ src/third_party/blink/renderer/core/scroll/scrollable_area.cc
+@@ -763,6 +763,19 @@ void ScrollableArea::SetOverlayScrollbar
+   }
+ }
+ 
++// static
++std::optional<mojom::blink::ColorScheme>
++ScrollableArea::ColorSchemeFromBackground(const ComputedStyle& style) {
++  const Color background_color =
++      style.VisitedDependentColor(GetCSSPropertyBackgroundColor());
++  if (background_color.IsFullyTransparent()) {
++    return std::nullopt;
++  }
++  return background_color.GetLightness(Color::ColorSpace::kHSL) <= 0.5f
++             ? mojom::blink::ColorScheme::kDark
++             : mojom::blink::ColorScheme::kLight;
++}
++
+ void ScrollableArea::RecalculateOverlayScrollbarColorScheme() {
+   mojom::blink::ColorScheme old_overlay_theme =
+       GetOverlayScrollbarColorScheme();
+@@ -773,13 +786,9 @@ void ScrollableArea::RecalculateOverlayS
+   // If there is a background color set on the scroller, use the lightness of
+   // the background color for the scrollbar overlay color theme.
+   if (GetLayoutBox()) {
+-    Color background_color = GetLayoutBox()->StyleRef().VisitedDependentColor(
+-        GetCSSPropertyBackgroundColor());
+-    if (!background_color.IsFullyTransparent()) {
+-      const float lightness =
+-          background_color.GetLightness(Color::ColorSpace::kHSL);
+-      overlay_theme = lightness <= 0.5f ? mojom::blink::ColorScheme::kDark
+-                                        : mojom::blink::ColorScheme::kLight;
++    if (const std::optional<mojom::blink::ColorScheme> from_background =
++            ColorSchemeFromBackground(GetLayoutBox()->StyleRef())) {
++      overlay_theme = *from_background;
+     }
+   }
+ 
+Index: src/third_party/blink/renderer/core/scroll/scrollable_area.h
+===================================================================
+--- src.orig/third_party/blink/renderer/core/scroll/scrollable_area.h
++++ src/third_party/blink/renderer/core/scroll/scrollable_area.h
+@@ -70,6 +70,7 @@ class Layer;
+ 
+ namespace blink {
+ class ChromeClient;
++class ComputedStyle;
+ class Document;
+ class LayoutBox;
+ class LayoutObject;
+@@ -244,6 +245,19 @@ class CORE_EXPORT ScrollableArea : publi
+   bool HasOverlayScrollbars() const;
+   void SetOverlayScrollbarColorScheme(mojom::blink::ColorScheme);
+   void RecalculateOverlayScrollbarColorScheme();
++
++  // helium-fork: the color scheme implied by a scroller's own background, or
++  // nullopt when it has none to go on (fully transparent).
++  //
++  // Blink already derives this for overlay scrollbars, and only for them --
++  // RecalculateOverlayScrollbarColorScheme() writes it into a slot that
++  // Scrollbar::UsedColorScheme() reads only when IsOverlayScrollbar() is true.
++  // With "Show scroll bars: Always" on macOS nothing reads it, which is why a
++  // black page still got a near-white scrollbar track. Exposed here so the
++  // non-overlay root scroller can consult the same predicate instead of
++  // growing a second copy of it.
++  static std::optional<mojom::blink::ColorScheme> ColorSchemeFromBackground(
++      const ComputedStyle& style);
+   mojom::blink::ColorScheme GetOverlayScrollbarColorScheme() const {
+     return static_cast<mojom::blink::ColorScheme>(
+         overlay_scrollbar_color_scheme__);
+Index: src/chrome/browser/chrome_content_browser_client.cc
+===================================================================
+--- src.orig/chrome/browser/chrome_content_browser_client.cc
++++ src/chrome/browser/chrome_content_browser_client.cc
+@@ -565,6 +565,9 @@
+ #include "chrome/browser/themes/theme_service_factory.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++// helium-fork: the Arc shell's published band tint, which the root scrollbar
++// takes as its track color.
++#include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+ #include "chrome/browser/ui/chrome_pages.h"
+ #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+@@ -4233,6 +4236,26 @@ GetPreferredColorScheme(const WebPrefere
+ }
+ 
+ std::optional<SkColor> GetRootScrollbarThemeColor(WebContents* web_contents) {
++  // helium-fork: in the Arc shell the root scrollbar takes the *page's* color,
++  // the same value the address bar band is painted in, so the two read as one
++  // surface and a black page gets a black scrollbar instead of a grey channel
++  // cut down its side.
++  //
++  // This rides upstream's own "root scrollbar follows browser theme" channel
++  // (web pref -> Settings -> Scrollbar::RootScrollbarThemeColor) rather than a
++  // second one; only the source of the color and its meaning change -- upstream
++  // spends it on the Fluent thumb, we use it as the track and derive the thumb
++  // from it (see Scrollbar::DeriveScrollbarThumbColor).
++  //
++  // Returned before the lightness clamp below on purpose. Clamping to [0.3,0.8]
++  // is right for a *theme* color, which only has to stay legible; it is wrong
++  // for a page color, and it is the same "contrast fallback" that was rejected
++  // for the band because it dyes a black page grey.
++  if (const std::optional<SkColor> band_tint =
++          helium::GetPublishedBandTint(web_contents)) {
++    return band_tint;
++  }
++
+   bool root_scrollbar_follows_browser_theme = false;
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+   root_scrollbar_follows_browser_theme = base::FeatureList::IsEnabled(
+Index: src/third_party/blink/renderer/core/scroll/scrollbar.cc
+===================================================================
+--- src.orig/third_party/blink/renderer/core/scroll/scrollbar.cc
++++ src/third_party/blink/renderer/core/scroll/scrollbar.cc
+@@ -935,8 +935,12 @@ EScrollbarWidth Scrollbar::CSSScrollbarW
+ }
+ 
+ std::optional<blink::Color> Scrollbar::RootScrollbarThemeColor() const {
+-  if (RuntimeEnabledFeatures::RootScrollbarFollowsBrowserThemeEnabled() &&
+-      scrollable_area_ && scrollable_area_->IsGlobalRootNonOverlayScroller()) {
++  // helium-fork: the runtime feature gate is gone; the setting being present is
++  // the opt-in. GetRootScrollbarThemeColor() in the browser only fills this in
++  // when it means it (upstream keeps its own feature check there, and this fork
++  // adds a branch for the Arc shell), so a second gate here just made the value
++  // unreachable on mac, where the feature has no entry at all.
++  if (scrollable_area_ && scrollable_area_->IsGlobalRootNonOverlayScroller()) {
+     if (const auto* layout_box = GetLayoutBox()) {
+       if (const auto theme_color = layout_box->GetDocument()
+                                        .GetSettings()
+@@ -954,19 +958,59 @@ std::optional<blink::Color> Scrollbar::S
+     return style_source_->StyleRef().ScrollbarThumbColorResolved();
+   }
+   if (theme_.UsesFluentScrollbars() && !InForcedColorsMode() &&
+-      !ScrollbarTrackColor().has_value()) {
++      !PageDeclaredScrollbarTrackColor().has_value()) {
+     return RootScrollbarThemeColor();
+   }
++  // helium-fork: outside Fluent, the browser-supplied colour is the *track* --
++  // it is the page's own colour, so the scrollbar reads as part of the page
++  // instead of a grey channel cut into it. The thumb has to be derived, or it
++  // would vanish into the track it sits on.
++  if (!InForcedColorsMode() &&
++      !PageDeclaredScrollbarTrackColor().has_value()) {
++    if (const std::optional<blink::Color> track = RootScrollbarThemeColor()) {
++      return DeriveScrollbarThumbColor(*track);
++    }
++  }
+   return std::nullopt;
+ }
+ 
+-std::optional<blink::Color> Scrollbar::ScrollbarTrackColor() const {
++std::optional<blink::Color> Scrollbar::PageDeclaredScrollbarTrackColor() const {
+   if (style_source_) {
+     return style_source_->StyleRef().ScrollbarTrackColorResolved();
+   }
+   return std::nullopt;
+ }
+ 
++std::optional<blink::Color> Scrollbar::ScrollbarTrackColor() const {
++  if (const std::optional<blink::Color> declared =
++          PageDeclaredScrollbarTrackColor()) {
++    return declared;
++  }
++  // helium-fork: what the page says wins; this is only the fallback. Fluent
++  // spends the browser colour on the thumb, so leave its track alone.
++  if (!theme_.UsesFluentScrollbars() && !InForcedColorsMode()) {
++    return RootScrollbarThemeColor();
++  }
++  return std::nullopt;
++}
++
++// static
++blink::Color Scrollbar::DeriveScrollbarThumbColor(const blink::Color& track) {
++  // helium-fork: enough separation to grab, not so much that the scrollbar
++  // becomes the loudest thing on a dark page. Calibrated against the stock
++  // dark-scheme pair this replaces -- track (44,44,44), thumb (107,107,107) --
++  // which is the same ratio, so a page that happens to be that grey keeps the
++  // scrollbar it had before.
++  constexpr float kThumbTowardContrast = 0.32f;
++  const blink::Color contrast =
++      track.GetLightness(blink::Color::ColorSpace::kHSL) <= 0.5f
++          ? blink::Color::kWhite
++          : blink::Color::kBlack;
++  return blink::Color::InterpolateColors(
++      blink::Color::ColorSpace::kSRGB, std::nullopt, track, contrast,
++      kThumbTowardContrast);
++}
++
+ bool Scrollbar::IsOpaque() const {
+   if (IsOverlayScrollbar()) {
+     return false;
+Index: src/third_party/blink/renderer/core/scroll/scrollbar.h
+===================================================================
+--- src.orig/third_party/blink/renderer/core/scroll/scrollbar.h
++++ src/third_party/blink/renderer/core/scroll/scrollbar.h
+@@ -290,6 +290,16 @@ class CORE_EXPORT Scrollbar : public Gar
+   // when no other modification is present (high contrast or css styling).
+   std::optional<blink::Color> RootScrollbarThemeColor() const;
+ 
++  // helium-fork: `scrollbar-color`'s track half as the *page* declared it, with
++  // no browser fallback mixed in. ScrollbarTrackColor() now falls back to
++  // RootScrollbarThemeColor(), so the "did the page style this scrollbar?"
++  // question -- which both thumb branches ask -- needs its own accessor or it
++  // answers yes for every page.
++  std::optional<blink::Color> PageDeclaredScrollbarTrackColor() const;
++
++  // helium-fork: the thumb that goes with a page-colored track.
++  static blink::Color DeriveScrollbarThumbColor(const blink::Color& track);
++
+   bool track_and_buttons_need_repaint_ = true;
+   bool thumb_needs_repaint_ = true;
+   bool needs_update_display_ = true;

@@ -1,0 +1,811 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -167,7 +167,10 @@
+ #include "chrome/browser/ui/views/frame/multi_contents_view_delegate.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
+ #include "chrome/browser/ui/views/frame/scrim_view.h"
++#include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
++#include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
++#include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+ #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
+ #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+@@ -1082,6 +1085,46 @@ BrowserView::BrowserView(Browser* browse
+   contents_container_ = AddChildView(std::move(contents_container));
+   set_contents_view(contents_container_);
+ 
++  // helium-fork: the Arc shell's card -- the address bar band plus the page
++  // beneath it -- is lifted off the window by a shadow rather than fenced in by
++  // a stroke, which is what Dia does and what makes the two read as one
++  // surface. One view casts it for both, sized to their union, because two
++  // shadows would put an edge exactly at the seam we are trying to erase.
++  //
++  // Added *after* the contents: the contents container is 3pt larger than the
++  // card on every side but the top (the card's inset lives inside it), and it
++  // paints the window background over that margin -- which is exactly where
++  // this shadow falls. Stacked below it, three of the four sides were painted
++  // over and only the top one survived. Being above the card costs nothing:
++  // ui::Shadow occludes the interior of its nine-patch, so it draws only
++  // outside the bounds it is given.
++  // The elevation and alphas are ShadowOverlayView's, so the two shadows in
++  // the window are the same material.
++  //
++  // The outline goes in first, between the contents and the shadow, and the
++  // sandwich is the whole point:
++  //   * above the contents, because the page is a layer (ContentsWebView's
++  //     LAYER_SOLID_COLOR, with the renderer's layer parented under its
++  //     NativeViewHost) and layer order follows child order -- a sibling added
++  //     earlier paints underneath it and could not trim its corners;
++  //   * below the shadow, because ui::Shadow's nine-patch draws in exactly the
++  //     region the outline repaints, and re-drawing the shadow afterwards is
++  //     what keeps the four corners from coming out flat.
++  arc_card_outline_ = AddChildView(std::make_unique<ArcCardOutlineView>(this));
++  arc_card_outline_->SetVisible(false);
++
++  static constexpr ShadowFrameView::ShadowAlpha kArcCardShadowAlpha{
++      .light_key = 0.10,
++      .light_ambient = 0.17,
++      .dark_key = 0.20,
++      .dark_ambient = 0.40};
++  arc_card_shadow_ =
++      AddChildView(std::make_unique<ShadowFrameView>(4, kArcCardShadowAlpha));
++  // Starts hidden; visibility and bounds come from the layout. The shadow
++  // itself is switched on in AddedToWidget(): turning it on resolves theme
++  // colors, and there is no color provider until this view is in a widget.
++  arc_card_shadow_->SetVisible(false);
++
+   // InfoBarContainer needs to be added as a child here for drop-shadow, but
+   // needs to come after toolbar in focus order (see EnsureFocusOrder()).
+   infobar_container_ =
+@@ -1256,6 +1299,8 @@ BrowserView::~BrowserView() {
+   // before `RemoveAllChildViews()` is called to avoid dangling.
+   browser_widget_ = nullptr;
+   main_background_region_ = nullptr;
++  arc_card_outline_ = nullptr;
++  arc_card_shadow_ = nullptr;
+   top_container_ = nullptr;
+   web_app_frame_toolbar_ = nullptr;
+   web_app_window_title_ = nullptr;
+@@ -6074,6 +6119,15 @@ void BrowserView::AddedToWidget() {
+ 
+   views::ClientView::AddedToWidget();
+ 
++  // helium-fork: now that a color provider exists, the Arc card's shadow can
++  // resolve its own colors. Doing this in the constructor dereferenced a null
++  // provider and took the browser down before the first window appeared.
++  // Its radius is not set here: it comes from the card's own geometry, in the
++  // layout pass, alongside the outline's -- one number, one source.
++  if (arc_card_shadow_) {
++    arc_card_shadow_->SetShadowVisible(true);
++  }
++
+ #if BUILDFLAG(IS_WIN)
+   // Register for screen capture exclusion updates. This is specific to
+   // Document PiP windows, which are fully-fledged BrowserViews.
+@@ -6196,6 +6250,8 @@ void BrowserView::AddedToWidget() {
+   layout_views.window_scrim = window_scrim_view_;
+   layout_views.main_shadow_overlay = main_shadow_overlay_;
+   layout_views.main_background_region = main_background_region_;
++  layout_views.arc_card_outline = arc_card_outline_;
++  layout_views.arc_card_shadow = arc_card_shadow_;
+   layout_views.top_container = top_container_;
+   layout_views.web_app_frame_toolbar = web_app_frame_toolbar_;
+   layout_views.web_app_window_title = web_app_window_title_;
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -93,6 +93,8 @@ class LocationBarView;
+ class MultiContentsView;
+ class ProjectsPanelView;
+ class ScrimView;
++class ArcCardOutlineView;
++class ShadowFrameView;
+ class SidePanel;
+ class TabCyclingEventHandler;
+ class TabDragTarget;
+@@ -1272,6 +1274,14 @@ class BrowserView : public BrowserWindow
+   // WebContents, and Side panel).
+   raw_ptr<ShadowOverlayView> main_shadow_overlay_ = nullptr;
+ 
++  // helium-fork: casts the Arc shell card's shadow. Sized by the layout to the
++  // union of the address bar band and the contents, so the two are lifted off
++  // the window as one surface rather than as two stacked rectangles.
++  // helium-fork: the card's silhouette, trimmed back to the one rounded
++  // rect the layout describes. See ArcCardOutlineView.
++  raw_ptr<ArcCardOutlineView> arc_card_outline_ = nullptr;
++  raw_ptr<ShadowFrameView> arc_card_shadow_ = nullptr;
++
+   // The view that manages the tab strip, toolbar, and sometimes the bookmark
+   // bar. Stacked top in the view hiearachy so it can be used to slide out
+   // the top views in immersive fullscreen.
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout.h
++++ src/chrome/browser/ui/views/frame/layout/browser_view_layout.h
+@@ -61,6 +61,10 @@ struct BrowserViewLayoutViews {
+   raw_ptr<views::View> window_scrim = nullptr;
+   raw_ptr<views::View> main_background_region = nullptr;
+   raw_ptr<views::View> main_shadow_overlay = nullptr;
++  // helium-fork: casts one shadow around the union of the Arc shell's
++  // address bar band and the page below it -- see BrowserView's ctor.
++  raw_ptr<views::View> arc_card_outline = nullptr;
++  raw_ptr<views::View> arc_card_shadow = nullptr;
+   raw_ptr<views::View> top_container = nullptr;
+   raw_ptr<WebAppFrameToolbarView> web_app_frame_toolbar = nullptr;
+   raw_ptr<views::Label> web_app_window_title = nullptr;
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -17,6 +17,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_card_layout.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -37,7 +38,9 @@
+ #include "chrome/browser/ui/views/frame/main_background_region_view.h"
+ #include "chrome/browser/ui/views/frame/multi_contents_view.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
++#include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+ #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
+@@ -1076,6 +1079,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   // counts as attached top chrome further down. Zero means "not on screen" --
+   // in zen at reveal ratio 0, or in the hidden address bar mode.
+   int arc_band_height = 0;
++  // helium-fork: the card -- the band and the page as one rounded rectangle.
++  // Everything that needs to know where the card is reads this one value, so
++  // the band, the page and the shadow cannot end up with three rectangles that
++  // only agree by arithmetic coincidence. See arc_card_layout.h.
++  helium::ArcCardLayout arc_card;
+ 
+   // When the tabstrip isn't at the top or in constrained widths, the top
+   // container is laid out before all side panels.
+@@ -1111,6 +1119,42 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+         top_container_local_bounds, parent_params);
+     arc_band_height = top_container_layout.bounds.height();
+ 
++    // helium-fork: the card, now that the band's height is known. The shadow is
++    // cast around `arc_card.card`, the page picks up at `arc_card.contents()`,
++    // and `band_occupies_card_top()` is the one answer to "is the top chrome
++    // attached" -- deriving that a second time from the reveal ratio is what
++    // opened a 3pt seam of window background between the band and the page for
++    // the first half of every zen reveal.
++    arc_card = helium::ComputeArcCardLayout(
++        arc_content_card, params.visual_client_area,
++        MultiContentsView::kContentCardInset, arc_band_height,
++        GetSystemWindowRadius());
++    if (arc_card.enabled) {
++      // If either of these fires, the band and the page have been handed two
++      // different rectangles again. A unit test can only prove the arithmetic;
++      // these prove the callers feed it the inputs it documents, in the states
++      // -- infobar, split, zen mid-reveal, fullscreen -- that no unit test in
++      // this tree can construct.
++      DCHECK_EQ(arc_card.corner_radius, GetPaddedFrameRadius())
++          << "the card's radius must stay concentric with the window's";
++      // GetTopContainerBoundsInParent() deliberately offsets the band's origin
++      // in exactly two states: the ChromeOS top-controls slide, and an
++      // animating immersive reveal. Neither can coexist with the Arc card on
++      // this build -- the slide controller is created only under
++      // BUILDFLAG(IS_CHROMEOS), and immersive fullscreen is patched off on
++      // macOS -- but out/Default runs with DCHECKs on, and an assertion that a
++      // monthly upstream sync could turn into a crash on the user's own build
++      // is not worth the coverage.
++      const auto* const immersive = delegate().GetImmersiveModeController();
++      const bool band_origin_is_offset =
++          delegate().IsTopControlsSlideBehaviorEnabled() ||
++          (immersive && immersive->IsEnabled());
++      DCHECK(arc_band_height <= 0 || band_origin_is_offset ||
++             arc_card.band() == top_container_layout.bounds)
++          << "band " << top_container_layout.bounds.ToString()
++          << " is not the top of card " << arc_card.card.ToString();
++    }
++
+     // helium-fork: a hidden band has to be hidden, not merely zero-height.
+     //
+     // The toolbar is not collapsed when zen hides it -- it keeps its full
+@@ -1308,6 +1352,36 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   layout.AddChild(views().main_shadow_overlay, params.visual_client_area,
+                   layout_data_->separator_info.shadow_box);
+ 
++  // helium-fork: the Arc card's outline, then its shadow -- both around the
++  // band and the page together, from the same rectangle they are laid out
++  // from, so neither can fall anywhere but on their silhouette. Hidden when the
++  // card is not being drawn (fullscreen, popups, anything that is not the Arc
++  // shell).
++  //
++  // The outline repaints the plane outside the card's rounded rect, which only
++  // works while that plane is a color or an image. With the native frame
++  // materials it is a live macOS material instead, and repainting it flat would
++  // be more wrong than a square corner -- so there the card keeps whatever its
++  // parts paint, as before. (Both the feature and the pref default to off.)
++  const bool card_outline_paintable =
++      arc_card.enabled && !arc_card.card.IsEmpty() &&
++      !helium::ShouldUseNativeFrameMaterials(views().browser_view);
++  layout.AddChild(views().arc_card_outline, arc_card.card,
++                  card_outline_paintable);
++  if (auto* const outline =
++          views::AsViewClass<ArcCardOutlineView>(views().arc_card_outline)) {
++    // From the card, never from a second call to GetPaddedFrameRadius(): the
++    // outline and the geometry have to be the same number by construction.
++    outline->SetCornerRadius(arc_card.corner_radius);
++  }
++
++  layout.AddChild(views().arc_card_shadow, arc_card.card,
++                  arc_card.enabled && !arc_card.card.IsEmpty());
++  if (auto* const shadow =
++          views::AsViewClass<ShadowFrameView>(views().arc_card_shadow)) {
++    shadow->SetShadowCornerRadius(arc_card.corner_radius);
++  }
++
+   // Lay out top container. The top container is laid out after the
+   // toolbar-height side panel with a horizontal tabstrip if the browser is wide
+   // enough.
+@@ -1347,10 +1421,19 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       // extra offset from the toolbar reveal animation. The infobar slides
+       // down to stay visible below the revealed toolbar, while the content
+       // stays in place. See https://crbug.com/40278831.
++      // helium-fork: an infobar is part of the card too -- it takes the card's
++      // top edge (`top_edge_attached_to_infobar_` squares the page's top
++      // corners for it), so it has to take the card's horizontal edges as well.
++      // Off the un-inset client area it stood 3pt proud of the band and the
++      // page on both sides, unrounded.
++      const int infobar_x = arc_card.enabled ? arc_card.card.x()
++                                             : params.visual_client_area.x();
++      const int infobar_width = arc_card.enabled
++                                    ? arc_card.card.width()
++                                    : params.visual_client_area.width();
+       infobar_bounds =
+-          gfx::Rect(params.visual_client_area.x(),
+-                    params.visual_client_area.y() + additional_offset,
+-                    params.visual_client_area.width(), infobar_height);
++          gfx::Rect(infobar_x, params.visual_client_area.y() + additional_offset,
++                    infobar_width, infobar_height);
+       params.SetTop(params.visual_client_area.y() + infobar_height);
+     }
+     layout.AddChild(views().infobar_container, infobar_bounds, infobar_visible);
+@@ -1372,7 +1455,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   // which stepped the contents 6px mid-animation, and it answered "attached"
+   // in the hidden address bar mode, where there is no band at all.
+   const bool band_on_screen = arc_content_card
+-                                  ? arc_band_height > 0
++                                  ? arc_card.band_occupies_card_top()
+                                   : (!zen.enabled || zen.TopChromeVisible());
+   views().multi_contents_view->SetTopChromeAttachmentState(
+       infobar_visible && should_use_rounded_frame,
+@@ -1383,10 +1466,18 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   // Updating the top, left and right insets for contents container view when
+   // in split view. This is dependent on a number of other browser states.
+   if (horizontal_layout.is_split_view) {
++    // helium-fork: in the Arc shell the split panes are inside the same card as
++    // the band, so their top inset closes exactly when the band takes the
++    // card's top -- the same answer the corners and the page's inset use. The
++    // reveal-ratio interpolation is kept for the classic/compact/dynamic
++    // layouts, where the contents pull up to meet the sliding toolbar.
+     const int top_inset =
+         layout_data_->window_state == WindowState::kFullscreen ||
+                 infobar_visible
+             ? MultiContentsView::kSplitViewContentInset
++            : arc_content_card
++                  ? (band_on_screen ? 0
++                                    : MultiContentsView::kSplitViewContentInset)
+             : zen.enabled
+                   ? ScaleExtent(MultiContentsView::kSplitViewContentInset,
+                                 std::clamp(1.0f - zen.top_chrome_ratio, 0.0f,
+@@ -1501,6 +1592,26 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   // coverage in this fork yet.
+   const BrowserView* const browser_view_for_zen =
+       views::AsViewClass<BrowserView>(views().browser_view);
++  // helium-fork: collapse only.
++  //
++  // Widening this to the whole band lifecycle was tried and reverted. It does
++  // remove the last resize -- the 760->794 the clip itself causes on the first
++  // frame of the collapse, whose gutter is what leaves the bottom band-height
++  // of letterboxd as flat page background for the length of the animation
++  // (measured on the scrollbar column: 7/164 frames, ~32 view points) -- but
++  // the clip then stands while the band is merely *shown*, and
++  // SetInsets() cannot shrink blink's layout viewport, only cc's visual
++  // device viewport. innerHeight stayed 794 with the band up, so
++  // `position: fixed; bottom: 0` sat 34pt below the visible area permanently:
++  // a 40px bar showed 6 rows. A worse defect than the one it fixes.
++  //
++  // Removing that resize for real needs the layout viewport to shrink without
++  // a widget resize, which on this platform means BrowserControlsParams --
++  // Chrome Android's mechanism for exactly this shape of problem, already
++  // plumbed cross-platform through RenderViewHostDelegateView::
++  // GetTopControlsHeight() and browser_controls_shrink_blink_size. See
++  // PROGRESS.md; it lands with the surface-synchronisation work, which the
++  // Cmd+S scrollbar jump and the band's residual one-frame lag also need.
+   const bool zen_band_clip =
+       arc_content_card && zen.TopChromeAnimating() && arc_band_height > 0 &&
+       !side_panel_is_animating &&
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -373,6 +373,7 @@ static_library("ui") {
+     "crypto_module_password_dialog.h",
+     "enterprise_startup_dialog.h",
+     "helium/arc_band_colors.h",
++    "helium/arc_card_layout.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+@@ -4012,6 +4013,10 @@ static_library("ui") {
+       "views/frame/app_menu_button.cc",
+       "views/frame/app_menu_button.h",
+       "views/frame/app_menu_button_observer.h",
++
++      # helium-fork: the Arc card's outline.
++      "views/frame/arc_card_outline_view.cc",
++      "views/frame/arc_card_outline_view.h",
+       "views/frame/base_tab_strip_region_view.cc",
+       "views/frame/base_tab_strip_region_view.h",
+       "views/frame/browser_frame_view.cc",
+@@ -6003,6 +6008,8 @@ test("helium_workspace_unittests") {
+   sources = [
+     "helium/arc_band_colors.h",
+     "helium/arc_band_colors_unittest.cc",
++    "helium/arc_card_layout.h",
++    "helium/arc_card_layout_unittest.cc",
+     "helium_workspace/workspace_blank_tab.h",
+     "helium_workspace/workspace_blank_tab_unittest.cc",
+     "helium_workspace/workspace_entry.cc",
+@@ -6036,6 +6043,9 @@ test("helium_workspace_unittests") {
+     # asserted in this lightweight target. //ui/gfx:color_utils exists for
+     # exactly this ("without importing all the gfx").
+     "//ui/gfx:color_utils",
++    # helium-fork: same deal for arc_card_layout.h -- gfx::Rect/Insets only,
++    # no //ui/views, so the card's geometry contract is assertable here.
++    "//ui/gfx/geometry",
+     "//url",
+   ]
+ }
+Index: src/chrome/browser/ui/helium/arc_card_layout.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_card_layout.h
+@@ -0,0 +1,110 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_CARD_LAYOUT_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_CARD_LAYOUT_H_
++
++#include <algorithm>
++
++#include "ui/gfx/geometry/insets.h"
++#include "ui/gfx/geometry/rect.h"
++
++// helium-fork: the geometry of the Arc shell's card -- the address bar band and
++// the web page beneath it, which are one rounded rectangle inset from the
++// window.
++//
++// The band and the page are two sibling views laid out by two different
++// subsystems (this layout for the band, MultiContentsView for the page). For
++// five rework rounds their agreement rested on both of them applying the same
++// constant and on the band's bottom edge happening to cover the strip of window
++// background the contents container paints in its margin. Any state that was
++// not in the acceptance matrix gave that away -- most recently the zen reveal,
++// where a stale threshold left the page with its top inset and its rounded top
++// corners while the band was already sitting on top of them, showing a 3pt seam
++// of window background between the two.
++//
++// So the arithmetic lives here, once, and the invariants are assertions rather
++// than comments: see arc_card_layout_unittest.cc, and the DCHECK in
++// BrowserViewTabbedLayoutImpl that checks the callers actually feed it the
++// inputs it documents.
++//
++// Header-only and free of //ui/views so it can be linked into a lightweight
++// test target (see PROGRESS.md on why anything reaching TestingProfile cannot
++// be built in this tree).
++namespace helium {
++
++struct ArcCardLayout {
++  // False when the Arc card treatment does not apply (fullscreen, the rounded
++  // frame pref off, a non-normal window). Every rect is then empty and callers
++  // must fall back to the un-carded geometry rather than reading them.
++  bool enabled = false;
++
++  // The card: the band and the page together. Empty when `enabled` is false.
++  gfx::Rect card;
++
++  // How much of the card's top the band occupies. Zero means the band is not on
++  // screen and the page owns the whole card.
++  int band_height = 0;
++
++  // The card's corner radius, concentric with the window's own.
++  int corner_radius = 0;
++
++  // True when the band owns the card's top edge. This is the single answer to
++  // "is the top chrome attached": the page's top inset and its top corner
++  // radius both drop to zero exactly when this is true, and it must never be
++  // derived a second time from an animation ratio.
++  bool band_occupies_card_top() const { return band_height > 0; }
++
++  // The top `band_height` of the card. Empty when the band is not on screen.
++  gfx::Rect band() const {
++    if (!enabled || band_height <= 0) {
++      return gfx::Rect();
++    }
++    return gfx::Rect(card.x(), card.y(), card.width(), band_height);
++  }
++
++  // Everything below the band. Equals `card` when the band is not on screen.
++  gfx::Rect contents() const {
++    if (!enabled) {
++      return gfx::Rect();
++    }
++    return gfx::Rect(card.x(), card.y() + band_height, card.width(),
++                     card.height() - band_height);
++  }
++
++  // The page's top corners are square precisely while the band is drawing the
++  // card's rounded top for it.
++  int contents_top_corner_radius() const {
++    return band_occupies_card_top() ? 0 : corner_radius;
++  }
++};
++
++// `client_area` is the space the card is placed in, `card_inset` the uniform
++// gap it keeps from that space's edges, and `window_radius` the frame's own
++// corner radius -- the card's radius is concentric with it, so the two must be
++// derived from the same source and never both written down.
++//
++// `band_height` is clamped into the card, so a caller that hands over a stale
++// or animating height can distort the split but can never put the band outside
++// the card.
++inline ArcCardLayout ComputeArcCardLayout(bool enabled,
++                                          const gfx::Rect& client_area,
++                                          int card_inset,
++                                          int band_height,
++                                          int window_radius) {
++  ArcCardLayout layout;
++  if (!enabled) {
++    return layout;
++  }
++  layout.enabled = true;
++  layout.card = client_area;
++  layout.card.Inset(gfx::Insets(card_inset));
++  layout.band_height = std::clamp(band_height, 0, layout.card.height());
++  layout.corner_radius = std::max(0, window_radius - card_inset);
++  return layout;
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_CARD_LAYOUT_H_
+Index: src/chrome/browser/ui/helium/arc_card_layout_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_card_layout_unittest.cc
+@@ -0,0 +1,142 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_card_layout.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++#include "ui/gfx/geometry/rect.h"
++
++namespace helium {
++namespace {
++
++// gtest prints a gfx::Rect through gfx::PrintTo, which rect.h says is defined
++// in //ui/gfx:test_support -- a dep this deliberately small target does not
++// take (see PROGRESS.md on why anything heavy is unbuildable here). Comparing
++// the strings keeps the failure output readable without it; rect.h recommends
++// ToString() for exactly this.
++#define EXPECT_RECT_EQ(a, b) EXPECT_EQ((a).ToString(), (b).ToString())
++
++// The measured baseline: a 1280x800 window with a 200pt docked sidebar, the
++// card inset by kContentCardInset and the band one toolbar tall.
++constexpr int kCardInset = 3;
++constexpr int kWindowRadius = 17;
++constexpr int kBandHeight = 34;
++constexpr gfx::Rect kClientArea(200, 0, 1080, 800);
++
++ArcCardLayout Layout(int band_height) {
++  return ComputeArcCardLayout(/*enabled=*/true, kClientArea, kCardInset,
++                              band_height, kWindowRadius);
++}
++
++// The invariant the zen reveal gave away: the page begins exactly where the
++// band ends. Nothing may be drawn between them -- a single pt of daylight is
++// the window background showing through the seam, which is what "两个红色线框
++// 组合起来一个假的一体化" was pointing at.
++TEST(ArcCardLayoutTest, PageBeginsWhereTheBandEnds) {
++  for (int band_height = 0; band_height <= kBandHeight; ++band_height) {
++    const ArcCardLayout layout = Layout(band_height);
++    SCOPED_TRACE(testing::Message() << "band_height=" << band_height);
++    if (band_height > 0) {
++      EXPECT_EQ(layout.band().bottom(), layout.contents().y());
++    } else {
++      EXPECT_EQ(layout.card.y(), layout.contents().y());
++    }
++  }
++}
++
++// The band and the page are one card, so they share both vertical edges. They
++// used to be derived independently, which is how they ended up 3pt apart.
++TEST(ArcCardLayoutTest, BandAndPageShareTheCardsVerticalEdges) {
++  for (int band_height = 1; band_height <= kBandHeight; ++band_height) {
++    const ArcCardLayout layout = Layout(band_height);
++    SCOPED_TRACE(testing::Message() << "band_height=" << band_height);
++    EXPECT_EQ(layout.card.x(), layout.band().x());
++    EXPECT_EQ(layout.card.x(), layout.contents().x());
++    EXPECT_EQ(layout.card.width(), layout.band().width());
++    EXPECT_EQ(layout.card.width(), layout.contents().width());
++  }
++}
++
++// The card is exactly its two parts -- no overlap to hide a seam with, and no
++// gap for one to open in.
++TEST(ArcCardLayoutTest, CardIsExactlyBandPlusPage) {
++  for (int band_height = 0; band_height <= kBandHeight; ++band_height) {
++    const ArcCardLayout layout = Layout(band_height);
++    SCOPED_TRACE(testing::Message() << "band_height=" << band_height);
++    gfx::Rect united = layout.band();
++    united.Union(layout.contents());
++    EXPECT_RECT_EQ(layout.card, united);
++    EXPECT_EQ(layout.card.height(),
++              layout.band().height() + layout.contents().height());
++  }
++}
++
++// The page gives up its top corners precisely while the band is drawing the
++// card's rounded top for it. Two answers to this question -- one from the band's
++// height, one from the reveal ratio -- is the defect this file exists to lock
++// out: below the ratio threshold the page kept its radius and its inset while
++// the band was already there.
++TEST(ArcCardLayoutTest, PageTopCornersAreSquareExactlyWhileTheBandIsThere) {
++  EXPECT_FALSE(Layout(0).band_occupies_card_top());
++  EXPECT_EQ(Layout(0).contents_top_corner_radius(), Layout(0).corner_radius);
++
++  for (int band_height = 1; band_height <= kBandHeight; ++band_height) {
++    const ArcCardLayout layout = Layout(band_height);
++    SCOPED_TRACE(testing::Message() << "band_height=" << band_height);
++    EXPECT_TRUE(layout.band_occupies_card_top());
++    EXPECT_EQ(layout.contents_top_corner_radius(), 0);
++  }
++}
++
++// The concentric chain: window 17 -> card 14. A second radius written down
++// anywhere is a corner that stops matching the window's when the OS changes it.
++TEST(ArcCardLayoutTest, CardRadiusIsConcentricWithTheWindow) {
++  EXPECT_EQ(Layout(kBandHeight).corner_radius, kWindowRadius - kCardInset);
++  // Pre-macOS-26 the system radius is smaller; the chain must still hold.
++  EXPECT_EQ(ComputeArcCardLayout(true, kClientArea, kCardInset, kBandHeight, 12)
++                .corner_radius,
++            12 - kCardInset);
++  // And it can never go negative on an inset wider than the radius.
++  EXPECT_EQ(ComputeArcCardLayout(true, kClientArea, 20, kBandHeight, 12)
++                .corner_radius,
++            0);
++}
++
++// The card keeps a uniform gap from the space it is placed in.
++TEST(ArcCardLayoutTest, CardIsInsetUniformlyFromTheClientArea) {
++  const ArcCardLayout layout = Layout(kBandHeight);
++  EXPECT_EQ(layout.card.x(), kClientArea.x() + kCardInset);
++  EXPECT_EQ(layout.card.y(), kClientArea.y() + kCardInset);
++  EXPECT_EQ(layout.card.right(), kClientArea.right() - kCardInset);
++  EXPECT_EQ(layout.card.bottom(), kClientArea.bottom() - kCardInset);
++}
++
++// A caller handing over a stale or animating height can move the split, but it
++// can never put the band outside the card.
++TEST(ArcCardLayoutTest, BandIsClampedIntoTheCard) {
++  const ArcCardLayout too_tall = Layout(kClientArea.height() * 2);
++  EXPECT_RECT_EQ(too_tall.band(), too_tall.card);
++  EXPECT_TRUE(too_tall.contents().IsEmpty());
++  EXPECT_TRUE(too_tall.card.Contains(too_tall.band()));
++
++  const ArcCardLayout negative = Layout(-10);
++  EXPECT_EQ(negative.band_height, 0);
++  EXPECT_FALSE(negative.band_occupies_card_top());
++}
++
++// Disabled means "there is no card" -- callers must fall back rather than read
++// an accidentally-plausible rect.
++TEST(ArcCardLayoutTest, DisabledYieldsNoCardAtAll) {
++  const ArcCardLayout layout = ComputeArcCardLayout(
++      /*enabled=*/false, kClientArea, kCardInset, kBandHeight, kWindowRadius);
++  EXPECT_FALSE(layout.enabled);
++  EXPECT_TRUE(layout.card.IsEmpty());
++  EXPECT_TRUE(layout.band().IsEmpty());
++  EXPECT_TRUE(layout.contents().IsEmpty());
++  EXPECT_FALSE(layout.band_occupies_card_top());
++  EXPECT_EQ(layout.corner_radius, 0);
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/views/frame/arc_card_outline_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/arc_card_outline_view.cc
+@@ -0,0 +1,96 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
++
++#include "cc/paint/paint_flags.h"
++#include "chrome/browser/ui/views/frame/themed_background.h"
++#include "third_party/skia/include/core/SkPath.h"
++#include "third_party/skia/include/core/SkPathBuilder.h"
++#include "third_party/skia/include/core/SkRRect.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/skia_conversions.h"
++#include "ui/gfx/scoped_canvas.h"
++
++ArcCardOutlineView::ArcCardOutlineView(BrowserView* browser_view)
++    : browser_view_(browser_view) {
++  // Purely a silhouette: it covers the whole card, so it must be transparent to
++  // input, and its layer must not claim to be opaque out to its bounds (the
++  // corners are the only thing it paints).
++  SetCanProcessEventsWithinSubtree(false);
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++}
++
++ArcCardOutlineView::~ArcCardOutlineView() = default;
++
++void ArcCardOutlineView::SetCornerRadius(int corner_radius) {
++  if (corner_radius_ == corner_radius) {
++    return;
++  }
++  corner_radius_ = corner_radius;
++  SchedulePaint();
++}
++
++void ArcCardOutlineView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  // helium-fork: the wedges are painted in the window's plane color, resolved
++  // in OnPaint(). This view paints to its own layer, and nothing invalidates
++  // that layer when the theme changes -- so switching macOS to dark mode
++  // repainted the plane around the card but left the corners holding their
++  // light-mode raster, four white arcs on a dark window. Measured before this:
++  // plane (255,255,255) -> (30,32,32) while the corner stayed 255, and it
++  // stayed wrong indefinitely, not just for a frame.
++  SchedulePaint();
++}
++
++void ArcCardOutlineView::OnPaint(gfx::Canvas* canvas) {
++  if (corner_radius_ <= 0 || !browser_view_) {
++    return;
++  }
++
++  // The four corner wedges as one explicit path: the view's rect with the
++  // card's rounded rect punched out of it (even-odd).
++  //
++  // Explicit geometry, deliberately. The obvious version of this -- clip to
++  // everything outside the rounded rect, then let ThemedBackground fill it --
++  // does not survive rasterisation: ThemedBackground ends in DrawColor(), which
++  // is "fill the whole canvas, restricted to the clip", and a whole-canvas fill
++  // under a non-rectangular clip came out as a solid white band straight across
++  // the page ("网页中间为什么有一大块白色"). A DrawPath of the actual wedges has
++  // no such fast path to fall into.
++  const gfx::Rect local = GetLocalBounds();
++  const SkPath wedges =
++      SkPathBuilder()
++          .addRect(gfx::RectToSkRect(local))
++          .addRRect(SkRRect::MakeRectXY(gfx::RectToSkRect(local),
++                                        corner_radius_, corner_radius_))
++          .setFillType(SkPathFillType::kEvenOdd)
++          .detach();
++
++  // The color the plane around the card is painted in -- asked for through the
++  // same helper MultiContentsBackgroundView uses (kToolbarTheme), so the wedge
++  // and the margin next to it cannot drift apart.
++  const std::optional<SkColor> plane_color =
++      ThemedBackground::GetBackgroundColor(this, browser_view_);
++  if (plane_color) {
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setStyle(cc::PaintFlags::kFill_Style);
++    flags.setColor(*plane_color);
++    canvas->DrawPath(wedges, flags);
++    return;
++  }
++
++  // No flat color to use means a custom theme image is in play. Clipping is
++  // safe here: that path tiles a bounded image rather than filling the canvas.
++  gfx::ScopedCanvas scoped_canvas(canvas);
++  canvas->ClipPath(wedges, /*anti_alias=*/true);
++  ThemedBackground::PaintBackground(canvas, this, browser_view_);
++}
++
++BEGIN_METADATA(ArcCardOutlineView)
++END_METADATA
+Index: src/chrome/browser/ui/views/frame/arc_card_outline_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/arc_card_outline_view.h
+@@ -0,0 +1,70 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_ARC_CARD_OUTLINE_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_ARC_CARD_OUTLINE_VIEW_H_
++
++#include "base/memory/raw_ptr.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/view.h"
++
++class BrowserView;
++
++// helium-fork: the one owner of the Arc card's outline.
++//
++// The card -- the address bar band and the page below it -- is a rounded
++// rectangle floating 3pt inside the window, and unlike the classic layout it
++// has nothing that clips it: there the rounded shape *is* the window, and the
++// window clips everything, so the band, the page and the frame cannot disagree
++// about it. Here every part painted its own arc of the corner and they agreed
++// only as long as the arithmetic happened to line up. It did not line up during
++// the zen reveal: the band's corner radius is applied to the band's own rect,
++// and Skia scales a radius down to fit a short rect (SkRRect::setRectRadii), so
++// while the band grows 0 -> 34pt its corners are drawn at roughly its own
++// height. For the first frames of every reveal the card had square corners
++// ("在呼出地址栏的第一帧…ui会先变成直角，然后再完成动画").
++//
++// This view is laid out to exactly the card and paints the surrounding plane
++// back over everything outside the card's rounded rect. That is subtractive:
++// it can only remove what a part painted beyond the outline, never add. So the
++// card's silhouette is *by construction* the one rounded rect that
++// helium::ComputeArcCardLayout() describes -- at any band height, in any
++// address bar mode, with or without an infobar or a split view -- instead of
++// being the coincidence of several parts agreeing.
++//
++// The other half of the contract lives elsewhere and is worth stating here:
++// this view cannot fill a *gap* (a part painting less than the outline). That
++// is what the single attachment predicate, ArcCardLayout::band_occupies_card_
++// top(), is for -- the page drops its top inset and its top corners exactly
++// when the band takes over the card's top edge.
++//
++// Ordering in BrowserView's children is load-bearing; see the AddChildView call
++// in browser_view.cc.
++class ArcCardOutlineView : public views::View {
++  METADATA_HEADER(ArcCardOutlineView, views::View)
++
++ public:
++  explicit ArcCardOutlineView(BrowserView* browser_view);
++  ArcCardOutlineView(const ArcCardOutlineView&) = delete;
++  ArcCardOutlineView& operator=(const ArcCardOutlineView&) = delete;
++  ~ArcCardOutlineView() override;
++
++  // The card's corner radius. Must come from ArcCardLayout::corner_radius so
++  // the outline and the geometry cannot drift apart; zero disables painting.
++  void SetCornerRadius(int corner_radius);
++  int corner_radius() const { return corner_radius_; }
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override;
++  // The wedges are the window's plane color; this view owns a layer, so the
++  // theme change has to invalidate it explicitly or the corners keep the old
++  // color (see the .cc).
++  void OnThemeChanged() override;
++
++ private:
++  const raw_ptr<BrowserView> browser_view_;
++  int corner_radius_ = 0;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_ARC_CARD_OUTLINE_VIEW_H_

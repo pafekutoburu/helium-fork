@@ -1,0 +1,625 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -216,6 +216,7 @@
+ #include "chrome/browser/ui/views/tabs/tab.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_accessibility.h"
+ #include "chrome/browser/ui/views/tabs/tab_strip.h"
++#include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h"
+ #include "chrome/browser/ui/views/theme_copying_widget.h"
+ #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
+@@ -1748,6 +1749,10 @@ void BrowserView::OnVerticalTabStripMode
+     horizontal_tab_strip_region_view_->InitializeTabStrip();
+   }
+ 
++  // helium-fork: the collapse button follows the layout between the toolbar
++  // and the Arc shell sidebar top row.
++  UpdateArcSidebarControlPlacement();
++
+   // helium-fork: the hidden sidebar mode's hover monitor follows the
+   // vertical-vs-horizontal switch.
+   UpdateZenModeEventMonitor();
+@@ -1775,6 +1780,10 @@ void BrowserView::OnToolbarTabStripState
+     }
+   }
+ 
++  // helium-fork: keep the collapse button's home in sync on the
++  // compact-layout round trip as well.
++  UpdateArcSidebarControlPlacement();
++
+   if (toolbar_) {
+     toolbar_->UpdateToolbarLayout();
+   }
+@@ -2093,6 +2102,46 @@ bool BrowserView::IsSidebarHiddenModeAct
+                            tabs::VerticalTabStripCollapseState::kExpanded;
+ }
+ 
++void BrowserView::UpdateArcSidebarControlPlacement() {
++  if (!toolbar_ || !vertical_tab_strip_region_view_) {
++    return;
++  }
++  ToolbarButton* const collapse_button =
++      toolbar_->vertical_tabs_collapse_button();
++  if (!collapse_button) {
++    return;
++  }
++
++  auto* const controller =
++      tabs::VerticalTabStripStateController::From(browser_);
++  const bool wants_sidebar = controller &&
++                             controller->ShouldDisplayVerticalTabs() &&
++                             GetIsNormalType();
++  ArcSidebarTopContainer* const top_row =
++      vertical_tab_strip_region_view_->arc_top_container();
++
++  if (wants_sidebar) {
++    if (collapse_button->parent() != top_row) {
++      if (collapse_button->parent() == toolbar_) {
++        arc_collapse_button_toolbar_index_ =
++            toolbar_->GetIndexOf(collapse_button);
++      }
++      // Drop toolbar-edge margins the button may carry over (Fitts margins
++      // from a maximized window); the top row lays it out from scratch.
++      collapse_button->SetLeadingMargin(0);
++      collapse_button->SetTrailingMargin(0);
++      top_row->AddLeadingControl(collapse_button);
++    }
++  } else if (collapse_button->parent() != toolbar_) {
++    const size_t insertion_index =
++        std::min(arc_collapse_button_toolbar_index_.value_or(size_t{0}),
++                 toolbar_->children().size());
++    toolbar_->AddChildViewAt(collapse_button, insertion_index);
++  }
++
++  toolbar_->UpdateToolbarLayout();
++}
++
+ void BrowserView::OnSidebarCollapseStateChanged(
+     tabs::VerticalTabStripCollapseState state) {
+   // helium-fork: keep the reveal ratio in step with the collapse state so the
+@@ -5882,6 +5931,9 @@ void BrowserView::AddedToWidget() {
+     }
+   }
+ 
++  // helium-fork: seed the collapse button's home for the initial layout.
++  UpdateArcSidebarControlPlacement();
++
+   dialog_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
+       kBrowserDialogAnchorElementId, *this);
+ 
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -967,6 +967,10 @@ class BrowserView : public BrowserWindow
+   // helium-fork: true when the vertical tab strip is collapsed outside zen
+   // mode -- the fully-hidden floating sidebar state (Arc behavior).
+   bool IsSidebarHiddenModeActive() const;
++  // helium-fork: moves the toolbar's sidebar-bound controls (the collapse
++  // button) into the Arc shell top row while the vertical layout is active,
++  // and returns them to their recorded toolbar slots otherwise.
++  void UpdateArcSidebarControlPlacement();
+   // helium-fork: keeps the zen side-chrome reveal ratio in step with the
+   // collapse state while the hidden sidebar mode is in charge of it.
+   void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
+@@ -1267,6 +1271,11 @@ class BrowserView : public BrowserWindow
+   // view tree. This is used to correctly reparent the tabstrip when exiting
+   // fullscreen mode. See BrowserView::ReparentTopContainerForEndOfImmersive.
+   std::optional<size_t> horizontal_tab_strip_region_insertion_index_;
++
++  // helium-fork: toolbar slot the collapse button returns to when it leaves
++  // the Arc shell sidebar top row (same pattern as the tab strip index above).
++  std::optional<size_t> arc_collapse_button_toolbar_index_;
++
+   // The Toolbar containing the navigation buttons, menus and the address bar.
+   raw_ptr<ToolbarView> toolbar_ = nullptr;
+ 
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -1492,6 +1492,42 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+         has_leading_exclusion);
+     views().vertical_tab_strip_region_view->SetZenModeFloatingStyleForLayout(
+         zen.floating_vertical_tab_strip);
++
++    // helium-fork: feed the caption reservation to the Arc shell top row.
++    // Reserve only while the strip actually reaches up into the caption
++    // area; while it sits below the toolbar the row keeps its full width.
++    {
++      const BrowserLayoutExclusionArea& side_exclusion =
++          vertical_right_aligned ? browser_params.trailing_exclusion
++                                 : browser_params.leading_exclusion;
++      const int exclusion_width =
++          base::ClampCeil(side_exclusion.ContentWithPadding().width());
++      const int exclusion_height =
++          base::ClampCeil(side_exclusion.ContentWithPadding().height());
++      const int side_distance_from_client_edge =
++          vertical_right_aligned ? browser_params.visual_client_area.right() -
++                                       tabstrip_bounds->right()
++                                 : tabstrip_bounds->x();
++      const int caption_inset =
++          tabstrip_bounds->y() < exclusion_height
++              ? std::clamp(exclusion_width - side_distance_from_client_edge,
++                           0, exclusion_width)
++              : 0;
++      // helium-fork: where the caption buttons' horizontal center line falls
++      // inside the strip. The top row centers itself on this, so the traffic
++      // lights, the collapse button and the navigation buttons all sit on one
++      // line no matter what else moved the strip (zen's interior margin, the
++      // floating card's inset, a docked vs revealed sidebar). Deriving the
++      // row's y from a hard-coded padding is what put them 2-10px apart.
++      const int caption_center_in_strip =
++          base::ClampRound(
++              (side_exclusion.content_top + side_exclusion.content.height()) /
++              2.f) -
++          tabstrip_bounds->y();
++      views().vertical_tab_strip_region_view->SetCaptionExclusionForLayout(
++          caption_inset, exclusion_height, caption_center_in_strip,
++          vertical_right_aligned);
++    }
+   }
+ 
+   return layout;
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -50,6 +50,7 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+ #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
++#include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/grit/generated_resources.h"
+@@ -86,6 +87,8 @@ constexpr int kCollapsedResizeAreaWidth
+ constexpr int kKeyboardResizeWidth = 50;
+ constexpr int kSnapDistance = 15;
+ constexpr int kBottomContainerGap = 2;
++// helium-fork: breathing room above and below the Arc shell top row.
++constexpr int kArcTopContainerGap = 4;
+ constexpr int kDefaultWidthSnapDistance = 6;
+ 
+ // Shadow is used in expand-on-hover mode. Shadow radius and opacity are dynamic
+@@ -127,6 +130,15 @@ VerticalTabStripRegionView::VerticalTabS
+                                    views::MinimumFlexSizeRule::kPreferred,
+                                    views::MaximumFlexSizeRule::kPreferred));
+ 
++  // helium-fork: the Arc shell top row is the first child so the tab strip
++  // and every other section lay out beneath it.
++  arc_top_container_ =
++      AddChildViewAt(std::make_unique<ArcSidebarTopContainer>(), 0);
++  arc_top_container_->SetProperty(
++      views::kMarginsKey,
++      gfx::Insets::TLBR(kArcTopContainerGap, region_horizontal_padding,
++                        kArcTopContainerGap, region_horizontal_padding));
++
+   bottom_button_container_ =
+       AddChildView(std::make_unique<VerticalTabStripBottomContainer>(
+           state_controller_, root_action_item, browser_view->browser(),
+@@ -268,6 +280,15 @@ bool VerticalTabStripRegionView::IsPosit
+     return bottom_button_container_->IsPositionInWindowCaption(point_in_child);
+   }
+ 
++  // helium-fork: empty stretches of the Arc shell top row drag the window,
++  // exactly like the caption area they sit in.
++  if (IsHitInView(arc_top_container_, point)) {
++    gfx::Point point_in_child = point;
++    views::View::ConvertPointToTarget(this, arc_top_container_,
++                                      &point_in_child);
++    return arc_top_container_->IsPositionInWindowCaption(point_in_child);
++  }
++
+   // For any of the other children, absorb the click as non window caption.
+   for (views::View* child : children()) {
+     if (!child->GetVisible()) {
+@@ -294,6 +315,38 @@ void VerticalTabStripRegionView::SetHasL
+   UpdateInteriorMargin();
+ }
+ 
++void VerticalTabStripRegionView::SetCaptionExclusionForLayout(
++    int width,
++    int min_height,
++    int caption_center,
++    bool on_trailing_edge) {
++  arc_top_container_->SetCaptionExclusion(width, min_height, on_trailing_edge);
++
++  // helium-fork: center the row on the caption buttons instead of parking it
++  // at a fixed padding. The row's own height is whatever its tallest control
++  // needs, and the strip's origin moves (docked vs floating card vs zen), so
++  // any constant here is wrong in at least one state -- which is exactly how
++  // the traffic lights ended up 2-10px off the icon row.
++  //
++  // caption_center <= 0 means there is no caption on this side (right-aligned
++  // sidebar; macOS keeps the lights on the left): fall back to plain padding.
++  const int row_height = arc_top_container_->GetPreferredSize().height();
++  const int top_margin =
++      caption_center > 0
++          ? std::max(0, caption_center - row_height / 2)
++          : kArcTopContainerGap;
++  const int horizontal_padding =
++      GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
++  const gfx::Insets margins =
++      gfx::Insets::TLBR(top_margin, horizontal_padding, kArcTopContainerGap,
++                        horizontal_padding);
++  if (arc_top_container_->GetProperty(views::kMarginsKey) &&
++      *arc_top_container_->GetProperty(views::kMarginsKey) == margins) {
++    return;
++  }
++  arc_top_container_->SetProperty(views::kMarginsKey, margins);
++}
++
+ void VerticalTabStripRegionView::SetZenModeFloatingStyleForLayout(
+     bool floating) {
+   if (zen_mode_floating_style_ == floating) {
+@@ -320,14 +373,13 @@ void VerticalTabStripRegionView::SetZenM
+     corners[CornerOrientation::kTopTrailing] = rounded_corner;
+     corners[CornerOrientation::kBottomLeading] = rounded_corner;
+     corners[CornerOrientation::kBottomTrailing] = rounded_corner;
+-
+-    outline.color.color = kColorToolbarContentAreaSeparator;
+-    outline.top = true;
+-    outline.leading = true;
+-    outline.bottom = true;
+-    outline.trailing = true;
+   }
+ 
++  // helium-fork: `outline` stays empty on purpose. The floating card is
++  // separated from the window by its shadow alone, never by a stroke -- the
++  // same treatment the contents card gets. A hairline here reads as a second,
++  // competing edge beside the shadow, and against a light theme it is the one
++  // thing that makes the card look pasted on rather than lifted off.
+   background->SetCorners(corners);
+   background->SetOutline(outline);
+   background->SetPaintWithNativeFrameMaterials(floating);
+@@ -801,21 +853,17 @@ void VerticalTabStripRegionView::ClearTa
+ void VerticalTabStripRegionView::UpdateInteriorMargin() {
+   const int padding = GetLayoutConstant(
+       LayoutConstant::kVerticalTabStripUncollapsedVerticalPadding);
+-  int top_padding = 0;
+-  if (browser_view_ && browser_view_->IsZenModeEnabledForLayout()) {
+-    const float top_chrome_ratio = browser_view_->GetTopChromeRevealRatio();
+-    const bool top_chrome_visible_or_pinned =
+-        top_chrome_ratio > 0.0f || browser_view_->IsZenModeTopChromePinned();
+-    const float ratio =
+-        zen_mode_floating_style_ || !top_chrome_visible_or_pinned
+-            ? 1.0f
+-            : 1.0f - top_chrome_ratio;
+-    top_padding = base::ClampRound(
+-        GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius) * ratio);
+-  }
+ 
+-  flex_layout_->SetInteriorMargin(
+-      gfx::Insets::TLBR(top_padding, 0, padding, 0));
++  // helium-fork: the top interior margin is always zero in the Arc shell.
++  //
++  // Upstream added up to kVerticalTabCornerRadius here so a floating strip
++  // would not start flush against its own rounded corner. The Arc shell's top
++  // row owns that spacing now -- its margin is derived from where the caption
++  // buttons actually are (SetCaptionExclusionForLayout). Leaving the interior
++  // margin in place pushed the whole row down by 8px in zen while the traffic
++  // lights stayed put, which is one half of the "红绿灯和这一行icon不在一个
++  // 水平线上" defect; the other half was the caption band height itself.
++  flex_layout_->SetInteriorMargin(gfx::Insets::TLBR(0, 0, padding, 0));
+ }
+ 
+ void VerticalTabStripRegionView::OnCollapseStateChanged(
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -32,6 +32,7 @@
+ #include "ui/views/controls/resize_area_delegate.h"
+ #include "ui/views/focus/focus_manager.h"
+ 
++class ArcSidebarTopContainer;
+ class BrowserView;
+ class VerticalTabStripBottomContainer;
+ class ShadowFrameView;
+@@ -84,9 +85,21 @@ class VerticalTabStripRegionView final
+     return bottom_button_container_;
+   }
+ 
++  // helium-fork: top row of the Arc shell (caption reservation + collapse +
++  // navigation controls).
++  ArcSidebarTopContainer* arc_top_container() { return arc_top_container_; }
++
+   bool IsPositionInWindowCaption(const gfx::Point& point);
+ 
+   void SetHasLeadingExclusionForLayout(bool has_leading_exclusion);
++  // helium-fork: forwards the caption reservation to the top row, and pins the
++  // row's vertical center to `caption_center` (measured from this view's top).
++  // Everything in the row -- the collapse button, the navigation buttons --
++  // then shares one horizontal center line with the traffic lights.
++  void SetCaptionExclusionForLayout(int width,
++                                    int min_height,
++                                    int caption_center,
++                                    bool on_trailing_edge);
+   void SetZenModeFloatingStyleForLayout(bool floating);
+ 
+   void UpdateInteriorMargin();
+@@ -240,6 +253,7 @@ class VerticalTabStripRegionView final
+   bool has_leading_exclusion_ = false;
+   bool zen_mode_floating_style_ = false;
+ 
++  raw_ptr<ArcSidebarTopContainer> arc_top_container_ = nullptr;
+   raw_ptr<VerticalTabStripBottomContainer> bottom_button_container_ = nullptr;
+   raw_ptr<views::View> gemini_button_ = nullptr;
+   raw_ptr<views::ResizeArea> resize_area_ = nullptr;
+Index: src/chrome/browser/ui/views/tabs/vertical/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/BUILD.gn
++++ src/chrome/browser/ui/views/tabs/vertical/BUILD.gn
+@@ -7,6 +7,7 @@ import("//chrome/common/features.gni")
+ 
+ source_set("vertical") {
+   sources = [
++    "arc_sidebar_top_container.h",
+     "top_container_button.h",
+     "vertical_new_tab_button.h",
+     "vertical_tab_strip_bottom_container.h",
+@@ -36,6 +37,7 @@ source_set("vertical") {
+ 
+ source_set("impl") {
+   sources = [
++    "arc_sidebar_top_container.cc",
+     "top_container_button.cc",
+     "vertical_new_tab_button.cc",
+     "vertical_tab_strip_bottom_container.cc",
+Index: src/chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.cc
+@@ -0,0 +1,85 @@
++// Copyright 2025 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
++
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/views/layout/flex_layout_types.h"
++#include "ui/views/view_class_properties.h"
++
++ArcSidebarTopContainer::ArcSidebarTopContainer() {
++  SetOrientation(views::LayoutOrientation::kHorizontal);
++  SetCrossAxisAlignment(views::LayoutAlignment::kCenter);
++
++  caption_spacer_ = AddChildView(std::make_unique<views::View>());
++  caption_spacer_->SetCanProcessEventsWithinSubtree(false);
++  caption_spacer_->SetVisible(false);
++
++  flex_spacer_ = AddChildView(std::make_unique<views::View>());
++  flex_spacer_->SetCanProcessEventsWithinSubtree(false);
++  // The orientation-tagged specification flexes the spacer along the row
++  // only. The two-argument form applies to BOTH axes, which lets the spacer
++  // demand unbounded height and inflates the whole row (measured: a 298px
++  // top row splitting the sidebar's spare space with the bottom container).
++  flex_spacer_->SetProperty(
++      views::kFlexBehaviorKey,
++      views::FlexSpecification(views::LayoutOrientation::kHorizontal,
++                               views::MinimumFlexSizeRule::kScaleToZero,
++                               views::MaximumFlexSizeRule::kUnbounded));
++}
++
++ArcSidebarTopContainer::~ArcSidebarTopContainer() = default;
++
++void ArcSidebarTopContainer::SetCaptionExclusion(int width,
++                                                 int min_height,
++                                                 bool on_trailing_edge) {
++  const gfx::Size reservation(std::max(width, 0),
++                              width > 0 ? std::max(min_height, 0) : 0);
++  const size_t target_index = on_trailing_edge ? children().size() - 1 : 0;
++  const bool changed = caption_spacer_->GetPreferredSize() != reservation ||
++                       GetIndexOf(caption_spacer_).value() != target_index;
++  if (!changed) {
++    return;
++  }
++  caption_spacer_->SetPreferredSize(reservation);
++  caption_spacer_->SetVisible(width > 0);
++  ReorderChildView(caption_spacer_, target_index);
++  InvalidateLayout();
++}
++
++void ArcSidebarTopContainer::AddLeadingControl(views::View* control) {
++  // Right after the caption spacer when it leads; index 0 otherwise.
++  const size_t spacer_index = GetIndexOf(caption_spacer_).value();
++  const size_t flex_index = GetIndexOf(flex_spacer_).value();
++  AddChildViewAt(control,
++                 spacer_index < flex_index ? spacer_index + 1 : size_t{0});
++}
++
++void ArcSidebarTopContainer::AddTrailingControl(views::View* control) {
++  // Trailing controls sit after the flex spacer, before a trailing caption
++  // spacer if one is active (right-aligned tab strip).
++  const size_t spacer_index = GetIndexOf(caption_spacer_).value();
++  const size_t flex_index = GetIndexOf(flex_spacer_).value();
++  AddChildViewAt(control, spacer_index > flex_index ? spacer_index
++                                                    : children().size());
++}
++
++bool ArcSidebarTopContainer::IsPositionInWindowCaption(
++    const gfx::Point& point) {
++  for (views::View* child : children()) {
++    if (!child->GetVisible() || child == caption_spacer_ ||
++        child == flex_spacer_) {
++      continue;
++    }
++    gfx::Point point_in_child = point;
++    views::View::ConvertPointToTarget(this, child, &point_in_child);
++    if (child->HitTestPoint(point_in_child)) {
++      return false;
++    }
++  }
++  return true;
++}
++
++BEGIN_METADATA(ArcSidebarTopContainer)
++END_METADATA
+Index: src/chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h
+@@ -0,0 +1,42 @@
++// Copyright 2025 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_ARC_SIDEBAR_TOP_CONTAINER_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_ARC_SIDEBAR_TOP_CONTAINER_H_
++
++#include "ui/views/layout/flex_layout_view.h"
++
++// helium-fork: top row of the vertical tab strip in the Arc shell. Reserves
++// room for the macOS window controls at its leading edge, keeps the collapse
++// button next to them, and right-aligns navigation controls against the
++// content side. The buttons themselves are owned by ToolbarView and reparented
++// in here by BrowserView; this container only lays them out.
++class ArcSidebarTopContainer : public views::FlexLayoutView {
++  METADATA_HEADER(ArcSidebarTopContainer, views::FlexLayoutView)
++ public:
++  ArcSidebarTopContainer();
++  ~ArcSidebarTopContainer() override;
++
++  // Reserves `width` at the leading (or, for a right-aligned tab strip,
++  // trailing) edge so the row's controls never render under the window
++  // controls, and keeps the row at least `min_height` tall while reserving.
++  // A zero `width` clears the reservation (sidebar below the caption area,
++  // fullscreen, non-mac).
++  void SetCaptionExclusion(int width, int min_height, bool on_trailing_edge);
++
++  // Places `control` right after the caption reservation (collapse button).
++  void AddLeadingControl(views::View* control);
++  // Places `control` against the content-side edge (navigation buttons).
++  void AddTrailingControl(views::View* control);
++
++  // True when `point` (in this view's coordinates) hits no interactive child
++  // and should therefore drag the window.
++  bool IsPositionInWindowCaption(const gfx::Point& point);
++
++ private:
++  raw_ptr<views::View> caption_spacer_ = nullptr;
++  raw_ptr<views::View> flex_spacer_ = nullptr;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_ARC_SIDEBAR_TOP_CONTAINER_H_
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -1847,16 +1847,21 @@ void ToolbarView::LayoutCommon() {
+       browser_->GetWindow() && (browser_->GetWindow()->IsMaximized() ||
+                                 browser_->GetWindow()->IsFullscreen());
+   const int margin = extend_buttons_to_edge ? interior_margin.left() : 0;
+-  const bool collapse_button_on_trailing_edge =
++  // helium-fork: while the button lives in the sidebar top row it takes no
++  // part in this toolbar's edge margins.
++  const bool collapse_button_in_toolbar =
+       vertical_tabs_collapse_button_ &&
++      vertical_tabs_collapse_button_->parent() == this;
++  const bool collapse_button_on_trailing_edge =
++      collapse_button_in_toolbar &&
+       vertical_tabs_collapse_button_->GetVisible() && IsVerticalLayout() &&
+       IsVerticalTabsRightAligned();
+   const bool collapse_button_on_leading_edge =
+-      vertical_tabs_collapse_button_ &&
++      collapse_button_in_toolbar &&
+       vertical_tabs_collapse_button_->GetVisible() &&
+       !collapse_button_on_trailing_edge;
+ 
+-  if (vertical_tabs_collapse_button_) {
++  if (collapse_button_in_toolbar) {
+     vertical_tabs_collapse_button_->SetLeadingMargin(
+         collapse_button_on_leading_edge ? margin : 0);
+   }
+@@ -1871,7 +1876,7 @@ void ToolbarView::LayoutCommon() {
+       extend_buttons_to_edge && !collapse_button_on_trailing_edge
+           ? interior_margin.right()
+           : 0);
+-  if (vertical_tabs_collapse_button_) {
++  if (collapse_button_in_toolbar) {
+     vertical_tabs_collapse_button_->SetTrailingMargin(
+         extend_buttons_to_edge && collapse_button_on_trailing_edge
+             ? interior_margin.right()
+@@ -1935,7 +1940,10 @@ void ToolbarView::UpdateToolbarLayout()
+   UpdateVerticalTabsCollapseButton();
+   UpdateDynamicNewTabButton();
+ 
+-  if (vertical_tabs_collapse_button_) {
++  // helium-fork: the button may live in the sidebar top row; reordering only
++  // applies while it is one of this toolbar's children.
++  if (vertical_tabs_collapse_button_ &&
++      vertical_tabs_collapse_button_->parent() == this) {
+     const size_t target_index =
+         IsVerticalLayout() && IsVerticalTabsRightAligned()
+             ? GetIndexOf(app_menu_button_).value() + 1
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -189,6 +189,11 @@ class ToolbarView : public views::Access
+     return extensions_container_;
+   }
+   ToolbarButton* forward_button() const { return forward_; }
++  // helium-fork: exposed so BrowserView can move the button between this
++  // toolbar and the Arc shell sidebar top row.
++  ToolbarButton* vertical_tabs_collapse_button() const {
++    return vertical_tabs_collapse_button_;
++  }
+   views::Button* tab_search_button();
+   ExtensionsToolbarButton* GetExtensionsButton() const;
+   ReloadButton* reload_button() const { return reload_; }
+Index: src/chrome/browser/ui/views/frame/browser_frame_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_frame_view.cc
++++ src/chrome/browser/ui/views/frame/browser_frame_view.cc
+@@ -139,6 +139,9 @@ BrowserLayoutParams BrowserFrameView::Ge
+   }
+   const float caption_height =
+       caption_bounds.bounds.bottom() - params.visual_client_area.y();
++  // helium-fork: see BrowserLayoutExclusionArea::content_top.
++  const float caption_top =
++      caption_bounds.bounds.y() - params.visual_client_area.y();
+   if (CaptionButtonsOnLeadingEdge()) {
+     params.leading_exclusion.content = gfx::SizeF(
+         caption_bounds.bounds.right() - params.visual_client_area.x(),
+@@ -146,6 +149,7 @@ BrowserLayoutParams BrowserFrameView::Ge
+     params.leading_exclusion.horizontal_padding =
+         caption_bounds.margins.right();
+     params.leading_exclusion.vertical_padding = caption_bounds.margins.bottom();
++    params.leading_exclusion.content_top = caption_top;
+   } else {
+     params.trailing_exclusion.content = gfx::SizeF(
+         params.visual_client_area.right() - caption_bounds.bounds.x(),
+@@ -154,6 +158,7 @@ BrowserLayoutParams BrowserFrameView::Ge
+         caption_bounds.margins.left();
+     params.trailing_exclusion.vertical_padding =
+         caption_bounds.margins.bottom();
++    params.trailing_exclusion.content_top = caption_top;
+   }
+   return params;
+ }
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_params.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_params.h
++++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_params.h
+@@ -29,6 +29,16 @@ struct BrowserLayoutExclusionArea {
+   // should occur here.
+   gfx::SizeF content;
+ 
++  // helium-fork: top edge of `content` relative to the client area.
++  //
++  // `content` is only an extent measured from the client origin, which is all
++  // an inset ever needs. But the Arc shell has to vertically CENTER its
++  // sidebar top row on the caption buttons, and for that it needs to know
++  // where they start, not just where they end. Deriving it from
++  // content.height() minus a hard-coded button height would put the same
++  // magic number in two places.
++  float content_top = 0.f;
++
+   // Any additional area next to the content that should remain empty for visual
+   // balance. It's okay for edges and borders to be drawn in this space.
+   float horizontal_padding = 0.f;

@@ -1,0 +1,944 @@
+Index: src/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
++++ src/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+@@ -363,6 +363,10 @@ void BrowserFrameViewMac::SetCaptionButt
+        {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
+     NSButton* button_view = [window standardWindowButton:button];
+     [button_view setAlphaValue:opacity];
++    // helium-fork: an alpha of zero still hit-tests on macOS, leaving an
++    // invisible close button in the corner; hide the buttons outright so
++    // nothing swallows clicks while they are faded away.
++    [button_view setHidden:(opacity <= 0.0f)];
+   }
+ }
+ 
+@@ -476,6 +480,19 @@ BrowserFrameViewMac::GetCaptionButtonBou
+   }
+   // LINT.ThenChange(//chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm:MacTabStripInsets)
+ 
++  // helium-fork: the y above is (titlebar_height - button_height) / 2 for the
++  // default titlebar height. The Arc shell reports a taller band so the lights
++  // land on the toolbar row's center line (see
++  // BrowserNativeWidgetMac::GetWindowFrameTitlebarHeight), so recompute rather
++  // than let this drift out of sync -- everything that reserves space for the
++  // caption buttons, and now the sidebar top row that centers itself on them,
++  // reads the rect from here.
++  if (const int arc_caption_band =
++          GetBrowserView()->GetArcShellCaptionBandHeight();
++      arc_caption_band > 0) {
++    result.bounds.set_y((arc_caption_band - result.bounds.height()) / 2.f);
++  }
++
+   // Mirror for when caption buttons are on the "wrong" side.
+   if (!CaptionButtonsOnLeadingEdge()) {
+     result.bounds.set_x(width() - (result.bounds.x() + result.bounds.width()));
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1653,6 +1653,11 @@ float BrowserView::GetTopChromeRevealRat
+   return zen_top_chrome_animation_.GetCurrentValue();
+ }
+ 
++bool BrowserView::IsZenTopChromeCollapsing() const {
++  return zen_mode_enabled_ && zen_top_chrome_animation_.is_animating() &&
++         zen_top_chrome_animation_.IsClosing();
++}
++
+ float BrowserView::GetSideChromeRevealRatio() const {
+   // helium-fork: the hidden sidebar (collapsed, zen off) floats exactly like
+   // zen's unpinned strip and reuses the same slide animation for its reveal.
+@@ -1754,8 +1759,10 @@ void BrowserView::OnVerticalTabStripMode
+   UpdateArcSidebarControlPlacement();
+ 
+   // helium-fork: the hidden sidebar mode's hover monitor follows the
+-  // vertical-vs-horizontal switch.
++  // vertical-vs-horizontal switch, and the window controls leave any fade
++  // behind when the vertical layout goes away.
+   UpdateZenModeEventMonitor();
++  UpdateCaptionButtonsOpacityForChromeState();
+ 
+   GetFrameView()->OnTabStripStateChanged();
+ 
+@@ -1881,9 +1888,10 @@ void BrowserView::UpdateZenModeState() {
+   UpdateZenCollapseButtonVisibility();
+ 
+   if (!zen_mode_enabled_) {
+-    if (auto* frame_view = GetFrameView()) {
+-      frame_view->SetCaptionButtonsOpacity(1.0f);
+-    }
++    // helium-fork: leaving zen may land in the hidden-sidebar state, whose
++    // window controls follow the floating card -- let the single write point
++    // decide instead of forcing them shown.
++    UpdateCaptionButtonsOpacityForChromeState();
+     if (!zen_top_chrome_animation_.IsShowing()) {
+       zen_top_chrome_animation_.Show();
+     }
+@@ -1973,12 +1981,17 @@ void BrowserView::UpdateZenModeRevealFro
+ 
+   // Top bar takes precedence: don't reveal side chrome when the cursor
+   // is in the top trigger zone or over the revealed top chrome.
++  // helium-fork: zen-only. In the hidden-sidebar state the floating card
++  // reaches the window top, so its own top pixels overlap the top trigger
++  // and the (always-visible) toolbar band -- the old suppression would snap
++  // the card shut the moment the cursor touched either.
++  const bool suppress_side_for_top = zen_mode_enabled_ && reveal_top;
+   const bool in_side_trigger = IsPointInZenSideTrigger(cursor);
+   const bool in_side_chrome = IsPointInZenSideChromeBounds(cursor);
+   const bool moving_out_through_side_gap =
+       previous_cursor && IsLeavingZenSideGap(*previous_cursor, cursor);
+   const bool reveal_side =
+-      !reveal_top && !moving_out_through_side_gap &&
++      !suppress_side_for_top && !moving_out_through_side_gap &&
+       (in_side_trigger || in_side_chrome);
+ 
+   // Defer the collapse briefly so quick excursions don't cause the
+@@ -2102,6 +2115,66 @@ bool BrowserView::IsSidebarHiddenModeAct
+                            tabs::VerticalTabStripCollapseState::kExpanded;
+ }
+ 
++bool BrowserView::ShouldUseContentCardInsets() const {
++  // helium-fork: every address bar mode lays the contents out as a card,
++  // zen included -- the mode only decides whether the band above the card is
++  // shown, hidden, or revealed on hover.
++  return ShouldDrawVerticalTabStrip() && GetIsNormalType();
++}
++
++int BrowserView::GetArcShellCaptionBandHeight() const {
++  // helium-fork: the height of the band the macOS window controls must be
++  // centered in. Zero means "not the Arc shell -- leave the system default".
++  //
++  // AppKit vertically centers the traffic lights in whatever titlebar height
++  // Chromium reports, and BrowserFrameViewMac::GetCaptionButtonBounds() hard
++  // codes the y that produces (its numbers are exactly
++  // (toolbar_height - button_height) / 2). The Arc shell then insets its top
++  // chrome by kContentCardInset, so the toolbar row -- and the sidebar top row
++  // laid out beside it -- ended up that much below the lights, while the
++  // lights stayed pinned to the window edge. Reporting a band that includes
++  // the inset on both sides puts them back on one center line, in every state,
++  // without anyone having to guess a magic offset.
++  if (!toolbar_ || !multi_contents_view_ ||
++      !multi_contents_view_->ShouldUseRoundedFrame() ||
++      !ShouldUseContentCardInsets()) {
++    return 0;
++  }
++  return toolbar_->GetMinimumSize().height() +
++         2 * MultiContentsView::kContentCardInset;
++}
++
++void BrowserView::UpdateCaptionButtonsOpacityForChromeState() {
++  auto* frame_view = GetFrameView();
++  if (!frame_view) {
++    return;
++  }
++  // helium-fork: the window controls are drawn over whatever chrome is under
++  // them, so they are visible while EITHER possible host is on screen:
++  //
++  //   * the sidebar's top row -- unless the sidebar is hidden, in which case
++  //     they fade in and out with the floating card. A right-aligned sidebar
++  //     never covers that corner, so it is not a host at all.
++  //   * the address bar band -- unless the mode has no band (kHidden), or zen
++  //     has it hidden, in which case they follow its reveal.
++  //
++  // Tying them to the sidebar alone left a window with a docked band and a
++  // collapsed sidebar showing no traffic lights whatsoever, which is both
++  // wrong and unclosable by mouse.
++  float sidebar_host = 0.0f;
++  if (!IsVerticalTabStripRightAligned()) {
++    sidebar_host =
++        IsSidebarHiddenModeActive() ? GetSideChromeRevealRatio() : 1.0f;
++  }
++  float band_host = 0.0f;
++  if (auto* const layout_controller =
++          HeliumLayoutStateController::From(browser_);
++      layout_controller && layout_controller->HasAddressBarBand()) {
++    band_host = IsZenModeEnabled() ? GetTopChromeRevealRatio() : 1.0f;
++  }
++  frame_view->SetCaptionButtonsOpacity(std::max(sidebar_host, band_host));
++}
++
+ void BrowserView::UpdateArcSidebarControlPlacement() {
+   if (!toolbar_ || !vertical_tab_strip_region_view_) {
+     return;
+@@ -2163,6 +2236,9 @@ void BrowserView::OnSidebarCollapseState
+   // for one), and re-evaluating now would pop the card straight back out.
+   // The monitor re-evaluates on the next mouse move anyway.
+   UpdateZenModeEventMonitor();
++  // helium-fork: non-choreographed collapse flips snap the window controls
++  // with the ratio they just reset.
++  UpdateCaptionButtonsOpacityForChromeState();
+   InvalidateLayout();
+ }
+ 
+@@ -2220,6 +2296,8 @@ void BrowserView::RunSidebarDockFlip() {
+   DisarmContentsResizeHold();
+   sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
+   UpdateZenModeEventMonitor();
++  // helium-fork: the dock flip shows the window controls with the sidebar.
++  UpdateCaptionButtonsOpacityForChromeState();
+ }
+ 
+ void BrowserView::ArmContentsResizeHold() {
+@@ -5977,12 +6055,8 @@ void BrowserView::OnThemeChanged() {
+   FrameColorsChanged();
+ 
+   // Theme changes may recreate caption buttons, resetting their opacity.
+-  // Reapply zen mode state so buttons stay hidden during zen mode.
+-  if (zen_mode_enabled_) {
+-    if (auto* frame_view = GetFrameView()) {
+-      frame_view->SetCaptionButtonsOpacity(GetTopChromeRevealRatio());
+-    }
+-  }
++  // helium-fork: reapply for every fading state (zen and hidden sidebar).
++  UpdateCaptionButtonsOpacityForChromeState();
+ }
+ 
+ bool BrowserView::GetDropFormats(
+@@ -6910,14 +6984,10 @@ void BrowserView::AnimationProgressed(co
+       multi_contents_view_->MaybeUpdateBorderForZenReveal();
+     }
+     InvalidateLayout();
+-    if (top_chrome_animation) {
+-      if (auto* frame_view = GetFrameView()) {
+-        // Fade caption buttons with the toolbar.  The toolbar still reserves
+-        // their space via exclusion areas since the buttons remain visible to
+-        // the layout system (only their rendering opacity is changed).
+-        frame_view->SetCaptionButtonsOpacity(GetTopChromeRevealRatio());
+-      }
+-    }
++    // helium-fork: both animations may own the window-control fade -- zen
++    // ties it to the top chrome, the hidden sidebar ties it to the floating
++    // card -- so route every frame through the single write point.
++    UpdateCaptionButtonsOpacityForChromeState();
+   }
+ }
+ 
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -433,6 +433,20 @@ class BrowserView : public BrowserWindow
+   bool IsZenModeEnabledForLayout() const;
+   float GetTopChromeRevealRatio() const;
+   float GetSideChromeRevealRatio() const;
++  // helium-fork: true while the zen band is sliding *away*. That is the only
++  // direction in which the contents grow, and growth is the only direction in
++  // which a resize can gutter (surface_aggregator.cc only emits gutter quads
++  // when the stale surface is smaller than the new one). The layout uses this
++  // to decide whether the contents need to be pinned to their end size and
++  // clipped; see browser_view_tabbed_layout_impl.cc.
++  bool IsZenTopChromeCollapsing() const;
++  // helium-fork: true when the contents should lay out as an inset rounded
++  // card (the Arc shell -- vertical layout outside zen mode).
++  bool ShouldUseContentCardInsets() const;
++  // helium-fork: height the macOS caption buttons should be centered in, or 0
++  // outside the Arc shell. See the definition for why it is not just the
++  // toolbar height.
++  int GetArcShellCaptionBandHeight() const;
+   bool IsZenModeSideChromePinned() const;
+   bool IsZenModeTopChromePinned() const;
+ 
+@@ -971,6 +985,10 @@ class BrowserView : public BrowserWindow
+   // button) into the Arc shell top row while the vertical layout is active,
+   // and returns them to their recorded toolbar slots otherwise.
+   void UpdateArcSidebarControlPlacement();
++  // helium-fork: single write point for the macOS window-control opacity.
++  // Zen fades them with the top chrome, the hidden sidebar fades them with
++  // the floating card, and every other state keeps them fully shown.
++  void UpdateCaptionButtonsOpacityForChromeState();
+   // helium-fork: keeps the zen side-chrome reveal ratio in step with the
+   // collapse state while the hidden sidebar mode is in charge of it.
+   void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -25,6 +25,9 @@
+ #include "chrome/browser/ui/views/animations/side_panel_animations.h"
+ #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
+ #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
++// helium-fork: for IsZenTopChromeCollapsing(), which decides whether the
++// contents have to be pinned and clipped for the band's slide.
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/custom_corners.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
+ #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
+@@ -64,7 +67,12 @@ constexpr int kVerticalTabsGrabHandleSiz
+ // against the frame controls when it is the top-most row.
+ constexpr int kTopToolbarExclusion = 10;
+ 
+-constexpr int kZenModeVTSPadding = 8;
++// helium-fork: the floating sidebar card shares the contents card's inset.
++// The macOS traffic lights are pinned by AppKit (x≈11, vertically centered in
++// the caption band) and cannot follow the card, so the card must come to
++// them: with the upstream 8px inset the lights sat 3px from the card edge and
++// below its top row's reach ("红绿灯差一点点就被左侧切掉").
++constexpr int kZenModeVTSPadding = MultiContentsView::kContentCardInset;
+ 
+ struct ZenModeLayoutState {
+   bool enabled = false;
+@@ -76,6 +84,14 @@ struct ZenModeLayoutState {
+ 
+   bool TopChromeVisible() const { return top_chrome_ratio > 0.0f; }
+ 
++  // helium-fork: true while the band is mid-slide. The contents' top edge is
++  // recomputed every frame of that slide, so this has to join the set of
++  // motions that make the contents ask viz to wait for the renderer instead of
++  // guttering (see the SetIsAnimatingContent() call below).
++  bool TopChromeAnimating() const {
++    return enabled && top_chrome_ratio > 0.0f && top_chrome_ratio < 1.0f;
++  }
++
+   bool ShouldLayoutVerticalTabStrip() const {
+     return !floating_vertical_tab_strip || side_chrome_ratio > 0.0f;
+   }
+@@ -137,17 +153,17 @@ ZenModeLayoutState GetZenModeLayoutState
+   }
+ 
+   state.vertical_tab_strip_padding = kZenModeVTSPadding;
+-  const int revealed_top_padding =
+-      std::max(0, GetGenericFrameRadius() -
+-                      GetLayoutConstant(LayoutConstant::kHeliumBasePadding));
+-  if (delegate.IsZenModeTopChromePinned()) {
+-    state.vertical_tab_strip_top_padding = revealed_top_padding;
+-  } else {
+-    state.vertical_tab_strip_top_padding =
+-        ScaleExtent(state.vertical_tab_strip_padding,
+-                    1.0f - state.top_chrome_ratio) +
+-        ScaleExtent(revealed_top_padding, state.top_chrome_ratio);
+-  }
++  // helium-fork: the floating card is inset from all four window edges by the
++  // same amount, like Arc's.
++  //
++  // This was 0 for one round, to stop the top row sliding below the macOS
++  // window controls. That fixed the symptom and created a worse one -- the
++  // card's top edge landed exactly on the window edge and its rounded corner
++  // started eating the traffic lights. The real cause was that the row's y
++  // came from a constant instead of from the caption buttons; it now derives
++  // from them (VerticalTabStripRegionView::SetCaptionExclusionForLayout), so
++  // the card can have its inset back and the row still lines up.
++  state.vertical_tab_strip_top_padding = kZenModeVTSPadding;
+   return state;
+ }
+ 
+@@ -380,13 +396,8 @@ BrowserViewTabbedLayoutImpl::GetMinimumT
+       auto result = views().vertical_tab_strip_region_view->GetMinimumSize();
+       if (GetVerticalTabStripCollapsedState() ==
+           VerticalTabStripCollapsedState::kCollapsed) {
+-        // With a collapsed tabstrip, the tabstrip sits below the leading
+-        // exclusion. Add this additional height so that it's accounted for in
+-        // minimum size computations.
+-        result.set_height(
+-            result.height() +
+-            base::ClampCeil(
+-                params.leading_exclusion.ContentWithPadding().height()));
++        // helium-fork: a collapsed strip is fully hidden and no longer sits
++        // below the leading exclusion, so no extra height is reserved.
+         // Reserve enough width to uncollapse the tabstrip even if it's
+         // collapsed, or else uncollapsing the tabstrip will break the browser.
+         result.set_width(std::max(
+@@ -736,12 +747,15 @@ BrowserViewTabbedLayoutImpl::GetVertical
+ }
+ 
+ bool BrowserViewTabbedLayoutImpl::IsVerticalTabStripHiddenFloating() const {
+-  // helium-fork: outside zen mode, "collapsed" means the strip is fully
+-  // hidden and floats over the contents on reveal (Arc behavior). kExpanding
+-  // deliberately counts as docked so the show-toggle lands its final layout
+-  // in a single pass.
+-  if (layout_data_->tab_strip_type != TabStripType::kVertical ||
+-      delegate().IsZenModeEnabledForLayout()) {
++  // helium-fork: "collapsed" means the strip is fully hidden and floats over
++  // the contents on reveal (Arc behavior). kExpanding deliberately counts as
++  // docked so the show-toggle lands its final layout in a single pass.
++  //
++  // This used to bail out in zen mode, back when zen owned the sidebar. It no
++  // longer does -- Cmd+S owns it in every address bar mode -- and the bail-out
++  // meant zen's floating card missed the full-width sizing below and rendered
++  // at the 42pt rail width, clipping "Drag to add Favorites" down to "Dr".
++  if (layout_data_->tab_strip_type != TabStripType::kVertical) {
+     return false;
+   }
+   const VerticalTabStripCollapsedState state =
+@@ -841,9 +855,29 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   const bool infobar_visible = delegate().IsInfobarVisible();
+   const bool should_use_rounded_frame =
+       views().multi_contents_view->ShouldUseRoundedFrame();
+-  const BrowserLayoutParams top_container_parent_params = params;
+   const bool vertical_right_aligned =
+       delegate().IsVerticalTabStripRightAligned();
++  // helium-fork: the Arc shell -- one sidebar plus one card holding the
++  // address bar band and the contents. Every address bar mode lays out this
++  // way; the mode only decides whether the band is shown, hidden, or
++  // revealed on hover.
++  const bool arc_shell = layout_data_->tab_strip_type == TabStripType::kVertical;
++  const bool arc_content_card = arc_shell && should_use_rounded_frame;
++
++  // helium-fork: the band stops reserving the caption area only while the
++  // sidebar is genuinely covering it -- i.e. docked on the caption side. The
++  // rule is "does the sidebar actually sit on top of the window controls",
++  // never "which layout is this"; getting that wrong is how the toolbar's
++  // leading controls ended up drawn straight over the traffic lights.
++  //
++  // Two cases keep the reservation: a right-aligned strip (macOS keeps the
++  // lights on the left, so the band still owns that corner), and a floating
++  // strip -- collapsed or zen-unpinned -- where the band spans the full width
++  // with nothing above the lights but itself.
++  if (arc_shell && !vertical_right_aligned &&
++      !zen.floating_vertical_tab_strip) {
++    needs_exclusion = false;
++  }
+ 
+   // Lay out horizontal tab strip region if present.
+   if (!dynamic_tab_strip &&
+@@ -935,10 +969,13 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+               : params.visual_client_area.x() +
+                     zen.vertical_tab_strip_padding;
+ 
+-      int top_offset = vertical_tab_strip_animation.top_offset;
+-      if (zen.enabled) {
+-        top_offset = ScaleExtent(top_offset, zen.top_chrome_ratio);
+-      }
++      // helium-fork: the Arc shell always docks the strip at the window top --
++      // its top row makes room for the window controls, and the address bar
++      // band sits beside the strip rather than above it, so there is nothing
++      // to offset below. This holds in zen too: hiding the band must not move
++      // the sidebar. The un-scaled offset local above still feeds the
++      // top-corner state, which is a separate concern.
++      int top_offset = 0;
+ 
+       const int vertical_tab_strip_height =
+           std::max(0, params.visual_client_area.height() - top_offset -
+@@ -1034,6 +1071,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+     layout.AddChild(views().projects_panel_container, projects_panel_bounds);
+   }
+ 
++  // helium-fork: the band's laid-out height, which is what decides whether it
++  // counts as attached top chrome further down. Zero means "not on screen" --
++  // in zen at reveal ratio 0, or in the hidden address bar mode.
++  int arc_band_height = 0;
++
+   // When the tabstrip isn't at the top or in constrained widths, the top
+   // container is laid out before all side panels.
+   if (horizontal_layout.force_top_container_to_top &&
+@@ -1042,10 +1084,23 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+         layout.AddChild(views().top_container, gfx::Rect());
+ 
+     // Calculate the params for laying out the top container.
+-    const BrowserLayoutParams& parent_params =
+-        layout_data_->tab_strip_type == TabStripType::kVertical
+-            ? top_container_parent_params
++    // helium-fork: the vertical layout always hands the top container the
++    // already-inset params -- a docked sidebar insets them, the hidden
++    // floating state does not -- so the band spans exactly the content area
++    // in every state with no further bookkeeping. On top of that the Arc
++    // shell fuses the band with the contents into one card: the band takes
++    // the card's horizontal inset and its top inset, and the contents pick up
++    // flush beneath it (their own top inset drops to zero once the band
++    // counts as attached top chrome, below).
++    const BrowserLayoutParams arc_band_params =
++        arc_content_card
++            ? params.WithInsets(gfx::Insets::TLBR(
++                  MultiContentsView::kContentCardInset,
++                  MultiContentsView::kContentCardInset, 0,
++                  MultiContentsView::kContentCardInset))
+             : params;
++    const BrowserLayoutParams& parent_params =
++        arc_content_card ? arc_band_params : params;
+     auto top_container_params =
+         parent_params.InLocalCoordinates(parent_params.visual_client_area);
+ 
+@@ -1053,33 +1108,20 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+         top_container_layout, top_container_params, needs_exclusion);
+     top_container_layout.bounds = GetTopContainerBoundsInParent(
+         top_container_local_bounds, parent_params);
++    arc_band_height = top_container_layout.bounds.height();
+ 
+-    if (layout_data_->tab_strip_type == TabStripType::kVertical &&
+-        !zen.floating_vertical_tab_strip) {
+-      auto& top_container_children = top_container_layout.children;
+-      auto bookmarks_child = top_container_children.find(views().bookmark_bar);
+-      if (bookmarks_child != top_container_children.end() &&
+-          !bookmarks_child->second.bounds.IsEmpty()) {
+-        const int vertical_width = horizontal_layout.vertical_tab_strip_width;
+-        gfx::Rect& bookmarks_bounds = bookmarks_child->second.bounds;
+-        bookmarks_bounds.set_width(
+-            std::max(0, bookmarks_bounds.width() - vertical_width));
+-        if (!vertical_right_aligned) {
+-          bookmarks_bounds.set_x(bookmarks_bounds.x() + vertical_width);
+-        }
+-      }
+-      auto separator_child =
+-          top_container_children.find(views().top_container_separator);
+-      if (separator_child != top_container_children.end() &&
+-          !separator_child->second.bounds.IsEmpty()) {
+-        const int vertical_width = horizontal_layout.vertical_tab_strip_width;
+-        gfx::Rect& separator_bounds = separator_child->second.bounds;
+-        separator_bounds.set_width(
+-            std::max(0, separator_bounds.width() - vertical_width));
+-        if (!vertical_right_aligned) {
+-          separator_bounds.set_x(separator_bounds.x() + vertical_width);
+-        }
+-      }
++    // helium-fork: a hidden band has to be hidden, not merely zero-height.
++    //
++    // The toolbar is not collapsed when zen hides it -- it keeps its full
++    // height and is slid to y = -H..0 inside a zero-height top container, and
++    // only the parent's paint clipping keeps it off screen. That clipping does
++    // not apply to layer-backed descendants (the extensions container, the
++    // pinned-actions container, the app menu button all have layers), so their
++    // bottom edges leaked into the strip above the contents: "我还能看到没完全
++    // 被隐藏的网站地址栏和浏览器扩展的下边缘". Hiding the container hides the
++    // whole subtree, layers included.
++    if (arc_content_card) {
++      top_container_layout.visibility = arc_band_height > 0;
+     }
+ 
+     if (dynamic_tab_strip &&
+@@ -1099,30 +1141,29 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+       }
+     }
+ 
+-    params.SetTop(top_container_layout.bounds.bottom());
++    // helium-fork: the band is the top strip of the contents card and the
++    // page picks up flush beneath it (an overlay that covered the page's top
++    // 34pt was tried and rejected: "地址栏还吃掉了网页顶部一部分…… UI 之间打架").
++    // A band with no height must not consume the card's top inset:
++    // GetTopContainerBoundsInParent() still reports the inset origin for a
++    // zero-height band, so SetTop() would swallow kContentCardInset that
++    // nothing ever drew -- and then MultiContentsView adds its own inset,
++    // because a band that is not on screen is not attached top chrome. The
++    // inset is owned by exactly one of the two, never both.
++    if (!arc_content_card || top_container_layout.bounds.height() > 0) {
++      params.SetTop(top_container_layout.bounds.bottom());
++    }
+ 
+     if (zen.enabled) {
+       AdjustTopContainerForZenMode(top_container_layout, params,
+                                    zen.top_chrome_ratio);
+     }
+ 
+-    // The floating VTS offset only accounts for toolbar height, but the
+-    // top container may be taller (e.g. bookmarks bar, zen border strip).
+-    // Ensure the floating VTS starts below the full top container.
+-    if (zen.floating_vertical_tab_strip && zen.TopChromeVisible() &&
+-        top_container_layout.bounds.height() > 0) {
+-      auto it = layout.children.find(views().vertical_tab_strip_region_view);
+-      if (it != layout.children.end()) {
+-        const int tc_bottom = top_container_layout.bounds.bottom();
+-        const int floating_top = tc_bottom + zen.vertical_tab_strip_top_padding;
+-        if (it->second.bounds.y() < floating_top) {
+-          it->second.bounds.set_y(floating_top);
+-          it->second.bounds.set_height(
+-              std::max(0, browser_params.visual_client_area.bottom() -
+-                              floating_top - zen.vertical_tab_strip_padding));
+-        }
+-      }
+-    }
++    // helium-fork: upstream pushed a floating strip below the top container
++    // so the two would not overlap. The Arc shell's floating card deliberately
++    // reaches the window top and floats *over* the band -- its own top row
++    // carries the window controls, which are painted at a fixed position by
++    // the frame. Pushing it down here is what left them hanging above the row.
+   }
+ 
+   if (dynamic_tab_strip) {
+@@ -1281,16 +1322,9 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+     params.SetTop(top_container_layout.bounds.bottom());
+   }
+ 
+-  if (layout_data_->tab_strip_type == TabStripType::kVertical &&
+-      !zen.floating_vertical_tab_strip) {
+-    if (delegate().IsVerticalTabStripRightAligned()) {
+-      trailing_side_chrome_attached = true;
+-      trailing_vertical_tab_strip_attached = true;
+-    } else {
+-      leading_side_chrome_attached = true;
+-      leading_vertical_tab_strip_attached = true;
+-    }
+-  }
++  // helium-fork: the Arc shell never lets the sidebar touch the contents --
++  // the card keeps a gap on every side, in every address bar mode. (Upstream
++  // attached the docked strip in zen; that is what the card replaces.)
+ 
+   // Lay out infobar container.
+   if (IsParentedTo(views().infobar_container, views().browser_view)) {
+@@ -1325,10 +1359,25 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   // especially obvious in split view, where turning the separator off provides
+   // the required top padding.
+   const auto& separator_info = layout_data_->separator_info;
++  // helium-fork: in the Arc shell the band and the contents are one card, so
++  // the band counts as attached top chrome exactly while it has height: the
++  // contents lose their top inset and their top corners go square, and the
++  // band paints the rounded top. (No separator line is drawn either way --
++  // the rounded-frame path hides all three separators.)
++  //
++  // Keying off the laid-out height rather than a reveal-ratio threshold keeps
++  // this in lockstep with who owns the card's top inset above. The old 0.5
++  // threshold disagreed with the band's real height for half of every reveal,
++  // which stepped the contents 6px mid-animation, and it answered "attached"
++  // in the hidden address bar mode, where there is no band at all.
++  const bool band_on_screen = arc_content_card
++                                  ? arc_band_height > 0
++                                  : (!zen.enabled || zen.TopChromeVisible());
+   views().multi_contents_view->SetTopChromeAttachmentState(
+       infobar_visible && should_use_rounded_frame,
+-      separator_info.multi_contents_separator &&
+-          (!zen.enabled || zen.TopChromeVisible()));
++      arc_content_card
++          ? band_on_screen
++          : (separator_info.multi_contents_separator && band_on_screen));
+ 
+   // Updating the top, left and right insets for contents container view when
+   // in split view. This is dependent on a number of other browser states.
+@@ -1372,8 +1421,20 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   // Update the multi-contents view about if we will be animating content
+   // bounds. This is to make optimizations during animations e.g. avoid
+   // repositioning status bubble.
++  //
++  // helium-fork: the zen band reveal belongs in this set too. It moves the
++  // contents' top edge on every animation frame, and an in-process macOS
++  // window resizes with DeadlinePolicy::UseSpecifiedDeadline(0) -- viz does not
++  // wait a single frame, so the aggregator anchors the stale surface at the top
++  // and fills what is left at the bottom with the page's root background color
++  // (surface_aggregator.cc, EmitGutterQuadsIfNecessary). That is the white
++  // strip that used to lift off the bottom of the page while the band
++  // collapsed. This flag is what flips the resize back to the default deadline
++  // (ContentsWebView::SetIsAnimatingBounds), which is exactly what upstream
++  // already does for the side panel and the vertical tab strip.
+   views().multi_contents_view->SetIsAnimatingContent(
+-      side_panel_is_animating || vertical_tab_strip_animation.current_motion);
++      side_panel_is_animating || vertical_tab_strip_animation.current_motion ||
++      zen.TopChromeAnimating());
+ 
+   // Lay out contents container. The contents container contains the multi-
+   // contents view when multi-contents are enabled. The checks here are to
+@@ -1404,44 +1465,99 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+                                 params.visual_client_area.height()));
+ 
+   // Maybe expand and clip the web contents to avoid issues during animation.
+-  if (features::UseSidePanelFlyoverAnimation()) {
+-    if (clip_content_for_animation) {
+-      // Vertical span is whatever it is, minus any shadow overlay insets.
+-      unclipped_contents_region.set_y(contents_layout.bounds.y());
+-      unclipped_contents_region.set_height(contents_layout.bounds.height());
+-      if (side_panel_is_animating) {
+-        // During animation, want the vertical extent of the contents region to
+-        // be the exact extent that the contents will reach in the fully-closed
+-        // state. This means adjusting for the shadow box insets *and* (in some
+-        // cases) the addition of a separator.
+-        int top_inset = shadow_overlay_insets.top();
+-        if (layout_data_->separator_info.adjust_for_missing_separator) {
+-          top_inset = std::max(0, top_inset - views::Separator::kThickness);
+-        }
+-        unclipped_contents_region.Outset(gfx::Outsets::TLBR(
+-            top_inset, 0, shadow_overlay_insets.bottom(), 0));
+-      }
+-
+-      // Avoid cases where these areas are somehow misaligned (shouldn't happen,
+-      // but want to avoid visual artifacts if they are).
+-      contents_layout.bounds.Intersect(unclipped_contents_region);
+-      const auto clip_insets =
+-          unclipped_contents_region.InsetsFrom(contents_layout.bounds);
+-
+-      // Set the target size of the contents.
+-      views().multi_contents_view->SetTargetContentBounds(
+-          MultiContentsView::TargetContentBounds(
+-              unclipped_contents_region.size(), clip_insets));
+-
+-      // Paint the main background during animations when clipping is
+-      // required. This prevents "cracking" at the edge of the contents area
+-      // as the clip region is manipulated.
+-      if (main_background_layout) {
+-        main_background_layout->visibility = true;
+-      }
+-    } else {
+-      views().multi_contents_view->SetTargetContentBounds(std::nullopt);
++  //
++  // helium-fork: the zen band's *collapse* joins this path. Upstream built the
++  // mechanism for the side panel flyover -- pin the web contents to the size
++  // they will have once the animation ends, animate only the visible rect, and
++  // clip the overflow with the contents' own ui::Layer -- and it is exactly
++  // what the band needs. An in-process macOS window only rebuilds the
++  // renderer's surface when the *size* changes
++  // (render_widget_host_view_mac.mm's view_size_changed ->
++  // BrowserCompositorMac::UpdateSurfaceFromNSView), so a pinned size lets the
++  // origin slide for free: no new LocalSurfaceId, no resize deadline to miss,
++  // and therefore none of the gutter quads that surface_aggregator.cc paints
++  // along the bottom of a surface that grew faster than the renderer could
++  // follow. That gutter is the strip of missing page -- scrollbar included --
++  // that showed up along the bottom while the band collapsed.
++  //
++  // Collapse only, deliberately. The reveal *shrinks* the contents every
++  // frame, and EmitGutterQuadsIfNecessary only fires when the stale surface is
++  // smaller than the new one, so the reveal has nothing to fix and would pay
++  // the whole cost below for nothing.
++  //
++  // The cost: while the clip is on, the contents are one band taller than the
++  // rect they are visible in, so the viewport blink lays out against is that
++  // much taller too -- content anchored to the bottom of the viewport
++  // (position: fixed; bottom: 0) sits below the clip and slides up into place
++  // over the animation instead of staying put. Outsetting the *top* instead
++  // would keep those anchored, but it would pin the page's pixels while the
++  // band slid over them (the overlay look this shell has already rejected) and
++  // jump the content by a band height when the clip is released, so the bottom
++  // outset is the better of the two.
++  //
++  // Not enabled in split view: BeforeApplyLayout() takes a separate path there
++  // that recomputes both panes at the target size, and split has no machine
++  // coverage in this fork yet.
++  const BrowserView* const browser_view_for_zen =
++      views::AsViewClass<BrowserView>(views().browser_view);
++  const bool zen_band_clip =
++      arc_content_card && zen.TopChromeAnimating() && arc_band_height > 0 &&
++      !side_panel_is_animating &&
++      !views().multi_contents_view->IsInSplitView() && browser_view_for_zen &&
++      browser_view_for_zen->IsZenTopChromeCollapsing();
++  if (zen_band_clip) {
++    // Built from the contents container's own rect rather than from
++    // unclipped_contents_region: that one starts life as the visual client
++    // area and has already been inset for the vertical tab strip and the
++    // shadow overlay, so its horizontal span does not necessarily match and
++    // the Intersect below would shave a column off the page.
++    gfx::Rect unclipped = contents_layout.bounds;
++    unclipped.Outset(gfx::Outsets::TLBR(0, 0, arc_band_height, 0));
++    views().multi_contents_view->SetTargetContentBounds(
++        MultiContentsView::TargetContentBounds(
++            unclipped.size(), unclipped.InsetsFrom(contents_layout.bounds)));
++  } else if (features::UseSidePanelFlyoverAnimation() &&
++             clip_content_for_animation) {
++    // Vertical span is whatever it is, minus any shadow overlay insets.
++    unclipped_contents_region.set_y(contents_layout.bounds.y());
++    unclipped_contents_region.set_height(contents_layout.bounds.height());
++    if (side_panel_is_animating) {
++      // During animation, want the vertical extent of the contents region to
++      // be the exact extent that the contents will reach in the fully-closed
++      // state. This means adjusting for the shadow box insets *and* (in some
++      // cases) the addition of a separator.
++      int top_inset = shadow_overlay_insets.top();
++      if (layout_data_->separator_info.adjust_for_missing_separator) {
++        top_inset = std::max(0, top_inset - views::Separator::kThickness);
++      }
++      unclipped_contents_region.Outset(gfx::Outsets::TLBR(
++          top_inset, 0, shadow_overlay_insets.bottom(), 0));
++    }
++
++    // Avoid cases where these areas are somehow misaligned (shouldn't happen,
++    // but want to avoid visual artifacts if they are).
++    contents_layout.bounds.Intersect(unclipped_contents_region);
++    const auto clip_insets =
++        unclipped_contents_region.InsetsFrom(contents_layout.bounds);
++
++    // Set the target size of the contents.
++    views().multi_contents_view->SetTargetContentBounds(
++        MultiContentsView::TargetContentBounds(
++            unclipped_contents_region.size(), clip_insets));
++
++    // Paint the main background during animations when clipping is
++    // required. This prevents "cracking" at the edge of the contents area
++    // as the clip region is manipulated.
++    if (main_background_layout) {
++      main_background_layout->visibility = true;
+     }
++  } else {
++    // helium-fork: reached on every ordinary layout now that the flyover
++    // feature no longer guards the whole block. SetTargetContentBounds()
++    // early-returns when the value is unchanged, so this is the same no-op
++    // upstream gets by never entering -- and it is what releases the clip on
++    // the frame the band's animation ends.
++    views().multi_contents_view->SetTargetContentBounds(std::nullopt);
+   }
+ 
+   if (features::IsGlassFrameEnabled()) {
+@@ -1524,8 +1640,17 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+               (side_exclusion.content_top + side_exclusion.content.height()) /
+               2.f) -
+           tabstrip_bounds->y();
++      // helium-fork: the reservation height must be in the same coordinate
++      // space as caption_center_in_strip -- strip-relative. Passing the
++      // window-relative height left the floating card's spacer taller by the
++      // card's own top inset, which pushed the whole row below the traffic
++      // lights (the row's centering math then clamped a negative margin to
++      // zero). caption_inset above keeps using the window-relative height:
++      // "does the strip reach up into the caption area" is a window question.
++      const int exclusion_height_in_strip =
++          std::max(0, exclusion_height - tabstrip_bounds->y());
+       views().vertical_tab_strip_region_view->SetCaptionExclusionForLayout(
+-          caption_inset, exclusion_height, caption_center_in_strip,
++          caption_inset, exclusion_height_in_strip, caption_center_in_strip,
+           vertical_right_aligned);
+     }
+   }
+Index: src/chrome/browser/ui/views/frame/multi_contents_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/multi_contents_view.cc
++++ src/chrome/browser/ui/views/frame/multi_contents_view.cc
+@@ -58,10 +58,22 @@ namespace {
+ constexpr int kSnapDistance = 15;
+ constexpr float kZenTopChromeAttachedThreshold = 0.5f;
+ 
++// helium-fork: `arc_content_card` exempts the Arc shell from the reveal-ratio
++// threshold below.
++//
++// `should_show_top_separator` already carries the layout's answer: in the Arc
++// shell it is `band height > 0`, computed from the bounds the band was actually
++// given. ANDing the reveal ratio on top of it made the two disagree for
++// 0 < ratio < 0.5 -- the layout put the page's top at the band's bottom while
++// this said "not attached", so the page kept its top card inset and its rounded
++// top corners, and a strip of window background showed through the seam. The
++// threshold is kept for the classic/compact/dynamic layouts, which have no card
++// and therefore no seam to give away.
+ bool IsTopChromeAttached(const BrowserView& browser_view,
+-                         bool should_show_top_separator) {
++                         bool should_show_top_separator,
++                         bool arc_content_card) {
+   return should_show_top_separator &&
+-         (!browser_view.IsZenModeEnabledForLayout() ||
++         (arc_content_card || !browser_view.IsZenModeEnabledForLayout() ||
+           browser_view.GetTopChromeRevealRatio() >=
+               kZenTopChromeAttachedThreshold);
+ }
+@@ -562,15 +574,30 @@ views::ProposedLayout MultiContentsView:
+   if (IsInSplitView()) {
+     available_space.Inset(split_view_insets_);
+   } else if (should_use_rounded_frame) {
+-    gfx::Insets single_insets(kSplitViewContentInset);
+-    single_insets.set_top(attached_chrome.TopInset());
+-    single_insets.set_left(contents_separators_.leading_side_chrome_attached
+-                               ? 0
+-                               : kSplitViewContentInset);
+-    single_insets.set_right(contents_separators_.trailing_side_chrome_attached
+-                                ? 0
+-                                : kSplitViewContentInset);
+-    available_space.Inset(single_insets);
++    if (browser_view_->ShouldUseContentCardInsets()) {
++      // helium-fork: the Arc shell keeps a uniform gap around the contents
++      // card. The top edge is the exception: the address bar band is part of
++      // the same card, so when it is on screen the contents sit flush beneath
++      // it (and give up their top corner radius, above). With the band gone
++      // -- zen with the toolbar hidden -- the card closes up on all four
++      // sides.
++      gfx::Insets card_insets(kContentCardInset);
++      if (attached_chrome.top) {
++        card_insets.set_top(0);
++      }
++      available_space.Inset(card_insets);
++    } else {
++      gfx::Insets single_insets(kSplitViewContentInset);
++      single_insets.set_top(attached_chrome.TopInset());
++      single_insets.set_left(contents_separators_.leading_side_chrome_attached
++                                 ? 0
++                                 : kSplitViewContentInset);
++      single_insets.set_right(
++          contents_separators_.trailing_side_chrome_attached
++              ? 0
++              : kSplitViewContentInset);
++      available_space.Inset(single_insets);
++    }
+   }
+   ViewSizes sizes = GetViewSizes(available_space);
+ 
+@@ -857,10 +884,15 @@ bool MultiContentsView::ShouldUseRounded
+          !is_fullscreen;
+ }
+ 
++bool MultiContentsView::IsArcContentCard() const {
++  return ShouldUseRoundedFrame() && browser_view_->ShouldUseContentCardInsets();
++}
++
+ bool MultiContentsView::IsTopChromeAttachedForBorder() const {
+   return top_edge_attached_to_infobar_ ||
+          IsTopChromeAttached(*browser_view_,
+-                             contents_separators_.should_show_top);
++                             contents_separators_.should_show_top,
++                             IsArcContentCard());
+ }
+ 
+ void MultiContentsView::UpdateContentsBorderAndOverlay() const {
+Index: src/chrome/browser/ui/views/frame/multi_contents_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/multi_contents_view.h
++++ src/chrome/browser/ui/views/frame/multi_contents_view.h
+@@ -62,6 +62,13 @@ class MultiContentsView
+   };
+ 
+   static constexpr int kSplitViewContentInset = 3;
++  // helium-fork: uniform breathing room around the contents card in the Arc
++  // shell (single-contents layout only; split view keeps its own inset).
++  // Matches kSplitViewContentInset: stock Helium's frame gap is 3, and the
++  // padded frame radius (8 - 3 = 5) is derived from that same 3, so any other
++  // value both widens the window border against stock and breaks the corner
++  // concentricity.
++  static constexpr int kContentCardInset = kSplitViewContentInset;
+ 
+   MultiContentsView(BrowserView* browser_view,
+                     std::unique_ptr<MultiContentsViewDelegate> delegate);
+@@ -182,6 +189,11 @@ class MultiContentsView
+ 
+   bool IsDragAndDropEnabled() const;
+   bool ShouldUseRoundedFrame() const;
++  // helium-fork: true when the address bar band and the page render as one
++  // rounded card inset from the window. This is the same condition the layout
++  // calls `arc_content_card`; both must stay in agreement or the band and the
++  // page end up with different rectangles.
++  bool IsArcContentCard() const;
+   void OnDragAndDropPrefStateChange();
+   void OnRoundedFramePrefStateChange();
+ 
+Index: src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -185,6 +185,19 @@ void BrowserNativeWidgetMac::GetWindowFr
+   if (browser_view_ && browser_view_->browser_widget() &&
+       browser_view_->browser_widget()->GetFrameView()) {
+     *override_titlebar_height = true;
++    // helium-fork: in the Arc shell the traffic lights have to be centered on
++    // the toolbar row *after* the content card's inset, not on the raw toolbar
++    // height. AppKit centers them in whatever we report here, so reporting the
++    // padded band is the whole fix. See
++    // BrowserView::GetArcShellCaptionBandHeight(); the matching change in
++    // BrowserFrameViewMac::GetCaptionButtonBounds() keeps Chromium's own idea
++    // of where they are in step.
++    if (const int arc_caption_band =
++            browser_view_->GetArcShellCaptionBandHeight();
++        arc_caption_band > 0) {
++      *titlebar_height = arc_caption_band;
++      return;
++    }
+     const auto top_element_info = browser_view_->GetFrameElementInfo();
+ 
+     *titlebar_height =
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -368,7 +368,11 @@ void VerticalTabStripRegionView::SetZenM
+   if (floating) {
+     CustomCornersBackground::Corner rounded_corner;
+     rounded_corner.type = CustomCornersBackground::CornerType::kRounded;
+-    rounded_corner.radius = GetGenericFrameRadius();
++    // helium-fork: the floating card sits kContentCardInset from the window
++    // edges, so its radius must be concentric with the system window radius --
++    // the same padded value the contents card uses. The generic 8 visibly
++    // mismatched the window's corners ("侧边栏的R角和app窗口的R角没有匹配").
++    rounded_corner.radius = GetPaddedFrameRadius();
+     corners[CornerOrientation::kTopLeading] = rounded_corner;
+     corners[CornerOrientation::kTopTrailing] = rounded_corner;
+     corners[CornerOrientation::kBottomLeading] = rounded_corner;
+@@ -383,6 +387,15 @@ void VerticalTabStripRegionView::SetZenM
+   background->SetCorners(corners);
+   background->SetOutline(outline);
+   background->SetPaintWithNativeFrameMaterials(floating);
++
++  // helium-fork: the floating card casts a shadow, like Arc's. ShadowFrameView
++  // was already built and sized for exactly this (it is the expand-on-hover
++  // shadow), but SetShadowVisible() had no caller anywhere in the tree, so the
++  // card read as a flat panel butted against the page.
++  if (shadow_frame_) {
++    shadow_frame_->SetShadowCornerRadius(GetPaddedFrameRadius());
++    shadow_frame_->SetShadowVisible(floating);
++  }
+ }
+ 
+ void VerticalTabStripRegionView::AddedToWidget() {

@@ -1,0 +1,95 @@
+Index: src/content/browser/renderer_host/render_widget_host_view_mac.h
+===================================================================
+--- src.orig/content/browser/renderer_host/render_widget_host_view_mac.h
++++ src/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -139,6 +139,11 @@ class CONTENT_EXPORT RenderWidgetHostVie
+   bool IsShowing() override;
+   void WasOccluded() override;
+   gfx::Rect GetViewBounds() override;
++  // helium-fork: implemented here, where the base class is NOTIMPLEMENTED, so
++  // the visible viewport can be made smaller than the surface. See the .mm.
++  void SetInsets(const gfx::Insets& insets) override;
++  gfx::Size GetVisibleViewportSize() override;
++  gfx::Size GetVisibleViewportSizeDevicePx() override;
+   bool IsPointerLocked() override;
+   void SetActive(bool active) override;
+   void ShowDefinitionForSelection() override;
+@@ -746,6 +751,10 @@ class CONTENT_EXPORT RenderWidgetHostVie
+ 
+   bool use_default_deadline_on_resize_ = false;
+ 
++  // helium-fork: how much of the view is covered by something else and must be
++  // kept out of the visible viewport. See SetInsets().
++  gfx::Insets insets_;
++
+   // See description of `kDelayUpdateWindowsAfterTextInputStateChanged` for
+   // details.
+   base::OneShotTimer update_windows_timer_;
+Index: src/content/browser/renderer_host/render_widget_host_view_mac.mm
+===================================================================
+--- src.orig/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ src/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -85,7 +85,9 @@
+ #include "ui/events/keycodes/dom/dom_code.h"
+ #include "ui/events/keycodes/dom/dom_keyboard_layout_map.h"
+ #include "ui/gfx/geometry/dip_util.h"
++#include "ui/gfx/geometry/insets.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size_conversions.h"
+ #include "ui/gfx/mac/coordinate_conversion.h"
+ #include "ui/gfx/native_ui_types.h"
+ #include "ui/menus/cocoa/text_services_context_menu.h"
+@@ -669,6 +671,53 @@ gfx::Rect RenderWidgetHostViewMac::GetVi
+          window_frame_in_screen_dip_.OffsetFromOrigin();
+ }
+ 
++// helium-fork: decouple the visible viewport from the surface.
++//
++// RenderWidgetHostViewBase::SetInsets() is NOTIMPLEMENTED, and on mac that has
++// a visible cost. When browser UI slides over the bottom of the page -- the Arc
++// shell's address bar band retracting -- the only two options without this are
++// both wrong: resize the view every frame, which on an in-process mac window
++// reallocates the surface (BrowserCompositorMac::UpdateSurfaceFromNSView takes
++// a new LocalSurfaceId whenever the size changes) and lets viz paint gutter
++// quads along the bottom; or keep the size and clip, which is what the band
++// does today -- and then blink lays out against a viewport one band taller than
++// the strip the user can see, so the bottom of the page, the bottom of its
++// scrollbar and anything anchored with `position: fixed; bottom: 0` all sit
++// below the clip. Measured on a page scrolled to the bottom: 30 rows of real
++// content gone for the length of the collapse.
++//
++// Insets fix that by construction. The view -- and therefore the surface --
++// keeps its size, so there is no new LocalSurfaceId and no gutter; only
++// visible_viewport_size in the VisualProperties changes
++// (RenderWidgetHostImpl reads it straight out of GetVisibleViewportSize()), so
++// blink lays out against exactly the strip that is on screen.
++//
++// Aura has had this since the virtual keyboard needed it; this is the same
++// contract, minus its LocalSurfaceId allocation, which exists there because
++// Aura's inset comes with a *size* change and ours deliberately does not.
++void RenderWidgetHostViewMac::SetInsets(const gfx::Insets& insets) {
++  if (insets == insets_) {
++    return;
++  }
++  insets_ = insets;
++  if (host()) {
++    host()->SynchronizeVisualProperties();
++  }
++}
++
++gfx::Size RenderWidgetHostViewMac::GetVisibleViewportSize() {
++  gfx::Rect visible(GetViewBounds().size());
++  visible.Inset(insets_);
++  return visible.size();
++}
++
++gfx::Size RenderWidgetHostViewMac::GetVisibleViewportSizeDevicePx() {
++  const float scale = GetDeviceScaleFactor();
++  gfx::Rect visible(gfx::ScaleToCeiledSize(GetViewBounds().size(), scale));
++  visible.Inset(gfx::ScaleToCeiledInsets(insets_, scale));
++  return visible.size();
++}
++
+ bool RenderWidgetHostViewMac::IsPointerLocked() {
+   return pointer_locked_;
+ }
