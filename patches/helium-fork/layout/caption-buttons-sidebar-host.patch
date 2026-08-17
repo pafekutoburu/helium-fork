@@ -1,0 +1,235 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -376,6 +376,7 @@ static_library("ui") {
+     "helium/arc_band_colors.h",
+     "helium/arc_band_tint_store.cc",
+     "helium/arc_band_tint_store.h",
++    "helium/arc_caption_opacity.h",
+     "helium/arc_card_layout.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
+@@ -6013,6 +6014,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_address_bar_mode_unittest.cc",
+     "helium/arc_band_colors.h",
+     "helium/arc_band_colors_unittest.cc",
++    "helium/arc_caption_opacity.h",
++    "helium/arc_caption_opacity_unittest.cc",
+     "helium/arc_card_layout.h",
+     "helium/arc_card_layout_unittest.cc",
+     "helium_workspace/workspace_blank_tab.h",
+Index: src/chrome/browser/ui/helium/arc_caption_opacity.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_caption_opacity.h
+@@ -0,0 +1,40 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_CAPTION_OPACITY_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_CAPTION_OPACITY_H_
++
++// helium-fork: the one formula for the traffic lights' opacity. Kept
++// dependency-free so the minimal unit-test target can cover it.
++namespace helium {
++
++// macOS keeps the window controls in the top-left corner, so their host is
++// whatever piece of chrome owns that corner:
++//
++//  * Left-aligned sidebar: the sidebar is the only host (Dia behavior,
++//    2026-08-16). Hidden sidebar means no traffic lights at all; the hover
++//    reveal brings them back with the floating card, fading with its ratio.
++//    The docked address-bar band deliberately stopped being a fallback host
++//    -- that fallback is what kept the lights on while the sidebar was away.
++//  * Right-aligned sidebar: the sidebar never covers that corner; the band
++//    owns it whenever it exists. Zen used to fade the lights with the band's
++//    reveal; retired, but the ratio passthrough stays harmless.
++inline constexpr float ComputeCaptionButtonsOpacity(bool right_aligned,
++                                                    bool sidebar_hidden,
++                                                    float side_reveal_ratio,
++                                                    bool has_band,
++                                                    bool zen_enabled,
++                                                    float top_reveal_ratio) {
++  if (!right_aligned) {
++    return sidebar_hidden ? side_reveal_ratio : 1.0f;
++  }
++  if (!has_band) {
++    return 0.0f;
++  }
++  return zen_enabled ? top_reveal_ratio : 1.0f;
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_CAPTION_OPACITY_H_
+Index: src/chrome/browser/ui/helium/arc_caption_opacity_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_caption_opacity_unittest.cc
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_caption_opacity.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++TEST(ArcCaptionOpacityTest, LeftAlignedDockedSidebarHosts) {
++  EXPECT_EQ(1.0f, ComputeCaptionButtonsOpacity(
++                      /*right_aligned=*/false, /*sidebar_hidden=*/false,
++                      /*side_reveal_ratio=*/0.0f, /*has_band=*/true,
++                      /*zen_enabled=*/false, /*top_reveal_ratio=*/1.0f));
++}
++
++TEST(ArcCaptionOpacityTest, LeftAlignedHiddenSidebarFollowsReveal) {
++  for (const float ratio : {0.0f, 0.25f, 0.5f, 1.0f}) {
++    EXPECT_EQ(ratio, ComputeCaptionButtonsOpacity(
++                         /*right_aligned=*/false, /*sidebar_hidden=*/true,
++                         /*side_reveal_ratio=*/ratio, /*has_band=*/true,
++                         /*zen_enabled=*/false, /*top_reveal_ratio=*/1.0f));
++  }
++}
++
++// The Dia rule this round pinned down (2026-08-16): a docked band is NOT a
++// fallback host -- with the sidebar hidden and no reveal, the lights are
++// gone even though the band is right there.
++TEST(ArcCaptionOpacityTest, DockedBandIsNotAFallbackHost) {
++  EXPECT_EQ(0.0f, ComputeCaptionButtonsOpacity(
++                      /*right_aligned=*/false, /*sidebar_hidden=*/true,
++                      /*side_reveal_ratio=*/0.0f, /*has_band=*/true,
++                      /*zen_enabled=*/false, /*top_reveal_ratio=*/1.0f));
++}
++
++TEST(ArcCaptionOpacityTest, RightAlignedBandHosts) {
++  EXPECT_EQ(1.0f, ComputeCaptionButtonsOpacity(
++                      /*right_aligned=*/true, /*sidebar_hidden=*/true,
++                      /*side_reveal_ratio=*/0.0f, /*has_band=*/true,
++                      /*zen_enabled=*/false, /*top_reveal_ratio=*/0.0f));
++}
++
++TEST(ArcCaptionOpacityTest, RightAlignedWithoutBandHidesLights) {
++  EXPECT_EQ(0.0f, ComputeCaptionButtonsOpacity(
++                      /*right_aligned=*/true, /*sidebar_hidden=*/false,
++                      /*side_reveal_ratio=*/1.0f, /*has_band=*/false,
++                      /*zen_enabled=*/false, /*top_reveal_ratio=*/1.0f));
++}
++
++TEST(ArcCaptionOpacityTest, RightAlignedZenFollowsTopReveal) {
++  EXPECT_EQ(0.3f, ComputeCaptionButtonsOpacity(
++                      /*right_aligned=*/true, /*sidebar_hidden=*/false,
++                      /*side_reveal_ratio=*/0.0f, /*has_band=*/true,
++                      /*zen_enabled=*/true, /*top_reveal_ratio=*/0.3f));
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -104,6 +104,7 @@
+ #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+ #include "chrome/browser/ui/helium/arc_band_colors.h"
+ #include "chrome/browser/ui/helium/arc_band_tint_store.h"
++#include "chrome/browser/ui/helium/arc_caption_opacity.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+@@ -2301,30 +2302,20 @@ void BrowserView::UpdateCaptionButtonsOp
+   if (!frame_view) {
+     return;
+   }
+-  // helium-fork: the window controls are drawn over whatever chrome is under
+-  // them, so they are visible while EITHER possible host is on screen:
+-  //
+-  //   * the sidebar's top row -- unless the sidebar is hidden, in which case
+-  //     they fade in and out with the floating card. A right-aligned sidebar
+-  //     never covers that corner, so it is not a host at all.
+-  //   * the address bar band -- unless the mode has no band (kHidden), or zen
+-  //     has it hidden, in which case they follow its reveal.
+-  //
+-  // Tying them to the sidebar alone left a window with a docked band and a
+-  // collapsed sidebar showing no traffic lights whatsoever, which is both
+-  // wrong and unclosable by mouse.
+-  float sidebar_host = 0.0f;
+-  if (!IsVerticalTabStripRightAligned()) {
+-    sidebar_host =
+-        IsSidebarHiddenModeActive() ? GetSideChromeRevealRatio() : 1.0f;
+-  }
+-  float band_host = 0.0f;
+-  if (auto* const layout_controller =
+-          HeliumLayoutStateController::From(browser_);
+-      layout_controller && layout_controller->HasAddressBarBand()) {
+-    band_host = IsZenModeEnabled() ? GetTopChromeRevealRatio() : 1.0f;
+-  }
+-  frame_view->SetCaptionButtonsOpacity(std::max(sidebar_host, band_host));
++  // helium-fork: the formula lives in helium::ComputeCaptionButtonsOpacity
++  // (dependency-free, unit-tested). The short version: left-aligned, the
++  // sidebar is the ONLY host -- hidden sidebar means no traffic lights until
++  // the hover reveal fades them back in with the floating card (Dia
++  // behavior, user-pinned 2026-08-16). The docked band deliberately stopped
++  // being a fallback host; the old "unclosable by mouse" worry is answered
++  // the way Dia answers it -- the reveal is one hover away, and Cmd+W still
++  // works. Right-aligned, the band owns the corner as before.
++  auto* const layout_controller = HeliumLayoutStateController::From(browser_);
++  frame_view->SetCaptionButtonsOpacity(helium::ComputeCaptionButtonsOpacity(
++      IsVerticalTabStripRightAligned(), IsSidebarHiddenModeActive(),
++      GetSideChromeRevealRatio(),
++      layout_controller && layout_controller->HasAddressBarBand(),
++      IsZenModeEnabled(), GetTopChromeRevealRatio()));
+ }
+ 
+ void BrowserView::UpdateArcSidebarControlPlacement() {
+@@ -2497,6 +2488,12 @@ void BrowserView::UpdateArcAddressBarPla
+   // and putting it here rather than at the mode-change callback covers the
+   // layout-change and initialization callers too.
+   UpdateAddressBarBandTint();
++  // helium-fork: same reasoning for the traffic lights -- the mode switch
++  // arrives here (via OnToolbarTabStripStateChanged), and before this call
++  // their opacity was only recomputed on the next collapse/theme/animation
++  // event, so flipping kDocked <-> kHidden with the sidebar collapsed left
++  // them stale for the gap.
++  UpdateCaptionButtonsOpacityForChromeState();
+   InvalidateLayout();
+ }
+ 
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -868,18 +868,17 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   const bool arc_shell = layout_data_->tab_strip_type == TabStripType::kVertical;
+   const bool arc_content_card = arc_shell && should_use_rounded_frame;
+ 
+-  // helium-fork: the band stops reserving the caption area only while the
+-  // sidebar is genuinely covering it -- i.e. docked on the caption side. The
+-  // rule is "does the sidebar actually sit on top of the window controls",
+-  // never "which layout is this"; getting that wrong is how the toolbar's
+-  // leading controls ended up drawn straight over the traffic lights.
+-  //
+-  // Two cases keep the reservation: a right-aligned strip (macOS keeps the
+-  // lights on the left, so the band still owns that corner), and a floating
+-  // strip -- collapsed or zen-unpinned -- where the band spans the full width
+-  // with nothing above the lights but itself.
+-  if (arc_shell && !vertical_right_aligned &&
+-      !zen.floating_vertical_tab_strip) {
++  // helium-fork: with a left-aligned strip the caption corner belongs to the
++  // sidebar, full stop (Dia behavior, 2026-08-16) -- docked it sits on top of
++  // the lights, hidden there are no lights at all and the band runs flush to
++  // the window edge; during the hover reveal the floating card overlays the
++  // band and the lights fade in over the card, so the band never needs to
++  // make room for them. Only a right-aligned strip keeps the reservation:
++  // macOS keeps the lights on the left, so there the band still owns that
++  // corner. (The floating-strip case used to keep it too -- that was the
++  // ~70px of dead space in front of the URL whenever the sidebar was
++  // collapsed.)
++  if (arc_shell && !vertical_right_aligned) {
+     needs_exclusion = false;
+   }
+ 

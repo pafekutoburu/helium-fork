@@ -1,0 +1,390 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -378,6 +378,7 @@ static_library("ui") {
+     "helium/arc_band_tint_store.h",
+     "helium/arc_caption_opacity.h",
+     "helium/arc_card_layout.h",
++    "helium/arc_minimal_field_state.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+@@ -6018,6 +6019,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_caption_opacity_unittest.cc",
+     "helium/arc_card_layout.h",
+     "helium/arc_card_layout_unittest.cc",
++    "helium/arc_minimal_field_state.h",
++    "helium/arc_minimal_field_state_unittest.cc",
+     "helium_workspace/workspace_blank_tab.h",
+     "helium_workspace/workspace_blank_tab_unittest.cc",
+     "helium_workspace/workspace_entry.cc",
+Index: src/chrome/browser/ui/helium/arc_band_colors.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_band_colors.h
++++ src/chrome/browser/ui/helium/arc_band_colors.h
+@@ -121,6 +121,16 @@ inline BandTextColors GetBandTextColors(
+                                                kDimmedTowardBackdrop)};
+ }
+ 
++// The dimmed " / page title" the minimal field shows after the host at rest.
++// Dia's title gray sits much closer to the backdrop than the URL's path
++// dimming (measured on the real Dia 2026-08-16: title (176,176,177) on a
++// (252,252,254) backdrop, ~0.30 of the contrasting color).
++inline SkColor GetBandTitleColor(SkColor backdrop) {
++  constexpr float kTitleTowardBackdrop = 0.30f;
++  return color_utils::AlphaBlend(GetBandForegroundColor(backdrop), backdrop,
++                                 kTitleTowardBackdrop);
++}
++
+ // The field's own fill on a tinted band -- a quiet wash of the contrasting
+ // color rather than a theme color that assumes a toolbar background.
+ //
+Index: src/chrome/browser/ui/helium/arc_band_colors_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_band_colors_unittest.cc
++++ src/chrome/browser/ui/helium/arc_band_colors_unittest.cc
+@@ -166,6 +166,22 @@ TEST(ResolveBandTintTest, StaysOnTheLast
+                             kBlackPage, /*page_painted=*/true));
+ }
+ 
++// The " / page title" gray must recede further than the URL's path dimming --
++// Dia's measured hierarchy (2026-08-16): host, then path, then title, each a
++// step closer to the backdrop.
++TEST(GetBandTitleColorTest, RecedesFurtherThanTheDimmedText) {
++  for (const SkColor backdrop :
++       {SK_ColorWHITE, SK_ColorBLACK, SkColorSetRGB(0xFC, 0xFC, 0xFE)}) {
++    const SkColor title = GetBandTitleColor(backdrop);
++    const SkColor dimmed = GetBandTextColors(backdrop).dimmed;
++    EXPECT_LT(color_utils::GetContrastRatio(title, backdrop),
++              color_utils::GetContrastRatio(dimmed, backdrop))
++        << " backdrop=" << backdrop;
++    // Still visible: not the backdrop itself.
++    EXPECT_NE(title, backdrop);
++  }
++}
++
+ // Every foreground in the band is derived from this color, and deriving from a
+ // translucent one is how invisible text happens.
+ TEST(ResolveBandTintTest, OutputIsAlwaysOpaque) {
+Index: src/chrome/browser/ui/helium/arc_minimal_field_state.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_minimal_field_state.h
+@@ -0,0 +1,45 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_MINIMAL_FIELD_STATE_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_MINIMAL_FIELD_STATE_H_
++
++// helium-fork: what the Arc band's minimal address field shows, as one pure
++// decision (Dia parity, measured on the real Dia 2026-08-16). Dependency-free
++// so the minimal unit-test target can pin the whole table.
++namespace helium {
++
++enum class ArcFieldContent {
++  // Rest: trimmed host, then the page title dimmed after a slash.
++  kHostAndTitle,
++  // Rest without a usable title (none set yet, or nothing to show it for).
++  kHostOnly,
++  // Hovered: the real URL -- host plus path, path dimmed, no scheme. Dia
++  // swaps the title out the moment the pointer enters the field.
++  kHostAndPath,
++  // Editing (focused or input in progress), or minimal treatment off: the
++  // full formatted URL, upstream behavior.
++  kFullUrl,
++};
++
++// `has_title` means a real, non-empty page title AND a non-empty display
++// URL to hang it on (internal pages that show an empty omnibox never get a
++// dangling "/ title").
++inline constexpr ArcFieldContent DecideArcFieldContent(bool minimal,
++                                                       bool focused_or_editing,
++                                                       bool hovered,
++                                                       bool has_title) {
++  if (!minimal || focused_or_editing) {
++    return ArcFieldContent::kFullUrl;
++  }
++  if (hovered) {
++    return ArcFieldContent::kHostAndPath;
++  }
++  return has_title ? ArcFieldContent::kHostAndTitle
++                   : ArcFieldContent::kHostOnly;
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_MINIMAL_FIELD_STATE_H_
+Index: src/chrome/browser/ui/helium/arc_minimal_field_state_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_minimal_field_state_unittest.cc
+@@ -0,0 +1,63 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_minimal_field_state.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++TEST(ArcMinimalFieldStateTest, RestShowsHostAndTitle) {
++  EXPECT_EQ(ArcFieldContent::kHostAndTitle,
++            DecideArcFieldContent(/*minimal=*/true,
++                                  /*focused_or_editing=*/false,
++                                  /*hovered=*/false, /*has_title=*/true));
++}
++
++TEST(ArcMinimalFieldStateTest, RestWithoutTitleShowsHostOnly) {
++  EXPECT_EQ(ArcFieldContent::kHostOnly,
++            DecideArcFieldContent(/*minimal=*/true,
++                                  /*focused_or_editing=*/false,
++                                  /*hovered=*/false, /*has_title=*/false));
++}
++
++// Dia (measured 2026-08-16): hover swaps the title for the real URL; the
++// title never shows while the pointer is in the field.
++TEST(ArcMinimalFieldStateTest, HoverSwapsToPathEvenWithTitle) {
++  EXPECT_EQ(ArcFieldContent::kHostAndPath,
++            DecideArcFieldContent(/*minimal=*/true,
++                                  /*focused_or_editing=*/false,
++                                  /*hovered=*/true, /*has_title=*/true));
++  EXPECT_EQ(ArcFieldContent::kHostAndPath,
++            DecideArcFieldContent(/*minimal=*/true,
++                                  /*focused_or_editing=*/false,
++                                  /*hovered=*/true, /*has_title=*/false));
++}
++
++TEST(ArcMinimalFieldStateTest, EditingWinsOverEverything) {
++  for (const bool hovered : {false, true}) {
++    for (const bool has_title : {false, true}) {
++      EXPECT_EQ(ArcFieldContent::kFullUrl,
++                DecideArcFieldContent(/*minimal=*/true,
++                                      /*focused_or_editing=*/true, hovered,
++                                      has_title));
++    }
++  }
++}
++
++TEST(ArcMinimalFieldStateTest, MinimalOffIsAlwaysFullUrl) {
++  for (const bool focused : {false, true}) {
++    for (const bool hovered : {false, true}) {
++      for (const bool has_title : {false, true}) {
++        EXPECT_EQ(ArcFieldContent::kFullUrl,
++                  DecideArcFieldContent(/*minimal=*/false, focused, hovered,
++                                        has_title));
++      }
++    }
++  }
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -18,6 +18,7 @@
+ #include "base/functional/callback_helpers.h"
+ #include "base/i18n/rtl.h"
+ #include "base/metrics/field_trial_params.h"
++#include "base/strings/strcat.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/trace_event/typed_macros.h"
+@@ -48,6 +49,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
+ #include "chrome/browser/ui/helium/arc_band_colors.h"
++#include "chrome/browser/ui/helium/arc_minimal_field_state.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
+ #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
+@@ -599,6 +601,16 @@ void LocationBarView::Init() {
+   ai_mode_hint_label->SetVisible(false);
+   ai_mode_hint_label_ = AddChildView(std::move(ai_mode_hint_label));
+ 
++  // helium-fork: the dimmed " / page title" after the trimmed host at rest
++  // (Dia parity, 2026-08-16). RefreshArcTitleLabel() owns text and
++  // visibility; the minimal-field layout arm positions it; the pushed-color
++  // refresh keeps it band-aware.
++  auto arc_title_label = std::make_unique<views::Label>(
++      std::u16string(), CONTEXT_OMNIBOX_PRIMARY, views::style::STYLE_PRIMARY);
++  arc_title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  arc_title_label->SetVisible(false);
++  arc_title_label_ = AddChildView(std::move(arc_title_label));
++
+   // Initialize the location entry. We do this to avoid a black flash which is
+   // visible when the location entry has just been initialized.
+   Update(nullptr);
+@@ -1116,14 +1128,29 @@ void LocationBarView::Layout(PassKey) {
+       !ime_inline_autocomplete_view_->GetVisible();
+   if (arc_minimal_unfocused_field) {
+     // Dia's forgiveness margin: clicks and the I-beam extend this far past
+-    // the text before the blank (drag) zone starts.
++    // the text before the blank (drag) zone starts. While the title label is
++    // up it sits flush against the text instead ("host / title"), and the
++    // slack waits until hover swaps the title out.
+     constexpr int kArcFieldTextSlack = 100;
++    const bool title_visible =
++        arc_title_label_ && arc_title_label_->GetVisible();
+     gfx::Rect omnibox_bounds = location_bounds;
+-    omnibox_bounds.set_width(std::min(
+-        location_needed_width + kArcFieldTextSlack, location_bounds.width()));
++    omnibox_bounds.set_width(
++        std::min(title_visible ? location_needed_width
++                               : location_needed_width + kArcFieldTextSlack,
++                 location_bounds.width()));
+     omnibox_view_->SetBoundsRect(omnibox_bounds);
++    if (title_visible) {
++      const int title_x = omnibox_bounds.right();
++      const int title_width =
++          std::min(arc_title_label_->GetPreferredSize().width(),
++                   std::max(0, location_bounds.right() - title_x));
++      arc_title_label_->SetBounds(title_x, location_bounds.y(), title_width,
++                                  location_bounds.height());
++    }
+   } else if (!ime_inline_autocomplete_view_->GetVisible() &&
+-      !omnibox_additional_text_view_->GetVisible()) {
++      !omnibox_additional_text_view_->GetVisible() &&
++      !(arc_title_label_ && arc_title_label_->GetVisible())) {
+     // Short circuit the below logic when the additional views aren't visible.
+     // This is necessary as resizing the omnibox can throw off it's scroll,
+     // i.e., which chars are visible when its text overflows its width.
+@@ -1225,6 +1252,13 @@ void LocationBarView::RefreshPushedIconC
+   for (ContentSettingImageView* image_view : content_setting_views_) {
+     image_view->SetIconColor(icon_color);
+   }
++  // helium-fork: the " / page title" label rides the same push -- its gray is
++  // derived from the band tint, so it must move whenever the icons do.
++  if (arc_title_label_) {
++    arc_title_label_->SetEnabledColor(
++        GetBandTint() ? helium::GetBandTitleColor(GetFieldBackdropColor())
++                      : GetColorProvider()->GetColor(kColorOmniboxTextDimmed));
++  }
+ }
+ 
+ void LocationBarView::ChildPreferredSizeChanged(views::View* child) {
+@@ -1266,6 +1300,11 @@ void LocationBarView::Update(WebContents
+   RefreshPageActionContainerViewAndIconsVisibility(
+       /*should_hide_page_actions=*/ShouldHidePageActionIcons());
+ 
++  // helium-fork: follow the active tab for TitleWasSet -- Update() runs on
++  // tab switches and navigations, exactly when the committed entry changes.
++  Observe(GetWebContents());
++  RefreshArcTitleLabel();
++
+   OnChanged();  // NOTE: Triggers layout.
+ 
+   // A permission prompt may be suspended due to an invalid state (empty or
+@@ -1456,6 +1495,42 @@ void LocationBarView::UpdateArcMinimalDe
+   InvalidateLayout();
+ }
+ 
++void LocationBarView::RefreshArcTitleLabel() {
++  if (!arc_title_label_) {
++    return;
++  }
++  std::u16string title;
++  if (content::WebContents* contents = GetWebContents()) {
++    if (content::NavigationEntry* entry =
++            contents->GetController().GetLastCommittedEntry()) {
++      // GetTitle() rather than GetTitleForDisplay(): the display helper falls
++      // back to the URL, and a URL after the slash is exactly what this label
++      // must never show.
++      title = entry->GetTitle();
++    }
++  }
++  const bool has_title =
++      !title.empty() && omnibox_view_ && !omnibox_view_->GetText().empty();
++  const bool show =
++      helium::DecideArcFieldContent(
++          ShouldMinimizeArcChrome(),
++          (omnibox_view_ && omnibox_view_->HasFocus()) ||
++              GetOmniboxController()->edit_model()->user_input_in_progress(),
++          /*hovered=*/false, has_title) ==
++      helium::ArcFieldContent::kHostAndTitle;
++  if (show == arc_title_label_->GetVisible() && title == arc_last_title_) {
++    return;
++  }
++  arc_last_title_ = title;
++  arc_title_label_->SetText(base::StrCat({u" / ", title}));
++  arc_title_label_->SetVisible(show);
++  InvalidateLayout();
++}
++
++void LocationBarView::TitleWasSet(content::NavigationEntry* entry) {
++  RefreshArcTitleLabel();
++}
++
+ double LocationBarView::GetArcRevealAmount() const {
+   if (!ShouldMinimizeArcChrome()) {
+     return 1.0;
+@@ -2401,6 +2476,11 @@ void LocationBarView::OnChanged() {
+       !omnibox_view_->GetText().empty() &&
+       IsVirtualKeyboardVisible(GetWidget()));
+ 
++  // helium-fork: focus, input and navigation all funnel through here; the
++  // "/ title" label's visibility depends on the first two and its text on the
++  // third. Cheap no-op when nothing changed.
++  RefreshArcTitleLabel();
++
+   InvalidateLayout();
+   SchedulePaint();
+   UpdateChipVisibility();
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -30,6 +30,7 @@
+ #include "components/permissions/permission_prompt.h"
+ #include "components/prefs/pref_change_registrar.h"
+ #include "components/security_state/core/security_state.h"
++#include "content/public/browser/web_contents_observer.h"
+ #include "services/device/public/cpp/geolocation/buildflags.h"
+ #include "third_party/metrics_proto/omnibox_event.pb.h"
+ #include "third_party/skia/include/core/SkColor.h"
+@@ -107,7 +108,10 @@ class LocationBarView
+       public device::GeolocationSystemPermissionManager::PermissionObserver,
+ #endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+       public PageActionIconView::Delegate,
+-      public OmniboxPopupPresenterDelegate {
++      public OmniboxPopupPresenterDelegate,
++      // helium-fork: page-title changes feed the minimal field's "/ title"
++      // label (Dia parity).
++      public content::WebContentsObserver {
+   METADATA_HEADER(LocationBarView, views::View)
+ 
+  public:
+@@ -284,6 +288,12 @@ class LocationBarView
+   // changes which decorations lay out -- ask for a relayout, but only when it
+   // actually changed.
+   void UpdateArcMinimalDecorations();
++  // helium-fork: keeps the minimal field's dimmed "/ page title" label
++  // current -- text from the committed NavigationEntry, shown only at rest
++  // (helium::DecideArcFieldContent). No-op unless something changed.
++  void RefreshArcTitleLabel();
++  // content::WebContentsObserver:
++  void TitleWasSet(content::NavigationEntry* entry) override;
+   // helium-fork: the reveal's single curve. 0 at rest, 1 revealed, the hover
+   // tween in between -- every part of the reveal is a function of this one
+   // value, so the parts cannot come and go at different times.
+@@ -633,6 +643,13 @@ class LocationBarView
+   // feature flag is disabled.
+   raw_ptr<views::Label> omnibox_additional_text_view_ = nullptr;
+ 
++  // helium-fork: the dimmed " / page title" after the trimmed host while the
++  // Arc band field rests (Dia parity, 2026-08-16). Laid out by the same arm
++  // that keeps the omnibox at text width; hidden on hover, focus, or when
++  // the page has no real title.
++  raw_ptr<views::Label> arc_title_label_ = nullptr;
++  std::u16string arc_last_title_;
++
+   // The following views are used to provide hints and remind the user as to
+   // what is going in the edit. They are all added a children of the
+   // LocationBarView. At most one is visible at a time. These autocollapse when

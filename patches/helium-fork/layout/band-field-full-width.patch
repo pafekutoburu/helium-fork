@@ -1,0 +1,97 @@
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -1101,7 +1101,28 @@ void LocationBarView::Layout(PassKey) {
+   // the rounded ends.
+   location_bounds.Intersect(GetLocalBoundsWithoutEndcaps());
+ 
+-  if (!ime_inline_autocomplete_view_->GetVisible() &&
++  // helium-fork: in the Arc band's minimal (unfocused) state the field spans
++  // the band's middle but the omnibox stays at its text width plus a fixed
++  // slack -- Dia's geometry (measured 2026-08-16: I-beam and click-to-edit
++  // reach ~100pt past the text, everything beyond is window-drag blank). The
++  // omnibox bounds ARE the interaction contract: I-beam zone, click-to-edit
++  // target, and (via the caption hit test) the edge of the drag zone, so
++  // nothing else needs its own geometry. Focused or editing, the short
++  // circuit below reclaims the full width so the edit-state scroll behaves.
++  const bool arc_minimal_unfocused_field =
++      ShouldMinimizeArcChrome() &&
++      !(omnibox_view_ && omnibox_view_->HasFocus()) &&
++      !GetOmniboxController()->edit_model()->user_input_in_progress() &&
++      !ime_inline_autocomplete_view_->GetVisible();
++  if (arc_minimal_unfocused_field) {
++    // Dia's forgiveness margin: clicks and the I-beam extend this far past
++    // the text before the blank (drag) zone starts.
++    constexpr int kArcFieldTextSlack = 100;
++    gfx::Rect omnibox_bounds = location_bounds;
++    omnibox_bounds.set_width(std::min(
++        location_needed_width + kArcFieldTextSlack, location_bounds.width()));
++    omnibox_view_->SetBoundsRect(omnibox_bounds);
++  } else if (!ime_inline_autocomplete_view_->GetVisible() &&
+       !omnibox_additional_text_view_->GetVisible()) {
+     // Short circuit the below logic when the additional views aren't visible.
+     // This is necessary as resizing the omnibox can throw off it's scroll,
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -1968,16 +1968,18 @@ void ToolbarView::UpdateToolbarLayout()
+       : features::HeliumUseCompactLocationWidth()
+           ? views::MinimumFlexSizeRule::kScaleToMinimum
+           : views::MinimumFlexSizeRule::kPreferred;
+-  // helium-fork: in the Arc shell's docked band the field is sized to the
+-  // domain rather than to the window, so it must stop growing at its preferred
+-  // width. `arc_trailing_spacer_` below takes over the right-alignment that the
+-  // unbounded rule was doubling as.
+-  const bool arc_band = IsArcBandHosted();
+-  const auto max_location_bar_flex =
+-      arc_band ? views::MaximumFlexSizeRule::kPreferred
+-               : views::MaximumFlexSizeRule::kUnbounded;
++  // helium-fork: in the Arc shell's docked band the field spans the whole
++  // middle of the band (Dia geometry, measured 2026-08-16: the hover capsule
++  // runs from the leading controls to the extensions). The field itself is
++  // the band's one flexible element -- its internal layout keeps the omnibox
++  // at text width, and everything right of that is field-owned blank that
++  // hovers, drags the window, and eats nothing. This retires the
++  // kPreferred cap that `arc_trailing_spacer_` used to compensate for; the
++  // 2/5-band preferred size (user-picked when the capsule WAS the field)
++  // survives only as the flex floor.
+   const views::FlexSpecification location_bar_flex_rule =
+-      views::FlexSpecification(min_location_bar_flex, max_location_bar_flex)
++      views::FlexSpecification(min_location_bar_flex,
++                               views::MaximumFlexSizeRule::kUnbounded)
+           .WithOrder(kLocationBarFlexOrder);
+ 
+   const bool is_compact_layout = IsCompactLayout();
+@@ -2034,23 +2036,13 @@ void ToolbarView::UpdateToolbarLayout()
+   }
+ 
+   if (arc_trailing_spacer_) {
+-    arc_trailing_spacer_->SetVisible(arc_band);
+-    if (arc_band) {
+-      // Absorbs everything the sized-to-content field leaves behind, which is
+-      // what holds the extensions and profile buttons against the right edge.
+-      //
+-      // The three-argument constructor is mandatory: the two-argument one
+-      // applies the rule to BOTH axes, so an unbounded horizontal spacer also
+-      // reports that it can grow vertically without limit and the row's
+-      // preferred height blows up (measured at 298px the last time this was
+-      // written with two arguments).
+-      arc_trailing_spacer_->SetProperty(
+-          views::kFlexBehaviorKey,
+-          views::FlexSpecification(views::LayoutOrientation::kHorizontal,
+-                                   views::MinimumFlexSizeRule::kScaleToZero,
+-                                   views::MaximumFlexSizeRule::kUnbounded)
+-              .WithOrder(1));
+-    }
++    // helium-fork: parked since the full-width field took over the slack
++    // (2026-08-16). The View stays in the tree so the child order is stable
++    // and a future layout can re-enable it without re-plumbing; if it ever
++    // comes back, remember its flex spec must use the three-argument
++    // FlexSpecification -- the two-argument form applies to BOTH axes and
++    // blew the row's preferred height up to 298px once.
++    arc_trailing_spacer_->SetVisible(false);
+   }
+ 
+   // Pinned actions (including downloads) and extensions

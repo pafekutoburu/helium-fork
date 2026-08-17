@@ -1,0 +1,224 @@
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -176,6 +176,7 @@
+ #include "ui/color/color_provider.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/compositor/paint_recorder.h"
++#include "ui/display/screen.h"
+ #include "ui/events/event.h"
+ #include "ui/gfx/animation/slide_animation.h"
+ #include "ui/gfx/canvas.h"
+@@ -464,7 +465,10 @@ void LocationBarView::Init() {
+   // |omnibox_additional_text_view_| to |omnibox_view_| so that e.g., clicking
+   // the former will focus the latter. In order to receive |ShowContextMenu()|
+   // requests, LocationBarView must have a context menu controller.
+-  set_context_menu_controller(omnibox_view_->context_menu_controller());
++  // helium-fork: itself rather than the omnibox's directly -- the minimal
++  // field's blank belongs to the window (system/layout menu), only content
++  // still gets the omnibox menu. See ShowContextMenuForViewImpl().
++  set_context_menu_controller(this);
+ 
+   RefreshBackground();
+ 
+@@ -2230,16 +2234,59 @@ void LocationBarView::OnPaintBorder(gfx:
+ }
+ 
+ bool LocationBarView::OnMousePressed(const ui::MouseEvent& event) {
++  // helium-fork: presses on the minimal field's blank are the window's
++  // business (drag / caption), never the omnibox's -- forwarding them focused
++  // the field from a right-click on empty band. Left presses never even get
++  // here (the caption hit test hands them to AppKit before Views sees them);
++  // right presses do: NativeWidgetMacNSWindow::sendEvent forwards them into
++  // Views "to potentially bring up a frame context menu", and that forwarded
++  // event reaches this view with UNRELIABLE coordinates (observed (0,0)), so
++  // the classification reads the real cursor position instead.
++  gfx::Point local(display::Screen::Get()->GetCursorScreenPoint());
++  views::View::ConvertPointFromScreen(this, &local);
++  if (IsPositionInWindowCaption(local)) {
++    arc_press_forwarded_to_omnibox_ = false;
++    if (event.IsOnlyRightMouseButton()) {
++      // The blank is titlebar: hand the click to the window's own controller
++      // (BrowserWidget -- the system/layout menu). It re-checks
++      // NonClientHitTest at the point itself, which resolves to HTCAPTION
++      // through the same delegation chain.
++      gfx::Point screen_point =
++          display::Screen::Get()->GetCursorScreenPoint();
++      if (views::Widget* widget = GetWidget()) {
++        if (views::ContextMenuController* controller =
++                widget->non_client_view()->context_menu_controller()) {
++          controller->ShowContextMenuForView(widget->non_client_view(),
++                                             screen_point,
++                                             ui::mojom::MenuSourceType::kMouse);
++        }
++      }
++      return true;
++    }
++    return false;
++  }
++  arc_press_forwarded_to_omnibox_ = true;
+   return omnibox_view_->OnMousePressed(
+       AdjustMouseEventLocationForOmniboxView(event));
+ }
+ 
+ bool LocationBarView::OnMouseDragged(const ui::MouseEvent& event) {
++  // helium-fork: paired with the press -- an unforwarded press must not grow
++  // a forwarded drag (the omnibox would see a drag with no press).
++  if (!arc_press_forwarded_to_omnibox_) {
++    return false;
++  }
+   return omnibox_view_->OnMouseDragged(
+       AdjustMouseEventLocationForOmniboxView(event));
+ }
+ 
+ void LocationBarView::OnMouseReleased(const ui::MouseEvent& event) {
++  // helium-fork: paired with the press. The unconditional forward here is
++  // what leaked the omnibox context menu onto the blank -- Textfield shows
++  // its menu from OnMouseReleased, not from the press.
++  if (!arc_press_forwarded_to_omnibox_) {
++    return;
++  }
+   omnibox_view_->OnMouseReleased(AdjustMouseEventLocationForOmniboxView(event));
+ }
+ 
+@@ -2579,6 +2626,55 @@ bool LocationBarView::IsArcHoverUrlPrevi
+          !GetOmniboxController()->edit_model()->user_input_in_progress();
+ }
+ 
++void LocationBarView::ShowContextMenuForViewImpl(
++    views::View* source,
++    const gfx::Point& p,
++    ui::mojom::MenuSourceType source_type) {
++  // helium-fork: `p` is in screen coordinates. Blank field = titlebar, so the
++  // window's own controller (BrowserWidget -- the system/layout menu) takes
++  // it; it re-checks NonClientHitTest itself, which resolves to HTCAPTION
++  // through the same delegation chain. Content keeps the omnibox menu.
++  gfx::Point local(p);
++  views::View::ConvertPointFromScreen(this, &local);
++  if (IsPositionInWindowCaption(local)) {
++    if (views::Widget* widget = GetWidget()) {
++      if (views::ContextMenuController* controller =
++              widget->non_client_view()->context_menu_controller()) {
++        controller->ShowContextMenuForView(widget->non_client_view(), p,
++                                           source_type);
++      }
++    }
++    return;
++  }
++  if (views::ContextMenuController* controller =
++          omnibox_view_ ? omnibox_view_->context_menu_controller() : nullptr) {
++    controller->ShowContextMenuForView(source, p, source_type);
++  }
++}
++
++bool LocationBarView::IsPositionInWindowCaption(const gfx::Point& point) const {
++  // helium-fork: outside the Arc band's minimal treatment the whole field is
++  // content, upstream behavior.
++  if (!ShouldMinimizeArcChrome()) {
++    return false;
++  }
++  // Anything that is a real, event-taking child under the point is content;
++  // the rest of the field is Dia's window-drag blank. The focus ring (a
++  // full-bleed, event-transparent child) must not veto -- hence the
++  // CanProcessEventsWithinSubtree filter.
++  for (views::View* const child : children()) {
++    if (!child->GetVisible() || !child->GetCanProcessEventsWithinSubtree()) {
++      continue;
++    }
++    gfx::Point point_in_child(point);
++    ConvertPointToTarget(this, child, &point_in_child);
++    if (child->HitTestPoint(point_in_child)) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ void LocationBarView::OnTouchUiChanged() {
+   const gfx::FontList& font_list = views::TypographyProvider::Get().GetFont(
+       CONTEXT_OMNIBOX_PRIMARY, views::style::STYLE_PRIMARY);
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -43,6 +43,7 @@
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/image/image.h"
+ #include "ui/views/animation/animation_delegate_views.h"
++#include "ui/views/context_menu_controller.h"
+ #include "ui/views/controls/focus_ring.h"
+ #include "ui/views/drag_controller.h"
+ 
+@@ -111,7 +112,9 @@ class LocationBarView
+       public OmniboxPopupPresenterDelegate,
+       // helium-fork: page-title changes feed the minimal field's "/ title"
+       // label (Dia parity).
+-      public content::WebContentsObserver {
++      public content::WebContentsObserver,
++      // helium-fork: routes context menus by zone (blank vs content).
++      public views::ContextMenuController {
+   METADATA_HEADER(LocationBarView, views::View)
+ 
+  public:
+@@ -228,6 +231,20 @@ class LocationBarView
+   // helium-fork: true while the minimal field is hovered, unfocused and not
+   // editing -- the state in which the display text previews host+path.
+   bool IsArcHoverUrlPreview() const override;
++
++  // helium-fork: for ToolbarView's caption hit test. True when `point` (in
++  // this view's coordinates) lands on the minimal field's blank -- the part
++  // that drags the window (Dia, 2026-08-16). Content (site icon, omnibox
++  // with its click-to-edit slack, labels, revealed decorations) stays HTCLIENT.
++  bool IsPositionInWindowCaption(const gfx::Point& point) const;
++
++  // views::ContextMenuController:
++  // helium-fork: routes by zone -- blank shows the window's system/layout
++  // menu, content shows the omnibox menu.
++  void ShowContextMenuForViewImpl(
++      views::View* source,
++      const gfx::Point& p,
++      ui::mojom::MenuSourceType source_type) override;
+   LocationBarModel* GetLocationBarModel() override;
+   content::WebContents* GetWebContents() override;
+   std::optional<bubble_anchor_util::AnchorConfiguration> GetChipAnchor()
+@@ -657,6 +674,11 @@ class LocationBarView
+   // 200ms after the transition, and the swap must happen exactly once, on the
+   // frame the pointer crosses the boundary.
+   bool arc_hovered_ = false;
++  // helium-fork: whether the last mouse press was forwarded to the omnibox.
++  // Drag/release forward only when the press did -- Textfield opens its
++  // context menu from OnMouseReleased, so an unpaired release forward leaks
++  // the omnibox menu onto the field's blank.
++  bool arc_press_forwarded_to_omnibox_ = true;
+ 
+   // The following views are used to provide hints and remind the user as to
+   // what is going in the edit. They are all added a children of the
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -1448,10 +1448,23 @@ bool ToolbarView::IsRectInWindowCaption(
+       continue;
+     }
+ 
++    // helium-fork: the trailing spacer is blank by definition -- caption if
++    // it is ever visible again.
++    if (child == arc_trailing_spacer_) {
++      continue;
++    }
++
+     const gfx::Rect target_rect = get_target_rect(child);
+     if (child->GetLocalBounds().Intersects(target_rect)) {
+       // Check if the rect is actually on the child.
+       if (child->HitTestRect(target_rect)) {
++        // helium-fork: the band's minimal field spans the whole middle and
++        // decides for itself which parts are content and which are Dia's
++        // window-drag blank (same delegation shape as the tab strip above).
++        if (child == location_bar_view_) {
++          return location_bar_view_->IsPositionInWindowCaption(
++              target_rect.origin());
++        }
+         return false;
+       }
+     }

@@ -353,3 +353,9 @@ helium-fork/layout/arc-band-tint-store.patch
 helium-fork/renderer/page-colored-root-scrollbar.patch
 helium-fork/contents/mac-visible-viewport-insets.patch
 helium-fork/contents/zen-collapse-stretch-fallback.patch
+helium-fork/settings/retire-zen-auto-mode.patch
+helium-fork/layout/caption-buttons-sidebar-host.patch
+helium-fork/layout/band-field-full-width.patch
+helium-fork/layout/minimal-bar-page-title.patch
+helium-fork/layout/minimal-bar-hover-url.patch
+helium-fork/layout/band-field-hit-zones.patch

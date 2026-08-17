@@ -1,0 +1,119 @@
+Index: src/chrome/browser/ui/location_bar/location_bar.cc
+===================================================================
+--- src.orig/chrome/browser/ui/location_bar/location_bar.cc
++++ src/chrome/browser/ui/location_bar/location_bar.cc
+@@ -21,6 +21,10 @@ void LocationBar::RemoveLocationBarObser
+ 
+ LocationBar::~LocationBar() = default;
+ 
++bool LocationBar::IsArcHoverUrlPreview() const {
++  return false;
++}
++
+ void LocationBar::NotifyBoundsChanged() {
+   observers_.Notify(&Observer::OnLocationBarBoundsChanged);
+ }
+Index: src/chrome/browser/ui/location_bar/location_bar.h
+===================================================================
+--- src.orig/chrome/browser/ui/location_bar/location_bar.h
++++ src/chrome/browser/ui/location_bar/location_bar.h
+@@ -137,6 +137,12 @@ class LocationBar {
+   // Called when the edit should update itself without restoring any tab state.
+   virtual void UpdateWithoutTabRestore() = 0;
+ 
++  // helium-fork: true while the Arc band's minimal field is hovered and the
++  // display text should preview the real URL (host+path) instead of the bare
++  // host. ChromeOmniboxClient reads it when it formats the display URL; only
++  // the Views location bar ever returns true.
++  virtual bool IsArcHoverUrlPreview() const;
++
+   CommandUpdater* command_updater() { return command_updater_; }
+   const CommandUpdater* command_updater() const { return command_updater_; }
+ 
+Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
+===================================================================
+--- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
++++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
+@@ -418,8 +418,12 @@ std::u16string ChromeOmniboxClient::GetU
+   bool in_progress = edit_model && edit_model->user_input_in_progress();
+ 
+   if (ShouldUseMinimalLocationBar() && !in_progress) {
++    // helium-fork: hovering the minimal field previews the real URL -- the
++    // after-host trim drops and the standard steady-state display (host
++    // emphasized, path dimmed, no scheme) comes back until the pointer
++    // leaves. Dia behavior, measured 2026-08-16.
+     return location_bar_->GetLocationBarModel()->GetURLForDisplay(
+-        /*trim_after_host_name=*/true);
++        /*trim_after_host_name=*/!location_bar_->IsArcHoverUrlPreview());
+   }
+   return location_bar_->GetLocationBarModel()->GetURLForDisplay();
+ }
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -1516,7 +1516,7 @@ void LocationBarView::RefreshArcTitleLab
+           ShouldMinimizeArcChrome(),
+           (omnibox_view_ && omnibox_view_->HasFocus()) ||
+               GetOmniboxController()->edit_model()->user_input_in_progress(),
+-          /*hovered=*/false, has_title) ==
++          arc_hovered_, has_title) ==
+       helium::ArcFieldContent::kHostAndTitle;
+   if (show == arc_title_label_->GetVisible() && title == arc_last_title_) {
+     return;
+@@ -2556,9 +2556,29 @@ void LocationBarView::OnOmniboxHovered(b
+   } else {
+     hover_animation_.Hide();
+   }
++  // helium-fork: the text swap (host <-> host+path, title out <-> in) is
++  // edge-triggered here -- exactly once per boundary crossing, never per
++  // animation frame. The capsule and the trailing icons keep riding the
++  // 200ms tween above; Dia switches the text instantly (measured
++  // 2026-08-16), so the swap does not animate.
++  if (is_hovering != arc_hovered_) {
++    arc_hovered_ = is_hovering;
++    if (ShouldMinimizeArcChrome() && omnibox_view_ &&
++        !omnibox_view_->HasFocus() &&
++        !GetOmniboxController()->edit_model()->user_input_in_progress()) {
++      omnibox_view_->Update();
++      RefreshArcTitleLabel();
++    }
++  }
+   UpdateArcMinimalDecorations();
+ }
+ 
++bool LocationBarView::IsArcHoverUrlPreview() const {
++  return ShouldMinimizeArcChrome() && arc_hovered_ &&
++         !(omnibox_view_ && omnibox_view_->HasFocus()) &&
++         !GetOmniboxController()->edit_model()->user_input_in_progress();
++}
++
+ void LocationBarView::OnTouchUiChanged() {
+   const gfx::FontList& font_list = views::TypographyProvider::Get().GetFont(
+       CONTEXT_OMNIBOX_PRIMARY, views::style::STYLE_PRIMARY);
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -225,6 +225,9 @@ class LocationBarView
+   bool ShouldCloseOmniboxPopup(ui::MouseEvent* event) override;
+   ChipController* GetChipController() override;
+   void UpdateWithoutTabRestore() override;
++  // helium-fork: true while the minimal field is hovered, unfocused and not
++  // editing -- the state in which the display text previews host+path.
++  bool IsArcHoverUrlPreview() const override;
+   LocationBarModel* GetLocationBarModel() override;
+   content::WebContents* GetWebContents() override;
+   std::optional<bubble_anchor_util::AnchorConfiguration> GetChipAnchor()
+@@ -649,6 +652,11 @@ class LocationBarView
+   // the page has no real title.
+   raw_ptr<views::Label> arc_title_label_ = nullptr;
+   std::u16string arc_last_title_;
++  // helium-fork: the field-level hover state the text swap is edge-triggered
++  // on. hover_animation_ cannot stand in for it -- its value keeps moving for
++  // 200ms after the transition, and the swap must happen exactly once, on the
++  // frame the pointer crosses the boundary.
++  bool arc_hovered_ = false;
+ 
+   // The following views are used to provide hints and remind the user as to
+   // what is going in the edit. They are all added a children of the
