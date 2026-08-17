@@ -1,0 +1,429 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -4023,6 +4023,8 @@ static_library("ui") {
+       # helium-fork: the Arc card's outline.
+       "views/frame/arc_card_outline_view.cc",
+       "views/frame/arc_card_outline_view.h",
++      "views/frame/arc_omnibox_panel_view.cc",
++      "views/frame/arc_omnibox_panel_view.h",
+       "views/frame/base_tab_strip_region_view.cc",
+       "views/frame/base_tab_strip_region_view.h",
+       "views/frame/browser_frame_view.cc",
+Index: src/chrome/browser/ui/location_bar/location_bar.cc
+===================================================================
+--- src.orig/chrome/browser/ui/location_bar/location_bar.cc
++++ src/chrome/browser/ui/location_bar/location_bar.cc
+@@ -8,6 +8,8 @@ LocationBar::Observer::~Observer() = def
+ 
+ void LocationBar::Observer::OnLocationBarBoundsChanged() {}
+ 
++void LocationBar::Observer::OnLocationBarEditStateChanged() {}
++
+ LocationBar::LocationBar(CommandUpdater* command_updater)
+     : command_updater_(command_updater) {}
+ 
+@@ -33,6 +35,10 @@ void LocationBar::NotifyBoundsChanged()
+   observers_.Notify(&Observer::OnLocationBarBoundsChanged);
+ }
+ 
++void LocationBar::NotifyEditStateChanged() {
++  observers_.Notify(&Observer::OnLocationBarEditStateChanged);
++}
++
+ bool LocationBar::in_popup_state_transition() const {
+   return false;
+ }
+Index: src/chrome/browser/ui/location_bar/location_bar.h
+===================================================================
+--- src.orig/chrome/browser/ui/location_bar/location_bar.h
++++ src/chrome/browser/ui/location_bar/location_bar.h
+@@ -68,6 +68,12 @@ class LocationBar {
+     ~Observer() override;
+ 
+     virtual void OnLocationBarBoundsChanged();
++
++    // helium-fork: the field entered or left its edit state, or the suggestion
++    // popup opened or closed. ArcOmniboxPanelView is on screen for exactly
++    // "editing and no popup", and it lives in BrowserView rather than in the
++    // field, so it needs telling.
++    virtual void OnLocationBarEditStateChanged();
+   };
+ 
+   explicit LocationBar(CommandUpdater* command_updater);
+@@ -227,6 +233,8 @@ class LocationBar {
+   virtual ~LocationBar();
+ 
+   void NotifyBoundsChanged();
++  // helium-fork: see Observer::OnLocationBarEditStateChanged().
++  void NotifyEditStateChanged();
+ 
+  private:
+   NavigationParams navigation_params_;
+Index: src/chrome/browser/ui/views/frame/arc_omnibox_panel_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/arc_omnibox_panel_view.cc
+@@ -0,0 +1,133 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
++
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/omnibox/omnibox_controller.h"
++#include "chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_provider.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
++#include "ui/gfx/geometry/rect_conversions.h"
++#include "ui/gfx/geometry/rect_f.h"
++
++ArcOmniboxPanelView::ArcOmniboxPanelView() {
++  // It covers the band's margins and the top of the page, so it must be
++  // invisible to input; and it needs its own layer to composite above the
++  // band's and the contents', both of which are layers themselves (a view
++  // without one paints into the shared parent layer, which is *below* them
++  // whatever the child order says).
++  SetCanProcessEventsWithinSubtree(false);
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  SetVisible(false);
++}
++
++ArcOmniboxPanelView::~ArcOmniboxPanelView() = default;
++
++void ArcOmniboxPanelView::SetLocationBar(LocationBarView* location_bar) {
++  if (location_bar_ == location_bar) {
++    return;
++  }
++  location_bar_observation_.Reset();
++  location_bar_ = location_bar;
++  if (!location_bar_) {
++    // Detaching happens during BrowserView's destruction; touching visibility
++    // there would relayout a half-torn-down tree for nothing.
++    return;
++  }
++  location_bar_observation_.Observe(location_bar_.get());
++  UpdateFromField();
++}
++
++void ArcOmniboxPanelView::UpdateFromField() {
++  const auto hide = [this]() {
++    if (GetVisible()) {
++      SetVisible(false);
++    }
++  };
++
++  if (!location_bar_ || !parent()) {
++    hide();
++    return;
++  }
++
++  const helium::ArcOmniboxPanelMetrics metrics =
++      location_bar_->GetArcOmniboxPanelMetrics();
++  // Editing, and nothing to suggest yet. Once the popup is up it draws the very
++  // same panel around the very same field, and two of them would double the
++  // shadow.
++  if (!metrics.enabled || !location_bar_->GetVisible() ||
++      !location_bar_->IsArcFieldEditing() ||
++      location_bar_->GetOmniboxController()->IsPopupOpen()) {
++    hide();
++    return;
++  }
++
++  gfx::RectF field_f(location_bar_->GetLocalBounds());
++  views::View::ConvertRectToTarget(location_bar_, parent(), &field_f);
++  const gfx::Rect field = gfx::ToEnclosingRect(field_f);
++  const gfx::Rect panel = metrics.PanelFor(field);
++  if (panel.IsEmpty()) {
++    hide();
++    return;
++  }
++
++  // The view is the panel plus the room its shadow spreads into. Anything
++  // painted outside a layer-backed view's bounds is clipped away, and the
++  // shadow is the whole point.
++  gfx::Rect view_bounds = panel;
++  view_bounds.Inset(-helium::ArcOmniboxPanelShadowInsets(metrics));
++
++  const gfx::Rect panel_in_view = panel - view_bounds.OffsetFromOrigin();
++  const gfx::Rect field_in_view = field - view_bounds.OffsetFromOrigin();
++  // BrowserView::Layout() calls this on every pass, so repainting has to be
++  // conditional -- otherwise a window resize with the field focused would
++  // re-raster this layer once per layout for nothing.
++  const bool repaint = panel_in_view != panel_in_view_ ||
++                       field_in_view != field_in_view_ || !GetVisible();
++  metrics_ = metrics;
++  panel_in_view_ = panel_in_view;
++  field_in_view_ = field_in_view;
++  SetBoundsRect(view_bounds);
++  SetVisible(true);
++  if (repaint) {
++    SchedulePaint();
++  }
++}
++
++void ArcOmniboxPanelView::OnPaint(gfx::Canvas* canvas) {
++  if (!metrics_.enabled || panel_in_view_.IsEmpty()) {
++    return;
++  }
++  const auto* const color_provider = GetColorProvider();
++  helium::PaintArcOmniboxPanel(
++      canvas, metrics_, panel_in_view_,
++      color_provider->GetColor(kColorOmniboxResultsBackground),
++      color_utils::IsDark(color_provider->GetColor(kColorToolbar)),
++      field_in_view_);
++}
++
++void ArcOmniboxPanelView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  // Same reason ArcCardOutlineView repaints here: this view owns a layer, and
++  // nothing invalidates a layer's raster on a theme change, so the panel would
++  // keep its light-mode white on a dark window.
++  SchedulePaint();
++}
++
++void ArcOmniboxPanelView::OnLocationBarBoundsChanged() {
++  UpdateFromField();
++}
++
++void ArcOmniboxPanelView::OnLocationBarEditStateChanged() {
++  UpdateFromField();
++}
++
++BEGIN_METADATA(ArcOmniboxPanelView)
++END_METADATA
+Index: src/chrome/browser/ui/views/frame/arc_omnibox_panel_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/arc_omnibox_panel_view.h
+@@ -0,0 +1,80 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_ARC_OMNIBOX_PANEL_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_ARC_OMNIBOX_PANEL_VIEW_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/helium/arc_omnibox_panel.h"
++#include "chrome/browser/ui/location_bar/location_bar.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/views/view.h"
++
++class LocationBarView;
++
++// helium-fork: the Arc shell's edit-state panel while the suggestion popup is
++// closed -- i.e. from the moment the field is clicked until there is something
++// to suggest. Dia's panel appears on the click, not on the first keystroke.
++//
++// Why this cannot be the field's own painting: the band clips its contents
++// (TopContainerView::SetArcCardClipEnabled), so nothing inside it can cast a
++// shadow onto the page below. And why it is not the suggestion popup opened
++// early: that popup's open/closed state is read in a dozen places in
++// OmniboxEditModel -- Enter, the arrow keys, the icon, the metrics -- and none
++// of them should change for a purely visual effect.
++//
++// So the panel is a BrowserView child, ordered after the card's shadow so its
++// layer composites above both the band and the page, and it paints the panel
++// *around* the field with the field's own rounded rect clipped out. The field
++// keeps painting itself, in the band, exactly as before.
++//
++// The popup takes over the instant it opens, at the same rect with the same
++// radius and the same shadow (both come from helium::ArcOmniboxPanelMetrics and
++// both are drawn by helium::PaintArcOmniboxPanel), so the handover is
++// invisible: the panel simply grows downwards.
++class ArcOmniboxPanelView : public views::View, public LocationBar::Observer {
++  METADATA_HEADER(ArcOmniboxPanelView, views::View)
++
++ public:
++  ArcOmniboxPanelView();
++  ArcOmniboxPanelView(const ArcOmniboxPanelView&) = delete;
++  ArcOmniboxPanelView& operator=(const ArcOmniboxPanelView&) = delete;
++  ~ArcOmniboxPanelView() override;
++
++  // Attaches to the field. Separate from the constructor because BrowserView
++  // creates this view in its own constructor -- child order is load-bearing --
++  // while ToolbarView::Init(), which is what builds the field, does not run
++  // until AddedToWidget().
++  void SetLocationBar(LocationBarView* location_bar);
++
++  // Recomputes visibility and bounds from the field's current state. Cheap and
++  // idempotent, and the only writer of either -- the layout deliberately does
++  // not place this view, because the field's width is settled by the toolbar's
++  // FlexLayout well after BrowserViewTabbedLayoutImpl has run.
++  void UpdateFromField();
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override;
++  void OnThemeChanged() override;
++
++  // LocationBar::Observer:
++  void OnLocationBarBoundsChanged() override;
++  void OnLocationBarEditStateChanged() override;
++
++ private:
++  // The panel and the field's hole in it, both in this view's coordinates.
++  // This view is the panel plus the room its shadow needs, so neither is at
++  // the origin.
++  gfx::Rect panel_in_view_;
++  gfx::Rect field_in_view_;
++  helium::ArcOmniboxPanelMetrics metrics_;
++
++  raw_ptr<LocationBarView> location_bar_ = nullptr;
++  base::ScopedObservation<LocationBar, LocationBar::Observer>
++      location_bar_observation_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_ARC_OMNIBOX_PANEL_VIEW_H_
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -170,6 +170,7 @@
+ #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
+ #include "chrome/browser/ui/views/frame/scrim_view.h"
+ #include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
++#include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
+ #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+@@ -1127,6 +1128,13 @@ BrowserView::BrowserView(Browser* browse
+   // colors, and there is no color provider until this view is in a widget.
+   arc_card_shadow_->SetVisible(false);
+ 
++  // helium-fork: the field's edit-state panel, after the card's shadow so its
++  // layer composites above the band, the page and that shadow. It places
++  // itself off the field rather than being laid out here -- see the class
++  // comment; the field's width is not settled until the toolbar's FlexLayout
++  // has run, long after BrowserViewTabbedLayoutImpl.
++  arc_omnibox_panel_ = AddChildView(std::make_unique<ArcOmniboxPanelView>());
++
+   // InfoBarContainer needs to be added as a child here for drop-shadow, but
+   // needs to come after toolbar in focus order (see EnsureFocusOrder()).
+   infobar_container_ =
+@@ -1297,12 +1305,20 @@ BrowserView::~BrowserView() {
+   // child views and it is an observer for avatar toolbar button if any.
+   autofill_bubble_handler_.reset();
+ 
++  // helium-fork: the edit-state panel observes the field, and the field (deep
++  // inside `top_container_`, which is child 0) is destroyed before it. Drop the
++  // observation while both are still alive.
++  if (arc_omnibox_panel_) {
++    arc_omnibox_panel_->SetLocationBar(nullptr);
++  }
++
+   // These are raw pointers to child views, so they need to be set to null
+   // before `RemoveAllChildViews()` is called to avoid dangling.
+   browser_widget_ = nullptr;
+   main_background_region_ = nullptr;
+   arc_card_outline_ = nullptr;
+   arc_card_shadow_ = nullptr;
++  arc_omnibox_panel_ = nullptr;
+   top_container_ = nullptr;
+   web_app_frame_toolbar_ = nullptr;
+   web_app_window_title_ = nullptr;
+@@ -6079,6 +6095,19 @@ void BrowserView::Layout(PassKey) {
+ 
+   LayoutSuperclass<views::View>(this);
+ 
++  // helium-fork: the edit-state panel places itself off the field, so like the
++  // embedded WebUI popup below it can only do that once the layout has settled.
++  // Its own observer of the field is not enough: ProposedLayout::ApplyLayout()
++  // tail-recurses, giving a child its bounds *before* its parents, so a
++  // conversion through the ancestors mid-pass reads their old ones. Measured on
++  // Cmd+S: the panel's width followed the field but its x was stale by exactly
++  // the sidebar's width. The observer still earns its keep for relayouts that
++  // stay inside the toolbar (an extension icon arriving), where the ancestors
++  // do not move and this pass does not run.
++  if (arc_omnibox_panel_) {
++    arc_omnibox_panel_->UpdateFromField();
++  }
++
+   // TODO(jamescook): Why was this in the middle of layout code?
+   toolbar_->location_bar()->UpdateFocusBehavior(IsToolbarVisible());
+   GetFrameView()->UpdateMinimumSize();
+@@ -6216,6 +6245,12 @@ void BrowserView::AddedToWidget() {
+ 
+   toolbar_->Init();
+ 
++  // helium-fork: the field exists now, so the edit-state panel can attach to
++  // it. (Construction order forbids doing this where the view is created.)
++  if (arc_omnibox_panel_) {
++    arc_omnibox_panel_->SetLocationBar(toolbar_->location_bar_view());
++  }
++
+   if (omnibox::IsWebUIOmniboxInBrowserViewEnabled()) {
+     // When the WebUI Omnibox is embedded directly in the `BrowserView` (instead
+     // of being a separate popup widget), the popup view needs a reference to
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -94,6 +94,7 @@ class MultiContentsView;
+ class ProjectsPanelView;
+ class ScrimView;
+ class ArcCardOutlineView;
++class ArcOmniboxPanelView;
+ class ShadowFrameView;
+ class SidePanel;
+ class TabCyclingEventHandler;
+@@ -1286,6 +1287,10 @@ class BrowserView : public BrowserWindow
+   raw_ptr<ArcCardOutlineView> arc_card_outline_ = nullptr;
+   raw_ptr<ShadowFrameView> arc_card_shadow_ = nullptr;
+ 
++  // helium-fork: the address field's edit-state panel, which has to live out
++  // here because the band clips its own contents. See ArcOmniboxPanelView.
++  raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
++
+   // The view that manages the tab strip, toolbar, and sometimes the bookmark
+   // bar. Stacked top in the view hiearachy so it can be used to slide out
+   // the top views in immersive fullscreen.
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -2424,6 +2424,14 @@ void LocationBarView::OnPopupStateChange
+     views::FocusRing::Get(this)->Refresh();
+   }
+ 
++  // helium-fork: the panel drawn while the popup is closed steps aside for the
++  // popup's own, and comes back when it closes. Synchronously, and from down
++  // here: OmniboxPopupStateManager assigns the new state before it notifies, so
++  // IsPopupOpen() -- which is what the panel reads -- already answers with the
++  // state being entered, and by this point `in_popup_state_transition_` is set,
++  // so asking cannot trip ValidatePopupState() mid-handover.
++  NotifyEditStateChanged();
++
+   // Notify accessibility that the popup controls changed.
+   omnibox_view_->NotifyAccessibilityEventDeprecated(
+       ax::mojom::Event::kControlsChanged, true);
+@@ -2558,6 +2566,10 @@ void LocationBarView::OnOmniboxFocused()
+   // The AI mode page action icon view should only be visible when the omnibox
+   // is focused, so if there is a change in focus, refresh the icon.
+   RefreshAiModePageActionIconView();
++
++  // helium-fork: the edit-state panel is drawn outside the band (which clips
++  // its own contents), so it has to be told.
++  NotifyEditStateChanged();
+ }
+ 
+ void LocationBarView::OpenOmniboxPopup() {
+@@ -2583,6 +2595,9 @@ void LocationBarView::OnOmniboxBlurred()
+   RefreshAiModePageActionIconView();
+ 
+   location_icon_view_->Update(false, false);
++
++  // helium-fork: see OnOmniboxFocused().
++  NotifyEditStateChanged();
+ }
+ 
+ void LocationBarView::OnOmniboxHovered(bool is_hovering) {

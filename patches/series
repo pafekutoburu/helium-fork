@@ -359,3 +359,6 @@ helium-fork/layout/band-field-full-width.patch
 helium-fork/layout/minimal-bar-page-title.patch
 helium-fork/layout/minimal-bar-hover-url.patch
 helium-fork/layout/band-field-hit-zones.patch
+helium-fork/layout/omnibox-panel-geometry.patch
+helium-fork/layout/omnibox-focus-panel.patch
+helium-fork/layout/omnibox-focus-ring-retire.patch

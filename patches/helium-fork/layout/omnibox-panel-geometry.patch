@@ -1,0 +1,859 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -379,6 +379,7 @@ static_library("ui") {
+     "helium/arc_caption_opacity.h",
+     "helium/arc_card_layout.h",
+     "helium/arc_minimal_field_state.h",
++    "helium/arc_omnibox_panel.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+@@ -4123,6 +4124,8 @@ static_library("ui") {
+       "views/fullscreen_control/fullscreen_control_host.h",
+       "views/global_error_bubble_view.cc",
+       "views/global_error_bubble_view.h",
++      "views/helium/arc_omnibox_panel_painter.cc",
++      "views/helium/arc_omnibox_panel_painter.h",
+       "views/helium/frame_corner_radius.cc",
+       "views/helium/frame_corner_radius.h",
+       "views/helium/native_frame_materials.cc",
+@@ -6021,6 +6024,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_card_layout_unittest.cc",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_minimal_field_state_unittest.cc",
++    "helium/arc_omnibox_panel.h",
++    "helium/arc_omnibox_panel_unittest.cc",
+     "helium_workspace/workspace_blank_tab.h",
+     "helium_workspace/workspace_blank_tab_unittest.cc",
+     "helium_workspace/workspace_entry.cc",
+Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_omnibox_panel.h
+@@ -0,0 +1,154 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_OMNIBOX_PANEL_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_OMNIBOX_PANEL_H_
++
++#include <algorithm>
++
++#include "ui/gfx/geometry/insets.h"
++#include "ui/gfx/geometry/rect.h"
++
++// helium-fork: the geometry of the Arc shell's edit-state panel -- the white
++// rounded card that the address field turns into when it is clicked, and that
++// the suggestion list grows downwards inside.
++//
++// Why a single source: the panel is drawn by two different owners in two
++// different widgets -- the omnibox popup's RoundedOmniboxResultsFrame when
++// there are suggestions, and ArcOmniboxPanelView (a BrowserView child, because
++// the band clips its own contents and the field can therefore not cast a
++// shadow) when the field is focused with nothing to suggest yet. The user must
++// not be able to tell which one is on screen, so the two must agree to the
++// pixel. Before this header they did not even agree with themselves: one panel
++// carried four different corner radii (field 11, the popup's cutout 8, its
++// background layer a hard-coded 12, its shadow border 16).
++//
++// Numbers measured on Dia 2026-08-16 (2x screenshots, converted to pt) and the
++// two places we cannot follow it, both recorded here because they are the first
++// things to revisit if the panel ever reads as "not floating enough":
++//
++//   * Dia's panel is its hover capsule inflated by 40.5pt on each side, sharing
++//     its centre exactly. We inflate by kHeliumBasePadding instead: our field
++//     starts 3pt from the card's left edge (the navigation buttons live in the
++//     sidebar, so we do not have Dia's 148pt of band to grow into), and 40pt
++//     would push the panel out over the sidebar -- off the window entirely once
++//     the sidebar is collapsed. Dia's panel never leaves its own card.
++//   * Dia's panel radius is 20. Ours is the card's radius, because inflating by
++//     only 3pt lands the panel's top-left corner exactly on the card's, and two
++//     different arcs meeting there is the "two rectangles pretending to be one"
++//     cue this whole shell exists to remove. The card's radius also keeps the
++//     panel concentric with the field: panel_radius - outset == field_radius.
++//
++// The root cause of both is that Dia's band is 54pt and ours is 34pt; there is
++// only 3pt of window margin above our card to grow into. Making the panel
++// Dia-proportioned starts with the band's height, not with this file.
++//
++// Header-only and free of //ui/views so it can be linked into the lightweight
++// test target (see PROGRESS.md on why anything reaching TestingProfile cannot
++// be built in this tree).
++namespace helium {
++
++struct ArcOmniboxPanelMetrics {
++  // False when the Arc band treatment does not apply (popup windows, high
++  // contrast, no vertical tab strip, or the row hosted in the sidebar rather
++  // than the band). Every number is then zero and callers must keep upstream's
++  // own metrics rather than reading these.
++  bool enabled = false;
++
++  // How far the panel grows past the field on the left, right and top. The
++  // bottom is where the suggestions are, so it is never inset.
++  int outset = 0;
++
++  // The panel's own corner radius.
++  int panel_radius = 0;
++
++  // The field's radius, which is also the radius of the hole the panel leaves
++  // for it. These are the same number by construction: the field shows through
++  // that hole, so a mismatch is a visible double arc.
++  int field_radius = 0;
++
++  // ui::Shadow elevation and the black alphas it is tinted with, in the same
++  // shape ShadowFrameView::ShadowAlpha takes. Kept as plain doubles so this
++  // header stays free of //ui/views.
++  int shadow_elevation = 0;
++  double shadow_light_key = 0.0;
++  double shadow_light_ambient = 0.0;
++  double shadow_dark_key = 0.0;
++  double shadow_dark_ambient = 0.0;
++
++  // How the panel is placed around the field. This is the shape the omnibox
++  // popup's own alignment insets take, so it can be handed straight to
++  // Rect::Inset() with a minus sign.
++  gfx::Insets alignment_insets() const {
++    return gfx::Insets::TLBR(outset, outset, 0, outset);
++  }
++
++  // The panel rect for a given field rect, before the suggestions add height.
++  // Grows the field on three sides, so the two share a horizontal centre --
++  // Dia's one invariant that survives our narrower margins.
++  gfx::Rect PanelFor(const gfx::Rect& field) const {
++    if (!enabled) {
++      return gfx::Rect();
++    }
++    gfx::Rect panel(field);
++    panel.Inset(-alignment_insets());
++    return panel;
++  }
++};
++
++// `card_radius` is the content card's corner radius and `field_radius` the
++// address field's; both must come from the callers' existing concentric chain
++// (system window radius -> card -> field), never be written down a second time
++// here. `outset` is the same kHeliumBasePadding the card and the field are
++// already spaced by -- passing it in rather than reading the layout constant
++// keeps this header dependency-free and the relationship assertable.
++inline ArcOmniboxPanelMetrics ComputeArcOmniboxPanel(bool enabled,
++                                                     int outset,
++                                                     int card_radius,
++                                                     int field_radius) {
++  ArcOmniboxPanelMetrics metrics;
++  if (!enabled) {
++    return metrics;
++  }
++  metrics.enabled = true;
++  metrics.outset = std::max(0, outset);
++  metrics.field_radius = std::max(0, field_radius);
++  // Concentric with the field by construction rather than by coincidence: a
++  // caller that hands over a card radius which does not sit `outset` outside
++  // the field gets the concentric answer anyway, and the unit test pins that.
++  metrics.panel_radius = std::max(metrics.field_radius + metrics.outset,
++                                  std::max(0, card_radius));
++  // Dia's shadow, measured off dia_06_after_click_text.png with panelshadow.py
++  // and then matched by measuring ours the same way (both panels tall, so the
++  // two are comparable):
++  //
++  //           reach sideways   reach below   edge darkening side / below
++  //   Dia          70px            96px            5.5%  /  8.3%
++  //   ours         55px           113px            5.0%  /  8.4%
++  //
++  // Material Design's shape turns out to be close to Dia's: measured at
++  // elevation 20 the below/side density ratio came out 1.57 against Dia's 1.51,
++  // so only the two dials below need setting.
++  //
++  //   * reach is 2*elevation sideways and 3*elevation below, hence 35. It lands
++  //     tighter than Dia at the sides and longer underneath; moving the
++  //     elevation fixes one and spoils the other, so it stays between them.
++  //   * edge darkening is half the summed alpha and does not depend on the
++  //     blur, so 0.11 total buys Dia's 5.5%. MD's own defaults (0x3d key,
++  //     0x1f ambient = 0.36 total) are three times too heavy -- at elevation 20
++  //     with 0.14 total we measured 6.7% / 10.5%, visibly heavier than Dia.
++  //
++  // The dark-mode pair keeps the ratio to the light one that the content card's
++  // shadow uses (2.0x key, 2.35x ambient).
++  metrics.shadow_elevation = 35;
++  metrics.shadow_light_key = 0.07;
++  metrics.shadow_light_ambient = 0.04;
++  metrics.shadow_dark_key = 0.14;
++  metrics.shadow_dark_ambient = 0.09;
++  return metrics;
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_OMNIBOX_PANEL_H_
+Index: src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
+@@ -0,0 +1,119 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_omnibox_panel.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++#include "ui/gfx/geometry/rect.h"
++
++namespace helium {
++namespace {
++
++// The measured baseline: kHeliumBasePadding, the 17 -> 14 -> 11 concentric
++// chain, and the field as M3.4 leaves it (band x+3, band y+3, 28 tall,
++// spanning the band's middle).
++constexpr int kOutset = 3;
++constexpr int kCardRadius = 14;
++constexpr int kFieldRadius = 11;
++constexpr gfx::Rect kField(206, 6, 1000, 28);
++
++ArcOmniboxPanelMetrics Metrics() {
++  return ComputeArcOmniboxPanel(/*enabled=*/true, kOutset, kCardRadius,
++                                kFieldRadius);
++}
++
++// The invariant the four-radii mess gave away: the field shows through a hole
++// in the panel, so the hole's radius IS the field's radius. Anything else
++// paints two arcs one inside the other at every corner of the field.
++TEST(ArcOmniboxPanelTest, HoleRadiusIsTheFieldRadius) {
++  EXPECT_EQ(kFieldRadius, Metrics().field_radius);
++}
++
++// Concentric: stepping `outset` outwards from the field's arc has to land on
++// the panel's arc. This is the same relationship the window (17), the card (14)
++// and the field (11) already stand in, and it is why the panel's radius is the
++// card's rather than Dia's 20 -- see the header.
++TEST(ArcOmniboxPanelTest, PanelIsConcentricWithTheField) {
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  EXPECT_EQ(metrics.field_radius + metrics.outset, metrics.panel_radius);
++}
++
++// A caller that derives the card radius somewhere else and gets it wrong must
++// not be able to break concentricity -- it can only make the panel rounder.
++TEST(ArcOmniboxPanelTest, ConcentricitySurvivesAWrongCardRadius) {
++  for (int card_radius : {0, 5, 11, 14, 20, 40}) {
++    const ArcOmniboxPanelMetrics metrics =
++        ComputeArcOmniboxPanel(/*enabled=*/true, kOutset, card_radius,
++                               kFieldRadius);
++    SCOPED_TRACE(testing::Message() << "card_radius=" << card_radius);
++    EXPECT_GE(metrics.panel_radius, metrics.field_radius + metrics.outset);
++  }
++}
++
++// The panel grows on three sides only: the bottom edge is where the suggestion
++// list is, and insetting it would push the list up under the field.
++TEST(ArcOmniboxPanelTest, AlignmentInsetsLeaveTheBottomAlone) {
++  const gfx::Insets insets = Metrics().alignment_insets();
++  EXPECT_EQ(kOutset, insets.top());
++  EXPECT_EQ(kOutset, insets.left());
++  EXPECT_EQ(kOutset, insets.right());
++  EXPECT_EQ(0, insets.bottom());
++}
++
++// Dia's one geometric invariant that survives our narrower margins: the panel
++// and the field share a horizontal centre, and the panel contains the field.
++TEST(ArcOmniboxPanelTest, PanelSharesTheFieldsCentreAndContainsIt) {
++  const gfx::Rect panel = Metrics().PanelFor(kField);
++  EXPECT_TRUE(panel.Contains(kField));
++  EXPECT_EQ(kField.CenterPoint().x(), panel.CenterPoint().x());
++  EXPECT_EQ(kField.x() - kOutset, panel.x());
++  EXPECT_EQ(kField.right() + kOutset, panel.right());
++  EXPECT_EQ(kField.y() - kOutset, panel.y());
++  EXPECT_EQ(kField.bottom(), panel.bottom());
++}
++
++// The panel's top-left corner lands exactly on the card's, which is the whole
++// reason its radius is the card's. Written as the card's own arithmetic so a
++// change to kHeliumBasePadding cannot silently split the two apart.
++TEST(ArcOmniboxPanelTest, PanelTopLeftLandsOnTheCardTopLeft) {
++  constexpr gfx::Rect kCard(203, 3, 1074, 794);
++  const gfx::Rect panel = Metrics().PanelFor(kField);
++  EXPECT_EQ(kCard.x(), panel.x());
++  EXPECT_EQ(kCard.y(), panel.y());
++}
++
++// Disabled means "keep upstream's numbers", not "use zeroed-out ones": every
++// field has to read as obviously unusable so a caller that forgets to check
++// `enabled` fails loudly rather than drawing a radius-0 panel at the origin.
++TEST(ArcOmniboxPanelTest, DisabledYieldsNothing) {
++  const ArcOmniboxPanelMetrics metrics =
++      ComputeArcOmniboxPanel(/*enabled=*/false, kOutset, kCardRadius,
++                             kFieldRadius);
++  EXPECT_FALSE(metrics.enabled);
++  EXPECT_EQ(0, metrics.outset);
++  EXPECT_EQ(0, metrics.panel_radius);
++  EXPECT_EQ(0, metrics.field_radius);
++  EXPECT_EQ(0, metrics.shadow_elevation);
++  EXPECT_TRUE(metrics.PanelFor(kField).IsEmpty());
++  EXPECT_TRUE(metrics.alignment_insets().IsEmpty());
++}
++
++// The shadow is one material shared by the popup frame and the focus panel, so
++// both halves of it have to arrive together. A zero alpha with a non-zero
++// elevation is the failure mode that looks like "the shadow just did not turn
++// on" and costs a build cycle to spot.
++TEST(ArcOmniboxPanelTest, ShadowIsFullySpecifiedWhenEnabled) {
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  EXPECT_GT(metrics.shadow_elevation, 0);
++  EXPECT_GT(metrics.shadow_light_key, 0.0);
++  EXPECT_GT(metrics.shadow_light_ambient, 0.0);
++  EXPECT_GT(metrics.shadow_dark_key, 0.0);
++  EXPECT_GT(metrics.shadow_dark_ambient, 0.0);
++  // Dark mode is heavier than light, the way the content card's shadow is.
++  EXPECT_GT(metrics.shadow_dark_key, metrics.shadow_light_key);
++  EXPECT_GT(metrics.shadow_dark_ambient, metrics.shadow_light_ambient);
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/location_bar/location_bar.cc
+===================================================================
+--- src.orig/chrome/browser/ui/location_bar/location_bar.cc
++++ src/chrome/browser/ui/location_bar/location_bar.cc
+@@ -25,6 +25,10 @@ bool LocationBar::IsArcHoverUrlPreview()
+   return false;
+ }
+ 
++helium::ArcOmniboxPanelMetrics LocationBar::GetArcOmniboxPanelMetrics() const {
++  return helium::ArcOmniboxPanelMetrics();
++}
++
+ void LocationBar::NotifyBoundsChanged() {
+   observers_.Notify(&Observer::OnLocationBarBoundsChanged);
+ }
+Index: src/chrome/browser/ui/location_bar/location_bar.h
+===================================================================
+--- src.orig/chrome/browser/ui/location_bar/location_bar.h
++++ src/chrome/browser/ui/location_bar/location_bar.h
+@@ -13,6 +13,8 @@
+ #include "base/observer_list.h"
+ #include "base/scoped_observation_traits.h"
+ #include "base/time/time.h"
++// helium-fork: the edit-state panel's metrics travel through this interface.
++#include "chrome/browser/ui/helium/arc_omnibox_panel.h"
+ #include "ui/base/page_transition_types.h"
+ #include "ui/base/window_open_disposition.h"
+ #include "ui/gfx/geometry/rect.h"
+@@ -143,6 +145,13 @@ class LocationBar {
+   // the Views location bar ever returns true.
+   virtual bool IsArcHoverUrlPreview() const;
+ 
++  // helium-fork: how the edit-state panel is placed around this field, or a
++  // disabled struct when the Arc band treatment does not apply. Handed out as
++  // one struct rather than as a "is this the band?" predicate so the omnibox
++  // popup never has to re-derive the radius chain the shell already owns; only
++  // the Views location bar ever returns an enabled one.
++  virtual helium::ArcOmniboxPanelMetrics GetArcOmniboxPanelMetrics() const;
++
+   CommandUpdater* command_updater() { return command_updater_; }
+   const CommandUpdater* command_updater() const { return command_updater_; }
+ 
+Index: src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.cc
+@@ -0,0 +1,88 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h"
++
++#include <vector>
++
++#include "base/numerics/safe_conversions.h"
++#include "cc/paint/paint_flags.h"
++#include "third_party/skia/include/core/SkRRect.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/geometry/skia_conversions.h"
++#include "ui/gfx/scoped_canvas.h"
++#include "ui/gfx/shadow_value.h"
++#include "ui/gfx/skia_paint_util.h"
++
++namespace helium {
++
++namespace {
++
++SkColor BlackWithAlpha(double alpha) {
++  return SkColorSetARGB(base::ClampRound(255.0 * alpha), 0, 0, 0);
++}
++
++// The shadow's geometry. Only the elevation matters here -- the alphas change
++// how dark it is, never how far it reaches -- so this is shared by the two
++// callers that have to reserve room for it and by the painter itself.
++gfx::ShadowValues ShadowGeometry(const ArcOmniboxPanelMetrics& metrics) {
++  return gfx::ShadowValue::MakeMdShadowValues(metrics.shadow_elevation);
++}
++
++}  // namespace
++
++gfx::Insets ArcOmniboxPanelShadowInsets(
++    const ArcOmniboxPanelMetrics& metrics) {
++  if (!metrics.enabled) {
++    return gfx::Insets();
++  }
++  // GetMargin() is negative (it is meant for Rect::Inset to expand with), and
++  // callers here want the room as a positive number.
++  return gfx::Insets() - gfx::ShadowValue::GetMargin(ShadowGeometry(metrics));
++}
++
++void PaintArcOmniboxPanel(gfx::Canvas* canvas,
++                          const ArcOmniboxPanelMetrics& metrics,
++                          const gfx::Rect& panel,
++                          SkColor background,
++                          bool dark,
++                          std::optional<gfx::Rect> hole) {
++  if (!metrics.enabled || panel.IsEmpty()) {
++    return;
++  }
++
++  const gfx::ShadowValues shadows = gfx::ShadowValue::MakeMdShadowValues(
++      metrics.shadow_elevation,
++      BlackWithAlpha(dark ? metrics.shadow_dark_key : metrics.shadow_light_key),
++      BlackWithAlpha(dark ? metrics.shadow_dark_ambient
++                          : metrics.shadow_light_ambient));
++
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setStyle(cc::PaintFlags::kFill_Style);
++  flags.setColor(background);
++  flags.setLooper(gfx::CreateShadowDrawLooper(shadows));
++
++  gfx::ScopedCanvas scoped(canvas);
++  if (hole.has_value() && !hole->IsEmpty()) {
++    // Subtract the field so it shows through rather than being painted over.
++    // The shadow's own inner blur is subtracted with it, which is the point:
++    // the panel is one surface with the field in it, not a card sitting behind
++    // a second card.
++    //
++    // The rect drawn below is bounded by its own geometry, so this clip only
++    // ever removes -- it is not what keeps the paint inside the view. (See
++    // PROGRESS.md on ArcCardOutlineView's first version, where a canvas-wide
++    // DrawColor() leaned on a non-rectangular clip and painted a 478pt white
++    // band across the page.)
++    canvas->sk_canvas()->clipRRect(
++        SkRRect::MakeRectXY(gfx::RectFToSkRect(gfx::RectF(*hole)),
++                            metrics.field_radius, metrics.field_radius),
++        SkClipOp::kDifference, /*doAntiAlias=*/true);
++  }
++  canvas->DrawRoundRect(panel, metrics.panel_radius, flags);
++}
++
++}  // namespace helium
+Index: src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h
+@@ -0,0 +1,61 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_ARC_OMNIBOX_PANEL_PAINTER_H_
++#define CHROME_BROWSER_UI_VIEWS_HELIUM_ARC_OMNIBOX_PANEL_PAINTER_H_
++
++#include <optional>
++
++#include "chrome/browser/ui/helium/arc_omnibox_panel.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/geometry/insets.h"
++#include "ui/gfx/geometry/rect.h"
++
++namespace gfx {
++class Canvas;
++}
++
++namespace helium {
++
++// helium-fork: how far outside the panel its shadow spreads -- the room a
++// caller has to reserve around the panel rect, whether that is a popup widget's
++// bounds or a view's. Positive insets, the way
++// views::BubbleBorder::GetBorderAndShadowInsets() reports them.
++gfx::Insets ArcOmniboxPanelShadowInsets(const ArcOmniboxPanelMetrics& metrics);
++
++// helium-fork: paints the Arc shell's edit-state panel -- `panel` filled with
++// `background` at the metrics' radius, lifted off what is behind it by Dia's
++// shadow.
++//
++// Two callers, one painter, on purpose: the omnibox popup's frame draws it
++// when there are suggestions and ArcOmniboxPanelView draws it when the field is
++// focused with none, and the user must not be able to tell which one is on
++// screen. Anything either of them wants to do differently belongs in the
++// arguments, not in a second copy of this.
++//
++// `hole`, when given, is the address field's rect: it is clipped away so the
++// real field shows through the panel rather than being painted over. Only the
++// focus-panel caller needs it -- the popup covers the field with its own
++// opaque layer and cuts its hole inside that.
++//
++// Why a draw looper rather than ui::Shadow, which is what the content card
++// uses: ui::Shadow caps elevation at `(min(w, h) - 2 * radius) / 4`, and the
++// panel is 31pt tall with a 14pt radius before any suggestions arrive -- that
++// caps to zero and the shadow simply never appears. The looper has no such
++// coupling, and using it in both states is also what keeps the two identical
++// at the moment the popup opens.
++//
++// `dark` selects between the metrics' two alpha pairs; it is the theme's own
++// notion of darkness, not the page's -- the panel is a chrome surface and does
++// not follow the band's page tint.
++void PaintArcOmniboxPanel(gfx::Canvas* canvas,
++                          const ArcOmniboxPanelMetrics& metrics,
++                          const gfx::Rect& panel,
++                          SkColor background,
++                          bool dark,
++                          std::optional<gfx::Rect> hole = std::nullopt);
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_ARC_OMNIBOX_PANEL_PAINTER_H_
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -2626,6 +2626,22 @@ bool LocationBarView::IsArcHoverUrlPrevi
+          !GetOmniboxController()->edit_model()->user_input_in_progress();
+ }
+ 
++helium::ArcOmniboxPanelMetrics LocationBarView::GetArcOmniboxPanelMetrics()
++    const {
++  // The band only. In the hidden address bar mode this row lives inside the
++  // sidebar, which has neither the room for a panel nor the margins the
++  // geometry below is derived from.
++  const bool enabled = ToolbarView::IsArcBandHostedFor(this);
++  return helium::ComputeArcOmniboxPanel(
++      enabled, GetLayoutConstant(LayoutConstant::kHeliumBasePadding),
++      GetPaddedFrameRadius(), GetBorderRadius());
++}
++
++bool LocationBarView::IsArcFieldEditing() const {
++  return GetOmniboxController()->edit_model()->is_caret_visible() ||
++         GetOmniboxController()->edit_model()->user_input_in_progress();
++}
++
+ void LocationBarView::ShowContextMenuForViewImpl(
+     views::View* source,
+     const gfx::Point& p,
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -231,6 +231,13 @@ class LocationBarView
+   // helium-fork: true while the minimal field is hovered, unfocused and not
+   // editing -- the state in which the display text previews host+path.
+   bool IsArcHoverUrlPreview() const override;
++  // helium-fork: the edit-state panel's geometry, derived from the same
++  // concentric chain this field's own radius comes from.
++  helium::ArcOmniboxPanelMetrics GetArcOmniboxPanelMetrics() const override;
++  // helium-fork: true while the field is showing its edit state -- the caret
++  // is visible or there is in-progress input. The panel is on screen for
++  // exactly this, whether the suggestion popup is up or not.
++  bool IsArcFieldEditing() const;
+ 
+   // helium-fork: for ToolbarView's caption hit test. True when `point` (in
+   // this view's coordinates) lands on the minimal field's blank -- the part
+Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
+@@ -745,12 +745,16 @@ gfx::Rect OmniboxPopupViewViews::GetTarg
+   // Add enough space on the top and bottom so it looks like there is the same
+   // amount of space between the text and the popup border as there is in the
+   // interior between each row of text.
+-  popup_height += RoundedOmniboxResultsFrame::GetNonResultSectionHeight();
++  // helium-fork: the three metrics below are the Arc panel's when this popup
++  // hangs off the docked band's field -- one concentric card around the field,
++  // carrying the content card's own shadow.
++  popup_height +=
++      RoundedOmniboxResultsFrame::GetNonResultSectionHeight(location_bar_view_);
+ 
+   // The rounded popup is always offset the same amount from the omnibox.
+   gfx::Rect content_rect = location_bar_view_->GetBoundsInScreen();
+-  content_rect.Inset(
+-      -RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets());
++  content_rect.Inset(-RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets(
++      location_bar_view_));
+   content_rect.set_height(popup_height);
+ 
+   if (omnibox::IsWebUIOmniboxPopupEnabled() &&
+@@ -764,7 +768,8 @@ gfx::Rect OmniboxPopupViewViews::GetTarg
+   }
+ 
+   // Finally, expand the widget to accommodate the custom-drawn shadows.
+-  content_rect.Inset(-RoundedOmniboxResultsFrame::GetShadowInsets());
++  content_rect.Inset(
++      -RoundedOmniboxResultsFrame::GetShadowInsets(location_bar_view_));
+   return content_rect;
+ }
+ 
+Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
++++ src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
+@@ -15,6 +15,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "chrome/browser/ui/views/omnibox/omnibox_aim_popup_webui_content.h"
+ #include "chrome/browser/ui/views/omnibox/omnibox_popup_webui_base_content.h"
+@@ -27,6 +28,7 @@
+ #include "ui/gfx/color_palette.h"
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
++#include "ui/views/border.h"
+ #include "ui/views/bubble/bubble_border.h"
+ #include "ui/views/layout/layout_provider.h"
+ #include "ui/views/metadata/view_factory.h"
+@@ -171,9 +173,19 @@ class TopBackgroundView : public views::
+     // underlying antialiased location bar/toolbar edge.  The round rect here is
+     // not antialiased, since the goal is to completely cover the underlying
+     // pixels, and AA would let those on the edge partly bleed through.
++    //
++    // helium-fork: the hole this punches is the shape the field shows through,
++    // so its radius has to BE the field's radius. Left to the stock metric it
++    // was 8 while the Arc field paints itself at 11 -- two arcs at every corner
++    // of the field, in the one state the whole panel exists to make look like a
++    // single surface.
++    const helium::ArcOmniboxPanelMetrics metrics =
++        location_bar_->GetArcOmniboxPanelMetrics();
+     SetBackground(LocationBarView::CreateRoundRectBackground(
+         SK_ColorTRANSPARENT, background_color, location_bar_->Bounds().size(),
+-        SkBlendMode::kSrc, false));
++        SkBlendMode::kSrc, false, /*should_border_scale=*/false,
++        metrics.enabled ? std::make_optional(metrics.field_radius)
++                        : std::nullopt));
+   }
+ 
+ #if !defined(USE_AURA)
+@@ -235,8 +247,15 @@ RoundedOmniboxResultsFrame::RoundedOmnib
+     views::View* contents,
+     LocationBar* location_bar,
+     bool forward_mouse_events)
+-    : contents_(contents), forward_mouse_events_(forward_mouse_events) {
+-  const int corner_radius = 12;
++    : contents_(contents),
++      location_bar_(location_bar),
++      forward_mouse_events_(forward_mouse_events) {
++  // helium-fork: on the Arc band the panel's radius comes from the shell's
++  // concentric chain (window -> card -> field) rather than from this local 12,
++  // which disagreed with both the shadow border's 16 and the field's own 11.
++  const helium::ArcOmniboxPanelMetrics arc_metrics = GetArcPanelMetrics();
++  const int corner_radius =
++      arc_metrics.enabled ? arc_metrics.panel_radius : 12;
+   // Host the contents in its own View to simplify layout and customization.
+   auto contents_host_builder =
+       views::Builder<views::View>()
+@@ -310,6 +329,55 @@ gfx::Insets RoundedOmniboxResultsFrame::
+   return views::BubbleBorder::GetBorderAndShadowInsets(kDefaultElevation);
+ }
+ 
++namespace {
++
++// helium-fork: the panel metrics for a location bar that may be null or may not
++// be the Arc band's.
++helium::ArcOmniboxPanelMetrics ArcPanelMetricsFor(
++    const LocationBar* location_bar) {
++  return location_bar ? location_bar->GetArcOmniboxPanelMetrics()
++                      : helium::ArcOmniboxPanelMetrics();
++}
++
++}  // namespace
++
++// static
++int RoundedOmniboxResultsFrame::GetNonResultSectionHeight(
++    const LocationBar* location_bar,
++    bool include_cutout) {
++  return include_cutout
++             ? GetLayoutConstant(LayoutConstant::kLocationBarHeight) +
++                   GetLocationBarAlignmentInsets(location_bar).height()
++             : 0;
++}
++
++// static
++gfx::Insets RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets(
++    const LocationBar* location_bar) {
++  const helium::ArcOmniboxPanelMetrics metrics =
++      ArcPanelMetricsFor(location_bar);
++  return metrics.enabled ? metrics.alignment_insets()
++                         : GetLocationBarAlignmentInsets();
++}
++
++// static
++gfx::Insets RoundedOmniboxResultsFrame::GetShadowInsets(
++    const LocationBar* location_bar) {
++  const helium::ArcOmniboxPanelMetrics metrics =
++      ArcPanelMetricsFor(location_bar);
++  if (!metrics.enabled) {
++    return GetShadowInsets();
++  }
++  // The room the panel's own shadow needs, from the same helper the focus-state
++  // panel reserves it with. No border stroke to add: the Arc panel has none.
++  return helium::ArcOmniboxPanelShadowInsets(metrics);
++}
++
++helium::ArcOmniboxPanelMetrics RoundedOmniboxResultsFrame::GetArcPanelMetrics()
++    const {
++  return ArcPanelMetricsFor(location_bar_);
++}
++
+ std::unique_ptr<views::View> RoundedOmniboxResultsFrame::ExtractContents() {
+   auto contents = std::exchange(contents_, nullptr);
+   return contents_host_->RemoveChildViewT<views::View>(contents);
+@@ -339,6 +407,15 @@ void RoundedOmniboxResultsFrame::SetCuto
+ }
+ 
+ void RoundedOmniboxResultsFrame::SetElevation(int elevation) {
++  // helium-fork: on the Arc band the border only has to reserve the room the
++  // shadow needs -- OnPaint() draws it, because Dia's shadow profile is not one
++  // of Material Design's elevations and BubbleBorder can only pick from those.
++  // An empty border of the same insets keeps GetContentsBounds() honest.
++  const helium::ArcOmniboxPanelMetrics arc_metrics = GetArcPanelMetrics();
++  if (arc_metrics.enabled) {
++    SetBorder(views::CreateEmptyBorder(GetShadowInsets(location_bar_)));
++    return;
++  }
+   const int corner_radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
+       views::ShapeContextTokens::kOmniboxExpandedRadius);
+   auto border = std::make_unique<views::BubbleBorder>(
+@@ -362,8 +439,8 @@ void RoundedOmniboxResultsFrame::Layout(
+ 
+   if (top_background_->GetVisible()) {
+     gfx::Rect top_bounds(contents_host_->GetContentsBounds());
+-    top_bounds.set_height(GetNonResultSectionHeight(true));
+-    top_bounds.Inset(GetLocationBarAlignmentInsets());
++    top_bounds.set_height(GetNonResultSectionHeight(location_bar_, true));
++    top_bounds.Inset(GetLocationBarAlignmentInsets(location_bar_));
+     top_background_->SetBoundsRect(top_bounds);
+   }
+ 
+@@ -428,7 +505,26 @@ void RoundedOmniboxResultsFrame::OnMouse
+ // Insets used to position |contents_| within |contents_host_|.
+ gfx::Insets RoundedOmniboxResultsFrame::GetContentInsets() {
+   return gfx::Insets::TLBR(
+-      GetNonResultSectionHeight(top_background_->GetVisible()), 0, 0, 0);
++      GetNonResultSectionHeight(location_bar_, top_background_->GetVisible()),
++      0, 0, 0);
++}
++
++void RoundedOmniboxResultsFrame::OnPaint(gfx::Canvas* canvas) {
++  views::View::OnPaint(canvas);
++
++  // helium-fork: the Arc panel's fill and Dia's shadow. This lands in the
++  // widget's own layer, underneath `contents_host_`'s -- which paints the same
++  // rounded rect in the same color on top of it, so the only thing that
++  // survives here is the shadow outside the panel.
++  const helium::ArcOmniboxPanelMetrics metrics = GetArcPanelMetrics();
++  if (!metrics.enabled) {
++    return;
++  }
++  const auto* const color_provider = GetColorProvider();
++  helium::PaintArcOmniboxPanel(
++      canvas, metrics, GetContentsBounds(),
++      color_provider->GetColor(kColorOmniboxResultsBackground),
++      color_utils::IsDark(color_provider->GetColor(kColorToolbar)));
+ }
+ 
+ BEGIN_METADATA(RoundedOmniboxResultsFrame)
+Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h
++++ src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h
+@@ -8,6 +8,8 @@
+ #include <memory>
+ 
+ #include "base/memory/raw_ptr.h"
++// helium-fork: the Arc panel's geometry and shadow travel in this struct.
++#include "chrome/browser/ui/helium/arc_omnibox_panel.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/gfx/geometry/insets.h"
+ #include "ui/views/view.h"
+@@ -42,6 +44,19 @@ class RoundedOmniboxResultsFrame : publi
+   // Returns the blur region taken up by the Omnibox popup shadows.
+   static gfx::Insets GetShadowInsets();
+ 
++  // helium-fork: the same three, for a caller that knows which field the popup
++  // belongs to. Under the Arc shell's docked band they answer from
++  // helium::ArcOmniboxPanelMetrics instead -- the panel is concentric with the
++  // field and carries the content card's shadow, neither of which upstream's
++  // constants know about. A null or non-band location bar falls through to the
++  // versions above, which is what every other platform and window type still
++  // gets (the WebUI and full-popup frames call those directly).
++  static int GetNonResultSectionHeight(const LocationBar* location_bar,
++                                       bool include_cutout = true);
++  static gfx::Insets GetLocationBarAlignmentInsets(
++      const LocationBar* location_bar);
++  static gfx::Insets GetShadowInsets(const LocationBar* location_bar);
++
+   // Removes the `contents_` view and returns ownership to the caller.
+   std::unique_ptr<views::View> ExtractContents();
+ 
+@@ -67,6 +82,10 @@ class RoundedOmniboxResultsFrame : publi
+   // views::View:
+   void Layout(PassKey) override;
+   void AddedToWidget() override;
++  // helium-fork: casts the Arc panel's shadow. Painted here rather than by the
++  // BubbleBorder because the shadow is Dia's rather than Material Design's;
++  // see helium::PaintArcOmniboxPanel.
++  void OnPaint(gfx::Canvas* canvas) override;
+ #if !defined(USE_AURA)
+   void OnMouseMoved(const ui::MouseEvent& event) override;
+   void OnMouseEvent(ui::MouseEvent* event) override;
+@@ -77,9 +96,14 @@ class RoundedOmniboxResultsFrame : publi
+ 
+   gfx::Insets GetContentInsets();
+ 
++  // helium-fork: this popup's Arc panel metrics, disabled off the band.
++  helium::ArcOmniboxPanelMetrics GetArcPanelMetrics() const;
++
+   raw_ptr<views::View> top_background_ = nullptr;
+   raw_ptr<views::View> contents_host_ = nullptr;
+   raw_ptr<views::View> contents_;
++  // helium-fork: the field this popup hangs off, for the metrics above.
++  raw_ptr<const LocationBar> location_bar_ = nullptr;
+ 
+   // Only used on platforms that support Aura (non-Mac).
+   [[maybe_unused]] bool forward_mouse_events_;
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -2158,6 +2158,17 @@ bool ToolbarView::IsArcBandHosted() cons
+ }
+ 
+ // static
++bool ToolbarView::IsArcBandHostedFor(const views::View* view) {
++  for (const views::View* ancestor = view; ancestor;
++       ancestor = ancestor->parent()) {
++    if (const auto* const toolbar = views::AsViewClass<ToolbarView>(ancestor)) {
++      return toolbar->IsArcBandHosted();
++    }
++  }
++  return false;
++}
++
++// static
+ std::optional<SkColor> ToolbarView::GetArcBandTintFor(const views::View* view) {
+   for (const views::View* ancestor = view; ancestor;
+        ancestor = ancestor->parent()) {
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -217,6 +217,10 @@ class ToolbarView : public views::Access
+   // helium-fork: true while this toolbar *is* the Arc shell's band, i.e. the
+   // top strip of the contents card.
+   bool IsArcBandHosted() const;
++  // helium-fork: the same answer for a view somewhere inside a toolbar, for
++  // callers that hold a child rather than the toolbar. Same ancestor walk as
++  // GetArcBandTintFor(); false for anything reparented out of the toolbar.
++  static bool IsArcBandHostedFor(const views::View* view);
+ 
+   ToolbarButton* vertical_tabs_collapse_button() const {
+     return vertical_tabs_collapse_button_;

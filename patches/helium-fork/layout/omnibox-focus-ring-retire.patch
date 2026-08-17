@@ -1,0 +1,21 @@
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -282,6 +282,16 @@ LocationBarView::LocationBarView(Browser
+             return false;
+           }
+ 
++          // helium-fork: on the Arc band the focused field is a floating
++          // panel, and Dia has no ring around it (measured 2026-08-16). The
++          // panel itself -- opaque fill where there was none, lifted off the
++          // band by its shadow -- is the focus indication. High contrast keeps
++          // the ring for free: ShouldMinimizeArcChrome() is false there, so
++          // this is the plain toolbar field with its stock treatment.
++          if (v->GetArcOmniboxPanelMetrics().enabled) {
++            return false;
++          }
++
+           // Show focus ring when the Omnibox is visibly focused and the popup
+           // is closed.
+           return v->GetOmniboxController()->edit_model()->is_caret_visible() &&
