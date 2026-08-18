@@ -1911,3 +1911,44 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  
    // DraggedTabsContainer:
    views::ScrollView* GetScrollViewForContainer() const override;
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -1062,7 +1062,17 @@ void TabView::UpdateTabData(const tabs::
+     UpdateAccessibleName();
+   }
+ 
+-  icon_->SetData(tab_data_);
++  // helium-fork: sidebar rows never spin. The loading bar on the contents'
++  // top edge is the shell's one loading indicator (user, 2026-08-18); the
++  // entry rows already dropped their throbber for the same reason. The pair
++  // matters: kNone also stops the favicon size pulse, the circular clip and
++  // the layer promotion, none of which consult should_hide_throbber. Only the
++  // icon's copy is doctored -- the member keeps the real state for
++  // accessibility, the hover card and the loading title.
++  tabs::TabData icon_data = tab_data_;
++  icon_data.network_state = tabs::TabNetworkState::kNone;
++  icon_data.should_hide_throbber = true;
++  icon_->SetData(std::move(icon_data));
+   icon_->SetActiveState(tab->IsActivated());
+   icon_->SetAttention(TabIcon::AttentionType::kBlockedWebContents,
+                       !tab->IsActivated() && tab->IsBlocked());
+@@ -1076,9 +1086,14 @@ void TabView::UpdateTabData(const tabs::
+ void TabView::UpdateTitle(std::u16string title,
+                           bool should_render_loading_title) {
+   if (should_render_loading_title) {
+-    title = icon_->GetShowingLoadingAnimation()
+-                ? l10n_util::GetStringUTF16(IDS_TAB_LOADING_TITLE)
+-                : CoreTabHelper::GetDefaultTitle();
++    // helium-fork: the raw state, not the icon's predicate -- the icon's
++    // throbber is suppressed for sidebar rows (UpdateTabData above), which
++    // must not also swallow the "Loading…" placeholder title.
++    const bool loading =
++        tab_data_.network_state == tabs::TabNetworkState::kWaiting ||
++        tab_data_.network_state == tabs::TabNetworkState::kLoading;
++    title = loading ? l10n_util::GetStringUTF16(IDS_TAB_LOADING_TITLE)
++                    : CoreTabHelper::GetDefaultTitle();
+   } else {
+     title = WindowMetadataController::FormatTitleForDisplay(title);
+   }
