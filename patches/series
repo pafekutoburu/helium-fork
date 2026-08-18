@@ -363,3 +363,4 @@ helium-fork/layout/omnibox-panel-geometry.patch
 helium-fork/layout/omnibox-focus-panel.patch
 helium-fork/layout/omnibox-focus-ring-retire.patch
 helium-fork/layout/omnibox-panel-gestures.patch
+helium-fork/layout/contents-loading-bar.patch

@@ -1,0 +1,767 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -378,6 +378,7 @@ static_library("ui") {
+     "helium/arc_band_tint_store.h",
+     "helium/arc_caption_opacity.h",
+     "helium/arc_card_layout.h",
++    "helium/arc_loading_bar.h",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_omnibox_panel.h",
+     "helium/helium_layout_state_controller.cc",
+@@ -4023,6 +4024,8 @@ static_library("ui") {
+       # helium-fork: the Arc card's outline.
+       "views/frame/arc_card_outline_view.cc",
+       "views/frame/arc_card_outline_view.h",
++      "views/frame/arc_loading_bar_view.cc",
++      "views/frame/arc_loading_bar_view.h",
+       "views/frame/arc_omnibox_panel_view.cc",
+       "views/frame/arc_omnibox_panel_view.h",
+       "views/frame/base_tab_strip_region_view.cc",
+@@ -6024,6 +6027,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_caption_opacity_unittest.cc",
+     "helium/arc_card_layout.h",
+     "helium/arc_card_layout_unittest.cc",
++    "helium/arc_loading_bar.h",
++    "helium/arc_loading_bar_unittest.cc",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_minimal_field_state_unittest.cc",
+     "helium/arc_omnibox_panel.h",
+Index: src/chrome/browser/ui/helium/arc_loading_bar.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_loading_bar.h
+@@ -0,0 +1,224 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_LOADING_BAR_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_LOADING_BAR_H_
++
++#include <algorithm>
++#include <cmath>
++
++#include "base/notreached.h"
++#include "base/time/time.h"
++#include "ui/gfx/geometry/insets.h"
++#include "ui/gfx/geometry/rect.h"
++
++// helium-fork: the loading bar's state machine and geometry, kept free of
++// //ui/views and //content so they can be asserted in helium_workspace_
++// unittests (see arc_card_layout.h on why anything reaching TestingProfile
++// cannot be built in this tree).
++//
++// The bar is the shell's own load indicator, not a copy of anything the
++// reference browsers draw: stock Helium's only system-level signal is the tab
++// throbber, and the thin line users see at the top of some pages is drawn by
++// the page itself. The ask (2026-08-18) is to make that line system-level:
++// every navigation shows it, sites that never drew one included.
++//
++// Progress display is a ratchet: WebContents load progress can go backwards
++// (a new subframe arriving shrinks the done fraction), but a bar that retreats
++// reads as the page unloading. The displayed fraction only ever grows, easing
++// toward the largest progress reported so far.
++namespace helium {
++
++// The bar's height. The reference line in the user's screenshot is ~2pt.
++inline constexpr int kLoadingBarThickness = 2;
++
++// Where the bar starts on a fresh navigation, so a click gives instant
++// feedback even before the first LoadProgressChanged (which reports ~0.1 at
++// the earliest).
++inline constexpr double kLoadingBarInitialFraction = 0.05;
++
++// Easing time constant while following real load progress: per tick the
++// displayed fraction closes 1 - exp(-dt/tau) of its distance to the target.
++inline constexpr base::TimeDelta kLoadingBarRampTau = base::Milliseconds(150);
++
++// A finished load fills the remainder in one quick sweep, then fades.
++inline constexpr base::TimeDelta kLoadingBarFinishDuration =
++    base::Milliseconds(150);
++inline constexpr base::TimeDelta kLoadingBarFadeDuration =
++    base::Milliseconds(200);
++
++// A same-document navigation has no load progress to report, but "every click
++// shows the bar" is the point of the feature -- SPA route changes are exactly
++// where the user first saw a page draw its own line. So it gets a fixed sweep
++// to full, then the same fade.
++inline constexpr base::TimeDelta kLoadingBarFlashSweepDuration =
++    base::Milliseconds(250);
++
++// The bar spans the contents' top edge. While the band owns the card's top the
++// contents' corners are square and the bar can run edge to edge; without the
++// band (kHidden, and any future band-less state) the card's rounded top
++// corners are the contents' own, and a full-width bar would poke past their
++// arcs -- so it retreats by the radius on each side. Never round the bar's own
++// layer instead: a non-uniform rounded-corner quad anywhere in the frame
++// forfeits the CoreAnimation compositing path for the whole frame
++// (ca_layer_overlay.cc, kCALayerFailedQuadRoundedCornerNotUniform).
++inline gfx::Rect ComputeLoadingBarBounds(const gfx::Rect& contents_bounds,
++                                         int contents_top_corner_radius) {
++  const int inset = std::max(0, contents_top_corner_radius);
++  gfx::Rect bar = contents_bounds;
++  bar.Inset(gfx::Insets::TLBR(0, inset, 0, inset));
++  bar.set_height(std::min(kLoadingBarThickness, contents_bounds.height()));
++  return bar;
++}
++
++class ArcLoadingBarModel {
++ public:
++  struct PaintState {
++    bool visible = false;
++    double fraction = 0.0;
++    double opacity = 1.0;
++  };
++
++  // A cross-document navigation started in the watched tab. Restarts the bar
++  // even mid-animation: the newest navigation owns it.
++  void NavigationStarted(base::TimeTicks now) {
++    state_ = State::kLoading;
++    displayed_ = 0.0;
++    target_ = kLoadingBarInitialFraction;
++    last_tick_ = now;
++  }
++
++  // A same-document navigation. A real load in flight keeps its real progress
++  // -- a flash would reset a bar that is telling the truth.
++  void SameDocumentNavigation(base::TimeTicks now) {
++    if (state_ == State::kLoading) {
++      return;
++    }
++    state_ = State::kFlashing;
++    phase_start_ = now;
++    displayed_ = 0.0;
++    last_tick_ = now;
++  }
++
++  void ProgressChanged(double progress, base::TimeTicks now) {
++    if (state_ != State::kLoading) {
++      return;
++    }
++    target_ = std::max(target_, std::clamp(progress, 0.0, 1.0));
++    last_tick_ = now;
++  }
++
++  void LoadingStopped(base::TimeTicks now) {
++    if (state_ != State::kLoading) {
++      return;
++    }
++    state_ = State::kFinishing;
++    phase_start_ = now;
++    finish_from_ = displayed_;
++  }
++
++  // The watched tab changed. No animation: the bar snaps to the new tab's
++  // truth, exactly like the band's tint does.
++  void TabSwitched(bool is_loading, double progress, base::TimeTicks now) {
++    if (!is_loading) {
++      Hide();
++      return;
++    }
++    state_ = State::kLoading;
++    displayed_ = target_ =
++        std::max(kLoadingBarInitialFraction, std::clamp(progress, 0.0, 1.0));
++    last_tick_ = now;
++  }
++
++  void Hide() { state_ = State::kIdle; }
++
++  // Whether Tick() would change anything -- the view runs its timer only while
++  // this is true, and re-arms it on the next input.
++  bool NeedsTicks() const {
++    switch (state_) {
++      case State::kIdle:
++        return false;
++      case State::kLoading:
++        return target_ - displayed_ > kDoneEpsilon;
++      case State::kFinishing:
++      case State::kFlashing:
++      case State::kFading:
++        return true;
++    }
++    NOTREACHED();
++  }
++
++  PaintState Tick(base::TimeTicks now) {
++    switch (state_) {
++      case State::kIdle:
++        break;
++      case State::kLoading: {
++        const base::TimeDelta dt = now - last_tick_;
++        const double closing =
++            1.0 - std::exp(-dt / kLoadingBarRampTau);
++        displayed_ += (target_ - displayed_) * closing;
++        last_tick_ = now;
++        break;
++      }
++      case State::kFinishing: {
++        const double t = Phase(now, kLoadingBarFinishDuration);
++        displayed_ = finish_from_ + (1.0 - finish_from_) * t;
++        if (t >= 1.0) {
++          StartFade(now);
++        }
++        break;
++      }
++      case State::kFlashing: {
++        displayed_ = Phase(now, kLoadingBarFlashSweepDuration);
++        if (displayed_ >= 1.0) {
++          StartFade(now);
++        }
++        break;
++      }
++      case State::kFading:
++        break;
++    }
++
++    PaintState paint;
++    paint.visible = state_ != State::kIdle;
++    paint.fraction = std::clamp(displayed_, 0.0, 1.0);
++    if (state_ == State::kFading) {
++      const double t = Phase(now, kLoadingBarFadeDuration);
++      paint.fraction = 1.0;
++      paint.opacity = 1.0 - t;
++      if (t >= 1.0) {
++        state_ = State::kIdle;
++        paint.visible = false;
++      }
++    }
++    return paint;
++  }
++
++ private:
++  enum class State { kIdle, kLoading, kFinishing, kFlashing, kFading };
++
++  static constexpr double kDoneEpsilon = 1e-3;
++
++  // 0..1 of the current phase's duration.
++  double Phase(base::TimeTicks now, base::TimeDelta duration) const {
++    return std::clamp((now - phase_start_) / duration, 0.0, 1.0);
++  }
++
++  void StartFade(base::TimeTicks now) {
++    state_ = State::kFading;
++    phase_start_ = now;
++    displayed_ = 1.0;
++  }
++
++  State state_ = State::kIdle;
++  double displayed_ = 0.0;
++  double target_ = 0.0;
++  double finish_from_ = 0.0;
++  base::TimeTicks phase_start_;
++  base::TimeTicks last_tick_;
++};
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_LOADING_BAR_H_
+Index: src/chrome/browser/ui/helium/arc_loading_bar_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_loading_bar_unittest.cc
+@@ -0,0 +1,177 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_loading_bar.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++#include "ui/gfx/geometry/rect.h"
++
++namespace helium {
++namespace {
++
++#define EXPECT_RECT_EQ(a, b) EXPECT_EQ((a).ToString(), (b).ToString())
++
++// Absolute times mean nothing to the model; only the deltas do.
++constexpr base::TimeTicks kT0 = base::TimeTicks() + base::Seconds(100);
++
++using PaintState = ArcLoadingBarModel::PaintState;
++
++TEST(ArcLoadingBarModelTest, IdleUntilNavigation) {
++  ArcLoadingBarModel model;
++  EXPECT_FALSE(model.NeedsTicks());
++  EXPECT_FALSE(model.Tick(kT0).visible);
++}
++
++TEST(ArcLoadingBarModelTest, NavigationShowsBarImmediately) {
++  ArcLoadingBarModel model;
++  model.NavigationStarted(kT0);
++  const PaintState paint = model.Tick(kT0);
++  EXPECT_TRUE(paint.visible);
++  EXPECT_EQ(paint.opacity, 1.0);
++  // The head start is the target, not the first frame's fill.
++  EXPECT_LT(paint.fraction, kLoadingBarInitialFraction + 1e-9);
++  EXPECT_TRUE(model.NeedsTicks());
++}
++
++TEST(ArcLoadingBarModelTest, DisplayedFractionConvergesToProgress) {
++  ArcLoadingBarModel model;
++  model.NavigationStarted(kT0);
++  model.ProgressChanged(0.6, kT0);
++  // 1.5s is ten ramp taus: the ease has effectively arrived.
++  const PaintState paint = model.Tick(kT0 + base::Seconds(1.5));
++  EXPECT_NEAR(paint.fraction, 0.6, 1e-3);
++  EXPECT_FALSE(model.NeedsTicks());
++}
++
++TEST(ArcLoadingBarModelTest, ProgressIsARatchet) {
++  ArcLoadingBarModel model;
++  model.NavigationStarted(kT0);
++  model.ProgressChanged(0.6, kT0);
++  model.Tick(kT0 + base::Seconds(1.5));
++  // A regressing report must not pull the bar backwards.
++  model.ProgressChanged(0.3, kT0 + base::Seconds(1.5));
++  const PaintState paint = model.Tick(kT0 + base::Seconds(3));
++  EXPECT_NEAR(paint.fraction, 0.6, 1e-3);
++}
++
++TEST(ArcLoadingBarModelTest, StopFillsThenFadesOut) {
++  ArcLoadingBarModel model;
++  model.NavigationStarted(kT0);
++  model.ProgressChanged(0.5, kT0);
++  model.Tick(kT0 + base::Seconds(1.5));
++  model.LoadingStopped(kT0 + base::Seconds(2));
++
++  // Mid-finish: past the old progress, not yet full.
++  const PaintState mid =
++      model.Tick(kT0 + base::Seconds(2) + kLoadingBarFinishDuration / 2);
++  EXPECT_TRUE(mid.visible);
++  EXPECT_GT(mid.fraction, 0.5);
++  EXPECT_LT(mid.fraction, 1.0);
++
++  // Finished: full, starting to fade.
++  const PaintState full =
++      model.Tick(kT0 + base::Seconds(2) + kLoadingBarFinishDuration);
++  EXPECT_TRUE(full.visible);
++  EXPECT_EQ(full.fraction, 1.0);
++
++  // Mid-fade: still full, translucent.
++  const PaintState fading =
++      model.Tick(kT0 + base::Seconds(2) + kLoadingBarFinishDuration +
++                 kLoadingBarFadeDuration / 2);
++  EXPECT_TRUE(fading.visible);
++  EXPECT_EQ(fading.fraction, 1.0);
++  EXPECT_LT(fading.opacity, 1.0);
++
++  // Fade over: gone.
++  const PaintState done =
++      model.Tick(kT0 + base::Seconds(2) + kLoadingBarFinishDuration +
++                 kLoadingBarFadeDuration);
++  EXPECT_FALSE(done.visible);
++  EXPECT_FALSE(model.NeedsTicks());
++}
++
++TEST(ArcLoadingBarModelTest, SameDocumentNavigationFlashes) {
++  ArcLoadingBarModel model;
++  model.SameDocumentNavigation(kT0);
++
++  const PaintState mid = model.Tick(kT0 + kLoadingBarFlashSweepDuration / 2);
++  EXPECT_TRUE(mid.visible);
++  EXPECT_NEAR(mid.fraction, 0.5, 1e-3);
++
++  model.Tick(kT0 + kLoadingBarFlashSweepDuration);
++  const PaintState done = model.Tick(kT0 + kLoadingBarFlashSweepDuration +
++                                     kLoadingBarFadeDuration);
++  EXPECT_FALSE(done.visible);
++}
++
++TEST(ArcLoadingBarModelTest, SameDocumentDoesNotInterruptARealLoad) {
++  ArcLoadingBarModel model;
++  model.NavigationStarted(kT0);
++  model.ProgressChanged(0.4, kT0);
++  model.Tick(kT0 + base::Seconds(1.5));
++  model.SameDocumentNavigation(kT0 + base::Seconds(1.5));
++  // Still the real load's progress, not a flash restarted from zero.
++  const PaintState paint = model.Tick(kT0 + base::Seconds(1.6));
++  EXPECT_NEAR(paint.fraction, 0.4, 1e-2);
++  // And the real load still finishes normally.
++  model.LoadingStopped(kT0 + base::Seconds(2));
++  EXPECT_TRUE(model.NeedsTicks());
++}
++
++TEST(ArcLoadingBarModelTest, NewNavigationRestartsMidAnimation) {
++  ArcLoadingBarModel model;
++  model.NavigationStarted(kT0);
++  model.LoadingStopped(kT0 + base::Seconds(1));
++  model.Tick(kT0 + base::Seconds(1) + kLoadingBarFinishDuration);
++  // Mid-fade, a new navigation begins: the bar restarts from the left.
++  model.NavigationStarted(kT0 + base::Seconds(1.2));
++  const PaintState paint = model.Tick(kT0 + base::Seconds(1.2));
++  EXPECT_TRUE(paint.visible);
++  EXPECT_EQ(paint.opacity, 1.0);
++  EXPECT_LT(paint.fraction, kLoadingBarInitialFraction + 1e-9);
++}
++
++TEST(ArcLoadingBarModelTest, TabSwitchSnapsWithoutAnimation) {
++  ArcLoadingBarModel model;
++  model.TabSwitched(/*is_loading=*/true, /*progress=*/0.42, kT0);
++  const PaintState loading = model.Tick(kT0);
++  EXPECT_TRUE(loading.visible);
++  EXPECT_NEAR(loading.fraction, 0.42, 1e-9);
++
++  model.TabSwitched(/*is_loading=*/false, /*progress=*/0.0, kT0);
++  EXPECT_FALSE(model.Tick(kT0).visible);
++  EXPECT_FALSE(model.NeedsTicks());
++}
++
++TEST(ArcLoadingBarModelTest, HideIsImmediate) {
++  ArcLoadingBarModel model;
++  model.NavigationStarted(kT0);
++  model.Hide();
++  EXPECT_FALSE(model.Tick(kT0).visible);
++  EXPECT_FALSE(model.NeedsTicks());
++}
++
++TEST(ArcLoadingBarBoundsTest, SpansContentsTopEdgeUnderTheBand) {
++  // Docked band above: square contents corners, edge-to-edge bar.
++  const gfx::Rect contents(203, 37, 1074, 760);
++  EXPECT_RECT_EQ(ComputeLoadingBarBounds(contents, 0),
++                 gfx::Rect(203, 37, 1074, kLoadingBarThickness));
++}
++
++TEST(ArcLoadingBarBoundsTest, RetreatsFromRoundedTopCorners) {
++  // kHidden: the card's rounded top is the contents' own; the bar retreats by
++  // the radius on each side rather than rounding its own layer (a non-uniform
++  // rounded quad would forfeit the CoreAnimation path for the whole frame).
++  const gfx::Rect contents(3, 3, 1274, 794);
++  EXPECT_RECT_EQ(ComputeLoadingBarBounds(contents, 14),
++                 gfx::Rect(17, 3, 1246, kLoadingBarThickness));
++}
++
++TEST(ArcLoadingBarBoundsTest, NeverTallerThanTheContents) {
++  const gfx::Rect contents(0, 0, 100, 1);
++  EXPECT_EQ(ComputeLoadingBarBounds(contents, 0).height(), 1);
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/views/frame/arc_loading_bar_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/arc_loading_bar_view.cc
+@@ -0,0 +1,140 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/arc_loading_bar_view.h"
++
++#include "base/numerics/safe_conversions.h"
++#include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/canvas.h"
++
++namespace {
++
++// The browser's own blank pages must not flash the bar: every new tab starts
++// with a navigation to the new tab page, and a load indicator on "nothing is
++// loading" reads as noise. Same literals as the close-window predicate
++// (workspace_blank_tab.h) so an upstream rename fails one build, not two ways.
++bool IsBrowserBlankUrl(const GURL& url) {
++  if (url.IsAboutBlank()) {
++    return true;
++  }
++  return url.SchemeIs(helium_workspace::kNewTabScheme) &&
++         (url.host() == helium_workspace::kNewTabHost ||
++          url.host() == helium_workspace::kNewTabPageHost);
++}
++
++}  // namespace
++
++ArcLoadingBarView::ArcLoadingBarView() {
++  // Same footing as ArcOmniboxPanelView: invisible to input, and its own layer
++  // -- the contents WebView is layer-backed, so a view painting into the
++  // shared parent layer would composite *below* the page whatever the child
++  // order says.
++  SetCanProcessEventsWithinSubtree(false);
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  SetVisible(false);
++}
++
++ArcLoadingBarView::~ArcLoadingBarView() = default;
++
++void ArcLoadingBarView::WatchTab(content::WebContents* contents) {
++  Observe(contents);
++  if (contents) {
++    // The blank-URL filter applies here too: the window's very first
++    // navigation starts before this observer attaches, so a fresh tab's NTP
++    // load arrives through this snapshot, not through DidStartNavigation.
++    const bool loading = contents->IsLoading() &&
++                         !IsBrowserBlankUrl(contents->GetVisibleURL());
++    model_.TabSwitched(loading, contents->GetLoadProgress(),
++                       base::TimeTicks::Now());
++  } else {
++    model_.Hide();
++  }
++  SyncFromModel();
++}
++
++void ArcLoadingBarView::UpdatePlacement(const gfx::Rect& contents_bounds,
++                                        int contents_top_corner_radius) {
++  const gfx::Rect bar = helium::ComputeLoadingBarBounds(
++      contents_bounds, contents_top_corner_radius);
++  if (bar != bounds()) {
++    SetBoundsRect(bar);
++  }
++}
++
++void ArcLoadingBarView::OnPaint(gfx::Canvas* canvas) {
++  const int fill = base::ClampRound(painted_fraction_ * width());
++  if (fill <= 0) {
++    return;
++  }
++  canvas->FillRect(GetMirroredRect(gfx::Rect(0, 0, fill, height())),
++                   GetColorProvider()->GetColor(ui::kColorThrobber));
++}
++
++void ArcLoadingBarView::DidStartNavigation(content::NavigationHandle* handle) {
++  if (!handle->IsInPrimaryMainFrame()) {
++    return;
++  }
++  const base::TimeTicks now = base::TimeTicks::Now();
++  if (IsBrowserBlankUrl(handle->GetURL())) {
++    // Navigating to the browser's own blank page: nothing worth indicating,
++    // and any bar still animating for the previous page is stale.
++    model_.Hide();
++  } else if (handle->IsSameDocument()) {
++    model_.SameDocumentNavigation(now);
++  } else {
++    model_.NavigationStarted(now);
++  }
++  SyncFromModel();
++}
++
++void ArcLoadingBarView::LoadProgressChanged(double progress) {
++  model_.ProgressChanged(progress, base::TimeTicks::Now());
++  SyncFromModel();
++}
++
++void ArcLoadingBarView::DidStopLoading() {
++  model_.LoadingStopped(base::TimeTicks::Now());
++  SyncFromModel();
++}
++
++void ArcLoadingBarView::WebContentsDestroyed() {
++  Observe(nullptr);
++  model_.Hide();
++  SyncFromModel();
++}
++
++void ArcLoadingBarView::SyncFromModel() {
++  const helium::ArcLoadingBarModel::PaintState paint =
++      model_.Tick(base::TimeTicks::Now());
++
++  if (paint.visible != GetVisible()) {
++    SetVisible(paint.visible);
++  }
++  // The fade is layer opacity, not paint: the compositor animates it without
++  // re-rasterizing the strip.
++  layer()->SetOpacity(paint.visible ? paint.opacity : 1.0f);
++  if (paint.visible && paint.fraction != painted_fraction_) {
++    painted_fraction_ = paint.fraction;
++    SchedulePaint();
++  }
++
++  if (model_.NeedsTicks()) {
++    if (!tick_timer_.IsRunning()) {
++      tick_timer_.Start(FROM_HERE, base::Hertz(60), this,
++                        &ArcLoadingBarView::SyncFromModel);
++    }
++  } else {
++    tick_timer_.Stop();
++  }
++}
++
++BEGIN_METADATA(ArcLoadingBarView)
++END_METADATA
+Index: src/chrome/browser/ui/views/frame/arc_loading_bar_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/arc_loading_bar_view.h
+@@ -0,0 +1,74 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_ARC_LOADING_BAR_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_ARC_LOADING_BAR_VIEW_H_
++
++#include "base/timer/timer.h"
++#include "chrome/browser/ui/helium/arc_loading_bar.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/view.h"
++
++// helium-fork: the shell's own page-loading indicator -- a thin line pinned to
++// the contents' top edge, i.e. right under the band while the band is docked
++// and along the card's top when it is not, so one anchor covers both layouts.
++//
++// It follows the active tab the way the band's tint does (rebound from
++// BrowserView::OnActiveTabChanged), shows real load progress for
++// cross-document navigations, and a fixed sweep for same-document ones; the
++// timing lives in helium::ArcLoadingBarModel where the unit tests can reach
++// it.
++//
++// A BrowserView child rather than anything inside the contents hierarchy:
++// ContentsLayoutManager's header forbids new members (split view will multiply
++// them per pane), and the band clips its own contents so nothing inside it can
++// draw below the band's bottom edge. Like ArcOmniboxPanelView it is placed
++// from the tail of BrowserView::Layout(), not by the layout impl -- the
++// contents container's settled bounds are the anchor, and mid-pass ancestors
++// still hold their old ones.
++class ArcLoadingBarView : public views::View,
++                          public content::WebContentsObserver {
++  METADATA_HEADER(ArcLoadingBarView, views::View)
++
++ public:
++  ArcLoadingBarView();
++  ArcLoadingBarView(const ArcLoadingBarView&) = delete;
++  ArcLoadingBarView& operator=(const ArcLoadingBarView&) = delete;
++  ~ArcLoadingBarView() override;
++
++  // Follows the window's active tab; the bar snaps to the new tab's current
++  // loading state. Null detaches (window teardown).
++  void WatchTab(content::WebContents* contents);
++
++  // Called from the tail of BrowserView::Layout() with the settled contents
++  // bounds in BrowserView coordinates and the contents' top corner radius
++  // (zero while the band owns the card's top).
++  void UpdatePlacement(const gfx::Rect& contents_bounds,
++                       int contents_top_corner_radius);
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override;
++
++  // content::WebContentsObserver:
++  void DidStartNavigation(content::NavigationHandle* handle) override;
++  void LoadProgressChanged(double progress) override;
++  void DidStopLoading() override;
++  void WebContentsDestroyed() override;
++
++ private:
++  // Applies the model's current output to visibility, layer opacity and
++  // paint, and keeps the tick timer running exactly while the model animates.
++  void SyncFromModel();
++
++  helium::ArcLoadingBarModel model_;
++
++  // ~60Hz, running only while the model reports NeedsTicks(). Every input
++  // event re-arms it through SyncFromModel().
++  base::RepeatingTimer tick_timer_;
++
++  double painted_fraction_ = -1.0;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_ARC_LOADING_BAR_VIEW_H_
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -170,6 +170,7 @@
+ #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
+ #include "chrome/browser/ui/views/frame/scrim_view.h"
+ #include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
++#include "chrome/browser/ui/views/frame/arc_loading_bar_view.h"
+ #include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
+@@ -1173,6 +1174,12 @@ BrowserView::BrowserView(Browser* browse
+   // has run, long after BrowserViewTabbedLayoutImpl.
+   arc_omnibox_panel_ = AddChildView(std::make_unique<ArcOmniboxPanelView>());
+ 
++  // helium-fork: the loading bar, a later child than the contents for the same
++  // reason as the panel above -- its layer must composite over the page's.
++  // Bounds come from the tail of Layout(), the loading state from the active
++  // tab (OnActiveTabChanged).
++  arc_loading_bar_ = AddChildView(std::make_unique<ArcLoadingBarView>());
++
+   // InfoBarContainer needs to be added as a child here for drop-shadow, but
+   // needs to come after toolbar in focus order (see EnsureFocusOrder()).
+   infobar_container_ =
+@@ -1359,6 +1366,7 @@ BrowserView::~BrowserView() {
+   arc_card_outline_ = nullptr;
+   arc_card_shadow_ = nullptr;
+   arc_omnibox_panel_ = nullptr;
++  arc_loading_bar_ = nullptr;
+   top_container_ = nullptr;
+   web_app_frame_toolbar_ = nullptr;
+   web_app_window_title_ = nullptr;
+@@ -3297,6 +3305,10 @@ void BrowserView::OnActiveTabChanged(con
+   if (top_container_) {
+     top_container_->WatchPageColors(new_contents);
+   }
++  // helium-fork: the loading bar follows the active tab the same way.
++  if (arc_loading_bar_) {
++    arc_loading_bar_->WatchTab(new_contents);
++  }
+   views::WebView* active_contents_view = GetActiveContentsWebView();
+   bool tab_change_in_split_view =
+       IsTabChangeInSplitView(old_contents, new_contents);
+@@ -6180,6 +6192,33 @@ void BrowserView::Layout(PassKey) {
+     arc_omnibox_panel_->UpdateFromField();
+   }
+ 
++  // helium-fork: the loading bar rides the contents' top edge, which is only
++  // settled -- band height, card inset -- once the layout has run. Its corner
++  // retreat applies exactly when the card's rounded top is the contents' own,
++  // i.e. rounded card and no band above.
++  if (arc_loading_bar_ && contents_container_) {
++    const bool band_on_top = top_container_ && top_container_->GetVisible() &&
++                             top_container_->height() > 0;
++    const bool rounded_card = multi_contents_view_ &&
++                              multi_contents_view_->ShouldUseRoundedFrame() &&
++                              ShouldUseContentCardInsets();
++    gfx::Rect contents_bounds = contents_container_->bounds();
++    if (ShouldUseContentCardInsets()) {
++      // The card's margins live inside MultiContentsView, not on the
++      // container: the band above is the card's width, the container is the
++      // client area's. The bar belongs to the card, so it takes the same
++      // insets the panes do -- the sides always, the top only when no band
++      // is consuming it (the band's bottom edge is already the card's).
++      contents_bounds.Inset(gfx::Insets::TLBR(
++          band_on_top ? 0 : MultiContentsView::kContentCardInset,
++          MultiContentsView::kContentCardInset, 0,
++          MultiContentsView::kContentCardInset));
++    }
++    arc_loading_bar_->UpdatePlacement(
++        contents_bounds,
++        rounded_card && !band_on_top ? GetPaddedFrameRadius() : 0);
++  }
++
+   // TODO(jamescook): Why was this in the middle of layout code?
+   toolbar_->location_bar()->UpdateFocusBehavior(IsToolbarVisible());
+   GetFrameView()->UpdateMinimumSize();
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -94,6 +94,7 @@ class MultiContentsView;
+ class ProjectsPanelView;
+ class ScrimView;
+ class ArcCardOutlineView;
++class ArcLoadingBarView;
+ class ArcOmniboxPanelView;
+ class ShadowFrameView;
+ class SidePanel;
+@@ -1300,6 +1301,11 @@ class BrowserView : public BrowserWindow
+   // here because the band clips its own contents. See ArcOmniboxPanelView.
+   raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
+ 
++  // helium-fork: the shell's page-loading indicator, a thin line on the
++  // contents' top edge. Placed from the tail of Layout(), fed from
++  // OnActiveTabChanged().
++  raw_ptr<ArcLoadingBarView> arc_loading_bar_ = nullptr;
++
+   // helium-fork: watches every mouse press in this window so that clicking
+   // anything that is not the address field leaves the field's edit state. Only
+   // the web contents does that on its own (it takes focus); the sidebar and the
