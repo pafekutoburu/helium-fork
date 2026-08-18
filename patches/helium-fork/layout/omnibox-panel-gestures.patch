@@ -1,0 +1,416 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -343,6 +343,7 @@
+ #include "ui/display/screen.h"
+ #include "ui/events/event.h"
+ #include "ui/events/event_handler.h"
++#include "ui/events/event_observer.h"
+ #include "ui/events/event_utils.h"
+ #include "ui/events/keycodes/keyboard_codes.h"
+ #include "ui/gfx/animation/animation.h"
+@@ -682,6 +683,43 @@ bool ConvertedHitTest(views::View* src,
+ 
+ }  // namespace
+ 
++// helium-fork: every mouse press in this window ends the address field's edit
++// state unless it landed on the field. Clicking the web contents already did
++// that on its own -- the contents take focus -- but nothing else in the window
++// is focusable, so a click on the sidebar or the tab strip used to leave the
++// panel standing.
++//
++// It has to be an EventMonitor rather than a pre-target handler on the root
++// view: the sidebar's blank, the tab strip's blank and the window's caption are
++// all HTCAPTION, and a press there makes -[BridgedContentView hitTest:] return
++// nil so AppKit runs a window drag and Views never sees the event at all
++// (measured 2026-08-17 -- a click on the sidebar's blank reached no Views code
++// whatsoever). EventMonitorMac hangs off +[NSEvent addLocalMonitorFor...],
++// which is upstream of that, and filters to this window so the suggestion
++// popup's own presses (a different NSWindow) never reach it.
++class ArcOmniboxDismissHandler : public ui::EventObserver {
++ public:
++  ArcOmniboxDismissHandler(BrowserView* browser_view,
++                           gfx::NativeWindow window)
++      : browser_view_(browser_view),
++        monitor_(views::EventMonitor::CreateWindowMonitor(
++            this,
++            window,
++            {ui::EventType::kMousePressed})) {}
++  ArcOmniboxDismissHandler(const ArcOmniboxDismissHandler&) = delete;
++  ArcOmniboxDismissHandler& operator=(const ArcOmniboxDismissHandler&) = delete;
++  ~ArcOmniboxDismissHandler() override = default;
++
++  // ui::EventObserver:
++  void OnEvent(const ui::Event& event) override {
++    browser_view_->MaybeEndArcFieldEditing();
++  }
++
++ private:
++  const raw_ptr<BrowserView> browser_view_;
++  std::unique_ptr<views::EventMonitor> monitor_;
++};
++
+ // Implements the exclusive access context and bubble context.
+ class BrowserView::ExclusiveAccessContextImpl
+     : public ExclusiveAccessContext,
+@@ -1311,6 +1349,8 @@ BrowserView::~BrowserView() {
+   if (arc_omnibox_panel_) {
+     arc_omnibox_panel_->SetLocationBar(nullptr);
+   }
++  // The monitor must go before the window it is attached to.
++  arc_omnibox_dismiss_handler_.reset();
+ 
+   // These are raw pointers to child views, so they need to be set to null
+   // before `RemoveAllChildViews()` is called to avoid dangling.
+@@ -2448,6 +2488,27 @@ void BrowserView::UpdateArcSidebarContro
+   }
+ }
+ 
++void BrowserView::MaybeEndArcFieldEditing() {
++  LocationBarView* const location_bar =
++      toolbar_ ? toolbar_->location_bar_view() : nullptr;
++  if (!location_bar || !location_bar->GetArcOmniboxPanelMetrics().enabled ||
++      !location_bar->IsArcFieldEditing()) {
++    return;
++  }
++  // A press inside the field is the field's own business -- moving the caret,
++  // extending a selection, hitting a page-action icon. The monitor sees the
++  // press before dispatch, so the pointer is exactly where it was pressed;
++  // reading the cursor rather than the event's coordinates is the same thing
++  // #337 does, and it dodges the question of which space a monitored event's
++  // location is in.
++  gfx::Point local(display::Screen::Get()->GetCursorScreenPoint());
++  views::View::ConvertPointFromScreen(location_bar, &local);
++  if (location_bar->HitTestPoint(local)) {
++    return;
++  }
++  location_bar->EndArcFieldEditing();
++}
++
+ void BrowserView::UpdateArcAddressBarPlacement() {
+   // helium-fork: HeliumAddressBarMode::kHidden -- Arc's default shape. There is
+   // no band above the page; the address bar moves into the sidebar, under the
+@@ -5396,6 +5457,17 @@ void BrowserView::OnWidgetActivationChan
+     UpdateZenModeReveal(/*reveal_top=*/false, /*reveal_side=*/false);
+   }
+ 
++  // helium-fork: and leave the field's edit state, for the same reason. Views
++  // keeps the focused view across deactivation on purpose, so without this the
++  // panel is still standing when the user comes back from another app.
++  if (!active) {
++    LocationBarView* const location_bar =
++        toolbar_ ? toolbar_->location_bar_view() : nullptr;
++    if (location_bar && location_bar->GetArcOmniboxPanelMetrics().enabled) {
++      location_bar->EndArcFieldEditing();
++    }
++  }
++
+   browser_->GetFeatures()
+       .extension_keybinding_registry()
+       ->OnHostActivationChanged(active);
+@@ -6251,6 +6323,15 @@ void BrowserView::AddedToWidget() {
+     arc_omnibox_panel_->SetLocationBar(toolbar_->location_bar_view());
+   }
+ 
++  // helium-fork: and the native window exists now, so the "click anywhere else
++  // ends the edit state" monitor can attach to it.
++  if (views::Widget* const widget = GetWidget()) {
++    if (widget->GetNativeWindow()) {
++      arc_omnibox_dismiss_handler_ = std::make_unique<ArcOmniboxDismissHandler>(
++          this, widget->GetNativeWindow());
++    }
++  }
++
+   if (omnibox::IsWebUIOmniboxInBrowserViewEnabled()) {
+     // When the WebUI Omnibox is embedded directly in the `BrowserView` (instead
+     // of being a separate popup widget), the popup view needs a reference to
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -122,6 +122,9 @@ namespace ui {
+ class NativeTheme;
+ }  // namespace ui
+ 
++// helium-fork: ends the address field's edit state on a click anywhere else.
++class ArcOmniboxDismissHandler;
++
+ namespace version_info {
+ enum class Channel;
+ }
+@@ -910,6 +913,8 @@ class BrowserView : public BrowserWindow
+  private:
+   // Do not friend BrowserViewLayout. Use the BrowserViewLayoutDelegate
+   // interface to keep these two classes decoupled and testable.
++  // helium-fork: calls MaybeEndArcFieldEditing() from its NSEvent monitor.
++  friend class ArcOmniboxDismissHandler;
+   friend class BrowserViewLayoutDelegateImpl;
+   friend class BrowserViewLayoutDelegateImplOld;
+   friend class BrowserViewLayoutDelegateImplBrowsertest;
+@@ -1012,6 +1017,10 @@ class BrowserView : public BrowserWindow
+   // helium-fork: keeps the zen side-chrome reveal ratio in step with the
+   // collapse state while the hidden sidebar mode is in charge of it.
+   void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
++  // helium-fork: ends the address field's edit state unless the pointer is
++  // inside the field. Called for every mouse press in the window, and on
++  // deactivation.
++  void MaybeEndArcFieldEditing();
+   // helium-fork toggle choreography (see MaybeHandleSidebarCollapseRequest).
+   enum class SidebarTogglePhase { kIdle, kSliding, kFlipping };
+   void RunSidebarDockFlip();
+@@ -1291,6 +1300,12 @@ class BrowserView : public BrowserWindow
+   // here because the band clips its own contents. See ArcOmniboxPanelView.
+   raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
+ 
++  // helium-fork: watches every mouse press in this window so that clicking
++  // anything that is not the address field leaves the field's edit state. Only
++  // the web contents does that on its own (it takes focus); the sidebar and the
++  // tab strip are HTCAPTION, so their presses never reach Views at all.
++  std::unique_ptr<ArcOmniboxDismissHandler> arc_omnibox_dismiss_handler_;
++
+   // The view that manages the tab strip, toolbar, and sometimes the bookmark
+   // bar. Stacked top in the view hiearachy so it can be used to slide out
+   // the top views in immersive fullscreen.
+Index: src/chrome/browser/ui/views/frame/browser_widget.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_widget.cc
++++ src/chrome/browser/ui/views/frame/browser_widget.cc
+@@ -33,6 +33,7 @@
+ #include "chrome/browser/ui/views/frame/system_menu_model_builder.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/common/chrome_features.h"
+ #include "chrome/common/chrome_switches.h"
+@@ -396,8 +397,27 @@ void BrowserWidget::ShowContextMenuForVi
+   gfx::Point point_in_view_coords(p);
+   views::View::ConvertPointFromScreen(non_client_view(), &point_in_view_coords);
+   int hit_test = non_client_view()->NonClientHitTest(point_in_view_coords);
++  // helium-fork: the Arc band's blank is titlebar to the user -- right-clicking
++  // it opens this same layout menu -- but it can no longer say so through
++  // NonClientHitTest. It has to report HTCLIENT so that Views, not the window
++  // server, sees the press and can tell a click (open the edit panel) from a
++  // drag (move the window); see ToolbarView::IsRectInWindowCaption. Ask the
++  // field directly instead, which is the one place that still knows.
++  bool in_arc_band_blank = false;
++  if (browser_view_) {
++    if (LocationBarView* const location_bar =
++            browser_view_->GetLocationBarView()) {
++      if (location_bar->GetArcOmniboxPanelMetrics().enabled) {
++        gfx::Point point_in_field(p);
++        views::View::ConvertPointFromScreen(location_bar, &point_in_field);
++        in_arc_band_blank =
++            location_bar->HitTestPoint(point_in_field) &&
++            location_bar->IsPositionInWindowCaption(point_in_field);
++      }
++    }
++  }
+   if (source_type == ui::mojom::MenuSourceType::kKeyboard ||
+-      hit_test == HTCAPTION || hit_test == HTNOWHERE) {
++      hit_test == HTCAPTION || hit_test == HTNOWHERE || in_arc_band_blank) {
+     menu_runner_ = std::make_unique<views::MenuRunner>(
+         GetSystemMenuModel(),
+         views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU,
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -2277,6 +2277,17 @@ bool LocationBarView::OnMousePressed(con
+   views::View::ConvertPointFromScreen(this, &local);
+   if (IsPositionInWindowCaption(local)) {
+     arc_press_forwarded_to_omnibox_ = false;
++    // helium-fork: with the edit-state panel the blank is ours, not AppKit's
++    // (ToolbarView::IsRectInWindowCaption stops calling it caption), so a left
++    // press has to be held here until the release tells us which gesture it
++    // was: Dia opens the panel on a click that did not move -- however long it
++    // was held -- and moves the window on one that did.
++    if (event.IsOnlyLeftMouseButton() &&
++        GetArcOmniboxPanelMetrics().enabled) {
++      arc_blank_press_ = display::Screen::Get()->GetCursorScreenPoint();
++      arc_blank_press_moved_ = false;
++      return true;
++    }
+     if (event.IsOnlyRightMouseButton()) {
+       // The blank is titlebar: hand the click to the window's own controller
+       // (BrowserWidget -- the system/layout menu). It re-checks
+@@ -2302,6 +2313,31 @@ bool LocationBarView::OnMousePressed(con
+ }
+ 
+ bool LocationBarView::OnMouseDragged(const ui::MouseEvent& event) {
++  // helium-fork: a blank press that starts moving is a window drag. Movement
++  // is the only discriminator -- there is deliberately no time limit, because
++  // Dia opens the panel even after a five-second hold as long as the pointer
++  // stayed put.
++  if (arc_blank_press_.has_value()) {
++    if (arc_blank_press_moved_) {
++      return true;  // The move loop already ran; the gesture is spent.
++    }
++    const gfx::Point now = display::Screen::Get()->GetCursorScreenPoint();
++    const gfx::Vector2d delta = now - *arc_blank_press_;
++    if (!views::View::ExceededDragThreshold(delta)) {
++      return true;
++    }
++    arc_blank_press_moved_ = true;
++    views::Widget* const widget = GetWidget();
++    if (widget && widget->IsMoveLoopSupported()) {
++      // Offset of the pointer inside the window, so the window does not jump
++      // to put its corner under the cursor.
++      const gfx::Vector2d drag_offset =
++          *arc_blank_press_ - widget->GetWindowBoundsInScreen().origin();
++      widget->RunMoveLoop(drag_offset, views::Widget::MoveLoopSource::kMouse,
++                          views::Widget::MoveLoopEscapeBehavior::kDontHide);
++    }
++    return true;
++  }
+   // helium-fork: paired with the press -- an unforwarded press must not grow
+   // a forwarded drag (the omnibox would see a drag with no press).
+   if (!arc_press_forwarded_to_omnibox_) {
+@@ -2312,6 +2348,20 @@ bool LocationBarView::OnMouseDragged(con
+ }
+ 
+ void LocationBarView::OnMouseReleased(const ui::MouseEvent& event) {
++  // helium-fork: a blank press that never moved is a click, and a click on the
++  // band -- anywhere on it, not just on the text -- opens the panel. Going
++  // through FocusLocation() rather than hand-rolling RequestFocus()+SelectAll()
++  // is deliberate: OmniboxViewViews::SetFocus() also unelides, starts
++  // zero-suggest and shows the caret.
++  if (arc_blank_press_.has_value()) {
++    const bool moved = arc_blank_press_moved_;
++    arc_blank_press_.reset();
++    arc_blank_press_moved_ = false;
++    if (!moved) {
++      FocusLocation(/*is_user_initiated=*/true, /*clear_focus_if_failed=*/true);
++    }
++    return;
++  }
+   // helium-fork: paired with the press. The unconditional forward here is
+   // what leaked the omnibox context menu onto the blank -- Textfield shows
+   // its menu from OnMouseReleased, not from the press.
+@@ -2321,6 +2371,14 @@ void LocationBarView::OnMouseReleased(co
+   omnibox_view_->OnMouseReleased(AdjustMouseEventLocationForOmniboxView(event));
+ }
+ 
++void LocationBarView::OnMouseCaptureLost() {
++  // helium-fork: the move loop takes capture away, and so does anything that
++  // opens a menu mid-gesture. Drop the pending blank press rather than let it
++  // turn the next unrelated release into a click on the band.
++  arc_blank_press_.reset();
++  arc_blank_press_moved_ = false;
++}
++
+ void LocationBarView::OnMouseMoved(const ui::MouseEvent& event) {
+   OnOmniboxHovered(true);
+ }
+@@ -2688,6 +2746,38 @@ bool LocationBarView::IsArcFieldEditing(
+          GetOmniboxController()->edit_model()->user_input_in_progress();
+ }
+ 
++void LocationBarView::EndArcFieldEditing() {
++  if (!omnibox_view_ || !IsArcFieldEditing()) {
++    return;
++  }
++  // Only the focus has to be taken away -- OmniboxViewViews::OnBlur does the
++  // rest, and it is the same path a click on the web contents already takes.
++  if (views::FocusManager* const focus_manager = GetFocusManager()) {
++    if (focus_manager->GetFocusedView() &&
++        Contains(focus_manager->GetFocusedView())) {
++      focus_manager->ClearFocus();
++    }
++    // And drop the view the widget parked focus on for its next activation.
++    // Deactivating stores the focused view so it can be handed back when the
++    // user returns; without this the field takes focus again the moment the
++    // window comes forward and the panel is standing there as if nothing had
++    // happened. Clearing it covers both orderings of "store" against this
++    // observer, which is why it is unconditional rather than guarded.
++    if (focus_manager->GetStoredFocusView() &&
++        Contains(focus_manager->GetStoredFocusView())) {
++      focus_manager->SetStoredFocusView(nullptr);
++    }
++  }
++  // OnBlur only reverts while the widget is active ("merely Alt-Tabbing to
++  // another window and back should not change the Omnibox state"), so on
++  // deactivation the field would keep the unelided URL that focusing put there
++  // and the band would never go back to "host / title". Reverting is only safe
++  // when the user has typed nothing -- their in-progress input is theirs.
++  if (!GetOmniboxController()->edit_model()->user_input_in_progress()) {
++    omnibox_view_->RevertAll();
++  }
++}
++
+ void LocationBarView::ShowContextMenuForViewImpl(
+     views::View* source,
+     const gfx::Point& p,
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -8,6 +8,7 @@
+ #include <stddef.h>
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <string_view>
+ #include <vector>
+@@ -238,6 +239,12 @@ class LocationBarView
+   // is visible or there is in-progress input. The panel is on screen for
+   // exactly this, whether the suggestion popup is up or not.
+   bool IsArcFieldEditing() const;
++  // helium-fork: leave the edit state. Clicking anywhere that is not the field
++  // ends it, which upstream only gets for free where the click lands on
++  // something focusable -- the web contents. Reverts the display text too when
++  // there is nothing typed, so the band goes back to its resting "host / title"
++  // rather than keeping the unelided URL focusing left behind.
++  void EndArcFieldEditing();
+ 
+   // helium-fork: for ToolbarView's caption hit test. True when `point` (in
+   // this view's coordinates) lands on the minimal field's blank -- the part
+@@ -512,6 +519,7 @@ class LocationBarView
+   bool OnMousePressed(const ui::MouseEvent& event) override;
+   bool OnMouseDragged(const ui::MouseEvent& event) override;
+   void OnMouseReleased(const ui::MouseEvent& event) override;
++  void OnMouseCaptureLost() override;
+   void OnMouseMoved(const ui::MouseEvent& event) override;
+   // helium-fork: with SetNotifyEnterExitOnChild(true) the pointer can arrive
+   // straight onto one of the field's icons, in which case this is the only
+@@ -686,6 +694,14 @@ class LocationBarView
+   // context menu from OnMouseReleased, so an unpaired release forward leaks
+   // the omnibox menu onto the field's blank.
+   bool arc_press_forwarded_to_omnibox_ = true;
++  // helium-fork: screen point of an in-flight left press on the field's blank,
++  // and whether it has since travelled far enough to be a window drag. The
++  // field owns that gesture now (see ToolbarView::IsRectInWindowCaption): a
++  // press that never moves is a click and opens the panel, one that moves runs
++  // the widget's move loop. Nothing here is time-based -- Dia opens the panel
++  // after a five-second hold as long as the pointer stayed put.
++  std::optional<gfx::Point> arc_blank_press_;
++  bool arc_blank_press_moved_ = false;
+ 
+   // The following views are used to provide hints and remind the user as to
+   // what is going in the edit. They are all added a children of the
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -1462,6 +1462,19 @@ bool ToolbarView::IsRectInWindowCaption(
+         // decides for itself which parts are content and which are Dia's
+         // window-drag blank (same delegation shape as the tab strip above).
+         if (child == location_bar_view_) {
++          // With the edit-state panel, the field's blank stops being caption
++          // and the field runs the window drag itself. It has to: Dia opens
++          // the panel on a click that did not move and drags the window on one
++          // that did, and macOS cannot tell those apart on a caption. A caption
++          // press makes -[BridgedContentView hitTest:] return nil, AppKit calls
++          // -performWindowDragWithEvent:, and the WINDOW SERVER runs the whole
++          // gesture -- measured 2026-08-17: that call returns in 0ms and the
++          // window still moves, so no app-side code runs between press and
++          // release and there is nothing left to inspect. See
++          // LocationBarView::OnMouseDragged for the move loop that replaces it.
++          if (location_bar_view_->GetArcOmniboxPanelMetrics().enabled) {
++            return false;
++          }
+           return location_bar_view_->IsPositionInWindowCaption(
+               target_rect.origin());
+         }

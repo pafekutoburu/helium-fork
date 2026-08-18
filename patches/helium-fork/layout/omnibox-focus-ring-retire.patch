@@ -19,3 +19,58 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
            // Show focus ring when the Omnibox is visibly focused and the popup
            // is closed.
            return v->GetOmniboxController()->edit_model()->is_caret_visible() &&
+@@ -1892,6 +1902,12 @@ void LocationBarView::RefreshBackground(
+       GetOmniboxController()->edit_model()->user_input_in_progress();
+   const bool high_contrast = GetNativeTheme()->preferred_contrast() ==
+                              ui::NativeTheme::PreferredContrast::kMore;
++  // helium-fork: same predicate the focus ring is retired behind. Everything
++  // upstream does to mark "focused" or "edited but blurred" is a second outline
++  // drawn on the field, and while the panel is up the field is not a control of
++  // its own any more -- it is a hole in one white surface, so a second outline
++  // reads as the two stacked capsules the panel exists to remove.
++  const bool arc_panel = GetArcOmniboxPanelMetrics().enabled;
+ 
+   const auto* const color_provider = GetColorProvider();
+   const std::optional<SkColor> band_tint = GetBandTint();
+@@ -1914,13 +1930,23 @@ void LocationBarView::RefreshBackground(
+     // focused.
+     background_color_ =
+         color_provider->GetColor(kColorOmniboxResultsBackground);
+-  } else if (input_in_progress && !high_contrast) {
++  } else if (input_in_progress && !high_contrast && !arc_panel) {
+     // Under CR23 guidelines, if the Omnibox is unfocused, but still contains
+     // in-progress user input, the background color matches the popup (unless
+     // high-contrast mode is enabled).
++    //
++    // helium-fork: not under the panel. IsArcFieldEditing() is still true in
++    // this state, so the panel is still up, and the hover half of this tween is
++    // a different shade from the panel's own fill -- a 3pt tonal step around
++    // the field, which is exactly the doubled capsule.
+     normal = color_provider->GetColor(kColorOmniboxResultsBackground);
+     hovered = color_provider->GetColor(kColorOmniboxResultsBackgroundHovered);
+     background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
++  } else if (input_in_progress && !high_contrast && arc_panel) {
++    // Blurred with input pending: keep the field's fill exactly the panel's, so
++    // the two stay one surface however the hover animation happens to sit.
++    background_color_ =
++        color_provider->GetColor(kColorOmniboxResultsBackground);
+   }
+ 
+   SkColor border_color = SK_ColorTRANSPARENT;
+@@ -1930,10 +1956,15 @@ void LocationBarView::RefreshBackground(
+         is_caret_visible
+             ? color_provider->GetColor(kColorOmniboxResultsBackground)
+             : color_provider->GetColor(kColorLocationBarBorder);
+-  } else if (!is_caret_visible && input_in_progress) {
++  } else if (!is_caret_visible && input_in_progress && !arc_panel) {
+     // Under CR23 guidelines, if the (regular contrast) Omnibox is unfocused,
+     // but still contains in-progress user input, a unique border color will be
+     // applied.
++    //
++    // helium-fork: retired under the panel for the same reason as the focus
++    // ring. This one is a literal 1px stroke around the field's capsule while
++    // the panel is still standing, and the state is easy to fall into -- a
++    // screenshot tool or a Cmd-Tab away from a half-typed omnibox is enough.
+     border_color = color_provider->GetColor(kColorLocationBarBorderOnMismatch);
+   }
+ 

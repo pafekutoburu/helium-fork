@@ -32,7 +32,7 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium/arc_omnibox_panel.h
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,190 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -69,6 +69,8 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
 +//     sidebar, so we do not have Dia's 148pt of band to grow into), and 40pt
 +//     would push the panel out over the sidebar -- off the window entirely once
 +//     the sidebar is collapsed. Dia's panel never leaves its own card.
++//     The user's answer to that (2026-08-17) is kEmptyPanelBottomOutset below:
++//     spend the growth we cannot have sideways on height instead.
 +//   * Dia's panel radius is 20. Ours is the card's radius, because inflating by
 +//     only 3pt lands the panel's top-left corner exactly on the card's, and two
 +//     different arcs meeting there is the "two rectangles pretending to be one"
@@ -84,6 +86,25 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
 +// be built in this tree).
 +namespace helium {
 +
++// How far below the field the panel reaches while there is nothing to suggest
++// yet -- the "it popped out" cue, and the only reason the panel is visible as a
++// panel at all on a page whose colour the shadow cannot darken (a black page
++// takes no shadow, so before this the panel's bottom edge sat exactly on the
++// band's and there was nothing to see).
++//
++// Dia reaches 59pt past a 41.5pt band (1.42x the band's height; measured off
++// d_01_click.png: card top y=12, band bottom y=95, panel y=1..213, all 2x).
++// The proportional value for our 34pt band would be 48. We take 18: Dia fills
++// its overhang with a real row ("+ Add tabs or files / ... / mic / Go", its AI
++// attachment bar) and we have nothing to put there, so the rest of its 106pt is
++// content we do not have rather than margin we are missing.
++//
++// This is the dial to turn when the panel reads as too shy or too empty. It is
++// deliberately not a parameter of ComputeArcOmniboxPanel(): unlike the outset
++// and the radii, which must stay tied to the layout constants they are derived
++// from, this one answers only to the eye.
++inline constexpr int kEmptyPanelBottomOutset = 18;
++
 +struct ArcOmniboxPanelMetrics {
 +  // False when the Arc band treatment does not apply (popup windows, high
 +  // contrast, no vertical tab strip, or the row hosted in the sidebar rather
@@ -94,6 +115,12 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
 +  // How far the panel grows past the field on the left, right and top. The
 +  // bottom is where the suggestions are, so it is never inset.
 +  int outset = 0;
++
++  // How far the panel reaches past the field's bottom edge while there is
++  // nothing to suggest -- see kEmptyPanelBottomOutset. It belongs to PanelFor()
++  // alone: alignment_insets() is what the suggestion list aligns itself to the
++  // field with, and there the bottom is where the results start.
++  int bottom_outset = 0;
 +
 +  // The panel's own corner radius.
 +  int panel_radius = 0;
@@ -115,19 +142,27 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
 +  // How the panel is placed around the field. This is the shape the omnibox
 +  // popup's own alignment insets take, so it can be handed straight to
 +  // Rect::Inset() with a minus sign.
++  //
++  // The bottom stays 0 on purpose, bottom_outset or not: this is the popup's
++  // geometry, and there the space below the field is the suggestion list. The
++  // overhang is the empty panel's alone, so typing can only ever make the panel
++  // taller -- the first suggestion row is worth more than the 18pt apron it
++  // replaces, so the bottom edge never travels back up.
 +  gfx::Insets alignment_insets() const {
 +    return gfx::Insets::TLBR(outset, outset, 0, outset);
 +  }
 +
 +  // The panel rect for a given field rect, before the suggestions add height.
-+  // Grows the field on three sides, so the two share a horizontal centre --
-+  // Dia's one invariant that survives our narrower margins.
++  // Grows the field on three sides by `outset`, so the two share a horizontal
++  // centre -- Dia's one invariant that survives our narrower margins -- and
++  // past its bottom edge by `bottom_outset`, which is what lifts the panel off
++  // the band and onto the page.
 +  gfx::Rect PanelFor(const gfx::Rect& field) const {
 +    if (!enabled) {
 +      return gfx::Rect();
 +    }
 +    gfx::Rect panel(field);
-+    panel.Inset(-alignment_insets());
++    panel.Inset(-gfx::Insets::TLBR(outset, outset, bottom_outset, outset));
 +    return panel;
 +  }
 +};
@@ -148,6 +183,7 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
 +  }
 +  metrics.enabled = true;
 +  metrics.outset = std::max(0, outset);
++  metrics.bottom_outset = kEmptyPanelBottomOutset;
 +  metrics.field_radius = std::max(0, field_radius);
 +  // Concentric with the field by construction rather than by coincidence: a
 +  // caller that hands over a card radius which does not sit `outset` outside
@@ -191,7 +227,7 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
-@@ -0,0 +1,119 @@
+@@ -0,0 +1,151 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -245,26 +281,57 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
 +  }
 +}
 +
-+// The panel grows on three sides only: the bottom edge is where the suggestion
-+// list is, and insetting it would push the list up under the field.
++// The alignment insets grow on three sides only: this is the geometry the
++// suggestion list aligns itself to the field with, and the space below the
++// field is the list. The empty panel's overhang deliberately does NOT show up
++// here -- if it did, every suggestion list would gain an 18pt gap under its
++// last row and the popup's bounds would stop matching the shipped build.
 +TEST(ArcOmniboxPanelTest, AlignmentInsetsLeaveTheBottomAlone) {
 +  const gfx::Insets insets = Metrics().alignment_insets();
 +  EXPECT_EQ(kOutset, insets.top());
 +  EXPECT_EQ(kOutset, insets.left());
 +  EXPECT_EQ(kOutset, insets.right());
 +  EXPECT_EQ(0, insets.bottom());
++  EXPECT_GT(Metrics().bottom_outset, 0);
 +}
 +
 +// Dia's one geometric invariant that survives our narrower margins: the panel
 +// and the field share a horizontal centre, and the panel contains the field.
 +TEST(ArcOmniboxPanelTest, PanelSharesTheFieldsCentreAndContainsIt) {
-+  const gfx::Rect panel = Metrics().PanelFor(kField);
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  const gfx::Rect panel = metrics.PanelFor(kField);
 +  EXPECT_TRUE(panel.Contains(kField));
 +  EXPECT_EQ(kField.CenterPoint().x(), panel.CenterPoint().x());
 +  EXPECT_EQ(kField.x() - kOutset, panel.x());
 +  EXPECT_EQ(kField.right() + kOutset, panel.right());
 +  EXPECT_EQ(kField.y() - kOutset, panel.y());
-+  EXPECT_EQ(kField.bottom(), panel.bottom());
++  EXPECT_EQ(kField.bottom() + metrics.bottom_outset, panel.bottom());
++}
++
++// The overhang is the whole point of M3.6: without it the panel's bottom edge
++// sits exactly on the band's, so on a page whose colour the shadow cannot
++// darken there is nothing at all to see and the panel reads as a second capsule
++// inside the address bar.
++TEST(ArcOmniboxPanelTest, PanelReachesPastTheFieldsBottom) {
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  EXPECT_EQ(kEmptyPanelBottomOutset, metrics.bottom_outset);
++  EXPECT_GT(metrics.bottom_outset, metrics.outset);
++  const gfx::Rect panel = metrics.PanelFor(kField);
++  EXPECT_EQ(kField.height() + kOutset + metrics.bottom_outset, panel.height());
++}
++
++// The overhang goes down and nowhere else. Anything that spent it sideways
++// would push the panel over the sidebar -- off the window once the sidebar is
++// collapsed -- which is the reason we are growing downwards in the first place.
++TEST(ArcOmniboxPanelTest, OverhangDoesNotMoveTheOtherThreeEdges) {
++  ArcOmniboxPanelMetrics no_overhang = Metrics();
++  no_overhang.bottom_outset = 0;
++  const gfx::Rect before = no_overhang.PanelFor(kField);
++  const gfx::Rect after = Metrics().PanelFor(kField);
++  EXPECT_EQ(before.x(), after.x());
++  EXPECT_EQ(before.y(), after.y());
++  EXPECT_EQ(before.width(), after.width());
++  EXPECT_EQ(before.bottom() + kEmptyPanelBottomOutset, after.bottom());
 +}
 +
 +// The panel's top-left corner lands exactly on the card's, which is the whole
@@ -286,6 +353,7 @@ Index: src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
 +                             kFieldRadius);
 +  EXPECT_FALSE(metrics.enabled);
 +  EXPECT_EQ(0, metrics.outset);
++  EXPECT_EQ(0, metrics.bottom_outset);
 +  EXPECT_EQ(0, metrics.panel_radius);
 +  EXPECT_EQ(0, metrics.field_radius);
 +  EXPECT_EQ(0, metrics.shadow_elevation);
@@ -357,13 +425,14 @@ Index: src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.cc
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,105 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
 +
 +#include "chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h"
 +
++#include <algorithm>
 +#include <vector>
 +
 +#include "base/numerics/safe_conversions.h"
@@ -437,9 +506,25 @@ Index: src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.cc
 +    // PROGRESS.md on ArcCardOutlineView's first version, where a canvas-wide
 +    // DrawColor() leaned on a non-rectangular clip and painted a 478pt white
 +    // band across the page.)
++    //
++    // The hole is cut 1dp inside the field, not on it. The field paints its own
++    // capsule, in the band's layer, one layer below this one -- and an
++    // antialiased clip on the exact same outline leaves the two layers sharing
++    // every edge pixel: the field covers it `a` and this fill covers it `1 - a`,
++    // so the pixel comes out (1 - a + a^2) white plus a(1 - a) of whatever is
++    // behind, up to a quarter of the band's colour. On a black page that is a
++    // grey hairline tracing the field's whole capsule 3pt inside the panel's
++    // edge -- "two stacked capsules", measured at 201/255 before this line.
++    // One dp in lands the seam on the field's own fully opaque white instead
++    // (editing pins the field to kColorOmniboxResultsBackground, the very
++    // colour this fill uses), and white over white has no edge. The field's
++    // contents start far further in than 1dp, so nothing of it is covered.
++    gfx::Rect inner(*hole);
++    inner.Inset(1);
 +    canvas->sk_canvas()->clipRRect(
-+        SkRRect::MakeRectXY(gfx::RectFToSkRect(gfx::RectF(*hole)),
-+                            metrics.field_radius, metrics.field_radius),
++        SkRRect::MakeRectXY(gfx::RectFToSkRect(gfx::RectF(inner)),
++                            std::max(0, metrics.field_radius - 1),
++                            std::max(0, metrics.field_radius - 1)),
 +        SkClipOp::kDifference, /*doAntiAlias=*/true);
 +  }
 +  canvas->DrawRoundRect(panel, metrics.panel_radius, flags);
