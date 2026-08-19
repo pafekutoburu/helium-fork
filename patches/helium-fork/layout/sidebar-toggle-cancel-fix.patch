@@ -1,0 +1,35 @@
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -7544,6 +7544,18 @@ void BrowserView::AnimationEnded(const g
+   }
+ }
+ 
++void BrowserView::AnimationCanceled(const gfx::Animation* animation) {
++  // helium-fork: Reset() on a mid-flight animation dispatches Canceled, not
++  // Ended (gfx::Animation::Stop() picks by current state), and AnimationEnded
++  // above is the only exit that clears kSliding and re-arms the hover
++  // monitor. Without this override any Reset() landing inside the 200ms hide
++  // slide jams the phase at kSliding for the window's lifetime -- every
++  // reveal predicate hard-returns and the edge reveal is dead. Everything
++  // AnimationEnded does is settle-to-current-state work, which is exactly
++  // what a cancel needs too.
++  AnimationEnded(animation);
++}
++
+ WebAppFrameToolbarView* BrowserView::web_app_frame_toolbar() {
+   return web_app_frame_toolbar_;
+ }
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -835,6 +835,7 @@ class BrowserView : public BrowserWindow
+   // gfx::AnimationDelegate:
+   void AnimationProgressed(const gfx::Animation* animation) override;
+   void AnimationEnded(const gfx::Animation* animation) override;
++  void AnimationCanceled(const gfx::Animation* animation) override;
+ 
+   // AppMenuButtonObserver:
+   void AppMenuShown() override;

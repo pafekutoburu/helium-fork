@@ -1,0 +1,118 @@
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -285,10 +285,13 @@ LocationBarView::LocationBarView(Browser
+           // helium-fork: on the Arc band the focused field is a floating
+           // panel, and Dia has no ring around it (measured 2026-08-16). The
+           // panel itself -- opaque fill where there was none, lifted off the
+-          // band by its shadow -- is the focus indication. High contrast keeps
+-          // the ring for free: ShouldMinimizeArcChrome() is false there, so
+-          // this is the plain toolbar field with its stock treatment.
+-          if (v->GetArcOmniboxPanelMetrics().enabled) {
++          // band by its shadow -- is the focus indication. The sidebar-hosted
++          // row (hidden address bar mode) has no panel yet is the same
++          // minimal field, so the ring is retired on the mode predicate, not
++          // the panel's. High contrast keeps the ring for free:
++          // ShouldMinimizeArcChrome() is false there, so this is the plain
++          // toolbar field with its stock treatment.
++          if (v->ShouldMinimizeArcChrome()) {
+             return false;
+           }
+ 
+@@ -1148,19 +1151,33 @@ void LocationBarView::Layout(PassKey) {
+     constexpr int kArcFieldTextSlack = 100;
+     const bool title_visible =
+         arc_title_label_ && arc_title_label_->GetVisible();
++    // helium-fork: in the sidebar-hosted row the field is ~140pt and the
++    // title's share can shrink to a bare ellipsis ("example.com ..."), which
++    // reads as clipping, not content. A title that cannot show at least a few
++    // characters is dropped for this pass -- host only, and the omnibox takes
++    // the forgiveness slack back. Responsive only: the wide docked band never
++    // gets near the threshold.
++    const bool title_fits =
++        title_visible &&
++        location_bounds.right() - (location_bounds.x() + location_needed_width) >=
++            arc_title_label_->font_list().GetExpectedTextWidth(3);
+     gfx::Rect omnibox_bounds = location_bounds;
+     omnibox_bounds.set_width(
+-        std::min(title_visible ? location_needed_width
+-                               : location_needed_width + kArcFieldTextSlack,
++        std::min(title_fits ? location_needed_width
++                            : location_needed_width + kArcFieldTextSlack,
+                  location_bounds.width()));
+     omnibox_view_->SetBoundsRect(omnibox_bounds);
+     if (title_visible) {
+-      const int title_x = omnibox_bounds.right();
+-      const int title_width =
+-          std::min(arc_title_label_->GetPreferredSize().width(),
+-                   std::max(0, location_bounds.right() - title_x));
+-      arc_title_label_->SetBounds(title_x, location_bounds.y(), title_width,
+-                                  location_bounds.height());
++      if (title_fits) {
++        const int title_x = omnibox_bounds.right();
++        const int title_width =
++            std::min(arc_title_label_->GetPreferredSize().width(),
++                     std::max(0, location_bounds.right() - title_x));
++        arc_title_label_->SetBounds(title_x, location_bounds.y(), title_width,
++                                    location_bounds.height());
++      } else {
++        arc_title_label_->SetBoundsRect(gfx::Rect());
++      }
+     }
+   } else if (!ime_inline_autocomplete_view_->GetVisible() &&
+       !omnibox_additional_text_view_->GetVisible() &&
+@@ -1908,6 +1925,12 @@ void LocationBarView::RefreshBackground(
+   // its own any more -- it is a hole in one white surface, so a second outline
+   // reads as the two stacked capsules the panel exists to remove.
+   const bool arc_panel = GetArcOmniboxPanelMetrics().enabled;
++  // helium-fork: the sidebar-hosted row (hidden address bar mode) is the same
++  // minimal field without a panel; upstream's popup-matched fill and mismatch
++  // stroke leak back in through the panel-only predicate there, which is the
++  // "stock blue box in the sidebar" the mode shipped with. Retire them on the
++  // mode, keep the panel-only branches on the panel.
++  const bool arc_minimal = ShouldMinimizeArcChrome();
+ 
+   const auto* const color_provider = GetColorProvider();
+   const std::optional<SkColor> band_tint = GetBandTint();
+@@ -1930,15 +1953,16 @@ void LocationBarView::RefreshBackground(
+     // focused.
+     background_color_ =
+         color_provider->GetColor(kColorOmniboxResultsBackground);
+-  } else if (input_in_progress && !high_contrast && !arc_panel) {
++  } else if (input_in_progress && !high_contrast && !arc_minimal) {
+     // Under CR23 guidelines, if the Omnibox is unfocused, but still contains
+     // in-progress user input, the background color matches the popup (unless
+     // high-contrast mode is enabled).
+     //
+-    // helium-fork: not under the panel. IsArcFieldEditing() is still true in
+-    // this state, so the panel is still up, and the hover half of this tween is
+-    // a different shade from the panel's own fill -- a 3pt tonal step around
+-    // the field, which is exactly the doubled capsule.
++    // helium-fork: not on the minimal field. Under the panel the hover half of
++    // this tween is a different shade from the panel's own fill -- a 3pt tonal
++    // step around the field, exactly the doubled capsule; in the sidebar row
++    // the popup fill is an opaque white pill on the themed sidebar. The
++    // sidebar row falls through to the rest tween (theme field fill).
+     normal = color_provider->GetColor(kColorOmniboxResultsBackground);
+     hovered = color_provider->GetColor(kColorOmniboxResultsBackgroundHovered);
+     background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
+@@ -1956,14 +1980,14 @@ void LocationBarView::RefreshBackground(
+         is_caret_visible
+             ? color_provider->GetColor(kColorOmniboxResultsBackground)
+             : color_provider->GetColor(kColorLocationBarBorder);
+-  } else if (!is_caret_visible && input_in_progress && !arc_panel) {
++  } else if (!is_caret_visible && input_in_progress && !arc_minimal) {
+     // Under CR23 guidelines, if the (regular contrast) Omnibox is unfocused,
+     // but still contains in-progress user input, a unique border color will be
+     // applied.
+     //
+-    // helium-fork: retired under the panel for the same reason as the focus
+-    // ring. This one is a literal 1px stroke around the field's capsule while
+-    // the panel is still standing, and the state is easy to fall into -- a
++    // helium-fork: retired on the minimal field (panel and sidebar row alike)
++    // for the same reason as the focus ring. This one is a literal 1px stroke
++    // around the field's capsule, and the state is easy to fall into -- a
+     // screenshot tool or a Cmd-Tab away from a half-typed omnibox is enough.
+     border_color = color_provider->GetColor(kColorLocationBarBorderOnMismatch);
+   }
