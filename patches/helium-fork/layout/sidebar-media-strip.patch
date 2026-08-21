@@ -1,0 +1,2796 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -380,6 +380,7 @@ static_library("ui") {
+     "helium/arc_card_layout.h",
+     "helium/arc_favorite_accent.h",
+     "helium/arc_loading_bar.h",
++    "helium/arc_media_strip.h",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_omnibox_panel.h",
+     "helium/arc_sidebar_surface.h",
+@@ -4125,6 +4126,10 @@ static_library("ui") {
+       "views/frame/top_controls_slide_controller.h",
+       "views/frame/vertical_tab_strip_region_view.cc",
+       "views/frame/vertical_tab_strip_region_view.h",
++      "views/tabs/vertical/helium_media_strip_controller.cc",
++      "views/tabs/vertical/helium_media_strip_controller.h",
++      "views/tabs/vertical/helium_media_strip_view.cc",
++      "views/tabs/vertical/helium_media_strip_view.h",
+       "views/frame/web_contents_close_handler.cc",
+       "views/frame/web_contents_close_handler.h",
+       "views/frame/web_contents_close_handler_delegate.h",
+@@ -6034,6 +6039,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_favorite_accent_unittest.cc",
+     "helium/arc_loading_bar.h",
+     "helium/arc_loading_bar_unittest.cc",
++    "helium/arc_media_strip.h",
++    "helium/arc_media_strip_unittest.cc",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_minimal_field_state_unittest.cc",
+     "helium/arc_sidebar_surface.h",
+Index: src/chrome/browser/ui/helium/arc_media_strip.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_media_strip.h
+@@ -0,0 +1,275 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_MEDIA_STRIP_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_MEDIA_STRIP_H_
++
++#include <cmath>
++#include <cstddef>
++#include <vector>
++
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/color_utils.h"
++
++// helium-fork: the sidebar's bottom media strip -- a pill of playback
++// controls for every tab with a live media session.
++//
++// Everything measured off the real Arc 2026-08-19 (@2x, reference strip
++// width 261pt = a 277pt sidebar minus the 8pt margins): a 33pt pill, corner
++// radius ~7.75, five elements at evenly spaced, symmetric centers (the
++// play/pause button lands exactly mid-pill), a 16pt site favicon, enabled
++// glyphs at ~L125 and disabled ones at ~L210 on the white pill. Hovering
++// expands it upward -- the bottom edge never moves -- into a panel that adds
++// a 33pt header row (site name inset 17pt; picture-in-picture and close
++// buttons at 46pt and 18pt from the right edge). We add one fused row Arc
++// does not have: title + artist from the media session, between the header
++// and the controls (user 2026-08-19).
++//
++// Two deliberate departures from Arc, both user-chosen 2026-08-19: the
++// volume button toggles mute instead of opening Arc's volume slider, and the
++// metadata row exists at all. Three more user rulings moved it further off
++// pure replication on 2026-08-20:
++// - It shows whenever a session exists. Arc hides the strip while the
++//   playing tab is the active one (live-verified 2026-08-19); ours stays,
++//   and activating the source tab no longer clears it.
++// - Two or more sessions: one capsule per session (r5, user-chosen
++//   2026-08-20), stacked upward -- the oldest keeps the pill's place in the
++//   layout flow, later ones float over the tab rows behind a fading scrim,
++//   and hovering any capsule expands that capsule alone. Every capsule above
++//   the hovered one slides up by exactly the panel's growth, so an open
++//   panel never covers a sibling (r6, user 2026-08-20). The r4 multi-session
++//   list rows and r5's global pause-all/mute-all card are both gone with
++//   their geometry.
++// - The strip is a floating card now (arc_sidebar_surface.h), which folded
++//   its radius into the unified capsule language.
++//
++// Header-only and free of //ui/views so all of it pins in the lightweight
++// test target.
++namespace helium {
++
++// One row of the strip -- the collapsed pill, the expanded header, and the
++// expanded controls row are all this tall (Arc: 33pt collapsed, 66pt for the
++// two-row expansion).
++inline constexpr int kMediaStripRowHeight = 33;
++
++// The metadata row: title only since r5 (the user cut the artist line,
++// 2026-08-20), so it is an ordinary 33pt row with the 17pt-tall line
++// centered -- ~8pt of air above and below, the tab capsule's own rhythm.
++inline constexpr int kMediaStripMetadataRowHeight = kMediaStripRowHeight;
++
++// Was Arc's own ~8 under the replicate-first rule; the user folded it into
++// the unified capsule radius when the strip became a floating card
++// (2026-08-20). Keep equal to kVerticalTabCornerRadius.
++inline constexpr int kMediaStripCornerRadius = 12;
++
++inline constexpr int kMediaStripFaviconSize = 16;
++
++// Control glyph size. Arc's prev/next are ~13pt wide, the volume glyph ~19pt;
++// vector icons come square, so this splits the difference. Acceptance-tunable.
++inline constexpr int kMediaStripIconSize = 18;
++
++// Expanded header row: site-name text inset from the left edge, and the two
++// buttons' centers from the right edge (Arc at width 261: pip x215, close
++// x243).
++inline constexpr int kMediaStripHeaderLeftInset = 17;
++inline constexpr int kMediaStripPipCenterFromRight = 46;
++inline constexpr int kMediaStripCloseCenterFromRight = 18;
++
++// Capsule-to-capsule gap in the stack: the sidebar-wide 8pt (card-to-card is
++// one of the four unified gaps, M3.9c-pre-r2); deliberately not Zen's 6.
++inline constexpr int kMediaStripStackGap = 8;
++
++// The scrim's fade band above the topmost floating capsule: sidebar color,
++// transparent at the top edge, solid at the band's bottom. Tab rows dissolve
++// across it instead of colliding with the stack. Acceptance-tunable.
++inline constexpr int kMediaScrimFadeHeight = 16;
++
++// The first and last slot centers sit this far in from the pill's edges
++// (Arc: 21.75/22 at width 261; the three middle slots divide the rest
++// evenly, 54.4pt apart).
++inline constexpr int kMediaStripEdgeSlotInset = 22;
++
++// Below this the five slots collide and the strip hides. A collapsed 42pt
++// sidebar (strip width 42-16 = 26) hides it; the narrowest expanded sidebar
++// (160pt, strip width 144) shows it.
++inline constexpr int kMediaStripMinWidth = 120;
++
++// The center x of slot 0..4 (favicon, previous, play/pause, next, volume) in
++// a strip `strip_width` wide. Even spacing, symmetric, slot 2 at the exact
++// middle -- all three are what Arc measures.
++inline int MediaStripSlotCenter(int strip_width, int slot) {
++  const double span = strip_width - 2.0 * kMediaStripEdgeSlotInset;
++  return static_cast<int>(
++      std::lround(kMediaStripEdgeSlotInset + span * slot / 4.0));
++}
++
++// Expanded height: Arc's exact two rows when the session has no title to
++// show, header + metadata + controls when it does.
++inline constexpr int MediaStripExpandedHeight(bool has_metadata) {
++  return kMediaStripRowHeight + (has_metadata ? kMediaStripMetadataRowHeight : 0) +
++         kMediaStripRowHeight;
++}
++
++struct MediaStripPanelBounds {
++  int y = 0;
++  int height = 0;
++};
++
++// The hover panel's bounds at `progress` (0 = collapsed pill, 1 = fully
++// expanded), growing upward from a pinned bottom edge: y + height ==
++// `anchor_bottom_y` at every step, which is the "the pill does not move, the
++// panel rises out of it" of the real thing. `max_available` caps the height
++// so a short sidebar cannot push the panel out the top.
++inline MediaStripPanelBounds GetMediaStripPanelBounds(int anchor_bottom_y,
++                                                      int expanded_height,
++                                                      double progress,
++                                                      int max_available) {
++  MediaStripPanelBounds bounds;
++  const double clamped = progress < 0.0 ? 0.0 : (progress > 1.0 ? 1.0 : progress);
++  int target = expanded_height;
++  if (target > max_available) {
++    target = max_available;
++  }
++  if (target < kMediaStripRowHeight) {
++    target = kMediaStripRowHeight;
++  }
++  bounds.height = static_cast<int>(std::lround(
++      kMediaStripRowHeight + (target - kMediaStripRowHeight) * clamped));
++  bounds.y = anchor_bottom_y - bounds.height;
++  return bounds;
++}
++
++// "Nothing is hovered" for the stack functions below.
++inline constexpr size_t kMediaStripNoHover = static_cast<size_t>(-1);
++
++// How much room the stack makes above the hovered capsule while its panel is
++// open: the panel's growth, exactly. Feed it the panel's *live* animated
++// height and the slide rides the panel's own tween -- one operation, one
++// timeline (M3.3h).
++inline constexpr int MediaStripExpansionShift(int panel_height) {
++  return panel_height > kMediaStripRowHeight
++             ? panel_height - kMediaStripRowHeight
++             : 0;
++}
++
++// Capsule `index` measured upward from the base capsule's top edge. Index 0
++// is the base capsule (the one that keeps its slot in the layout flow, hence
++// offset 0); index j >= 1 is floating capsule j-1. `hovered_index` is the
++// capsule whose panel is open, kMediaStripNoHover when none is.
++//
++// Self-check, two sessions and a 99pt panel. Hovering the base: capsule 1
++// sits 41 + 66 = 107 up, so its bottom edge is 74 up while the panel's top
++// edge is 66 up -- the 8pt stack gap, at every frame. Hovering capsule 1:
++// the shift applies to nothing, the panel's bottom edge lands 8 above the
++// base capsule's top. One formula, both directions.
++inline constexpr int MediaStripCapsuleOffsetFromBase(size_t index,
++                                                     size_t hovered_index,
++                                                     int panel_height) {
++  if (index == 0) {
++    return 0;
++  }
++  const int stacked =
++      static_cast<int>(index) * (kMediaStripRowHeight + kMediaStripStackGap);
++  const bool above_hovered =
++      hovered_index != kMediaStripNoHover && index > hovered_index;
++  return stacked + (above_hovered ? MediaStripExpansionShift(panel_height) : 0);
++}
++
++// The floating stack above the base capsule: total height of the overlay
++// portion for `extra_capsules` sessions beyond the first. Equal to the
++// topmost capsule's offset by construction, so the stack always ends exactly
++// at that capsule's top edge.
++inline constexpr int MediaStripOverlayStackHeight(int extra_capsules,
++                                                  size_t hovered_index,
++                                                  int panel_height) {
++  return extra_capsules <= 0
++             ? 0
++             : MediaStripCapsuleOffsetFromBase(
++                   static_cast<size_t>(extra_capsules), hovered_index,
++                   panel_height);
++}
++
++// The tallest panel that still leaves every capsule above the hovered one
++// inside the sidebar. `room_above_anchor` is the distance from the hovered
++// capsule's bottom edge up to the ceiling (the address row); each capsule
++// that gets pushed up needs one stacked slot of it.
++inline constexpr int MediaStripMaxPanelHeight(int room_above_anchor,
++                                              int overlay_count,
++                                              size_t hovered_index) {
++  const int pushed =
++      hovered_index == kMediaStripNoHover
++          ? 0
++          : overlay_count - static_cast<int>(hovered_index);
++  const int room =
++      room_above_anchor -
++      (pushed > 0 ? pushed * (kMediaStripRowHeight + kMediaStripStackGap) : 0);
++  return room < kMediaStripRowHeight ? kMediaStripRowHeight : room;
++}
++
++// What the selection policy needs to know about one active media item, in
++// MediaItemManager order (actively-playing first).
++struct MediaStripItemFacts {
++  // The item's WebContents is a tab in this window.
++  bool in_this_window = false;
++  // The user closed this one from the strip; it stays gone until the session
++  // itself goes away.
++  bool dismissed = false;
++};
++// There is deliberately no is_active_tab here anymore: Arc skips the active
++// tab's session, and the user overrode that on 2026-08-20 ("show whenever
++// anything is playing").
++
++// The indices of every item the strip should show, in the caller's order.
++// This decides membership only -- the controller keeps its rows in bind
++// order, so a play/pause cannot reshuffle the list.
++inline std::vector<int> SelectMediaStripItems(
++    const std::vector<MediaStripItemFacts>& items) {
++  std::vector<int> selected;
++  for (size_t i = 0; i < items.size(); ++i) {
++    if (items[i].in_this_window && !items[i].dismissed) {
++      selected.push_back(static_cast<int>(i));
++    }
++  }
++  return selected;
++}
++
++inline constexpr bool ShouldShowSidebarMediaStrip(int item_count,
++                                                  int strip_width) {
++  return item_count > 0 && strip_width >= kMediaStripMinWidth;
++}
++
++// The pill's surface is the sidebar floating card (pure white in light
++// themes, a white lift in dark ones) -- one function with the active tab
++// row, so the two cards cannot drift apart. The hairline that used to
++// separate white-on-white is gone with it: the card is borderless and the
++// shadow carries the elevation (Dia-measured, 2026-08-20).
++inline SkColor GetMediaStripSurfaceColor(SkColor sidebar) {
++  return GetSidebarFloatingCardColor(sidebar);
++}
++
++// Control glyphs. Arc on its white pill: enabled ~(125,124,124), disabled
++// ~(211,210,210). GetColorWithMaxContrast(white) is Google Grey 900 (L~32),
++// not pure black, so those measurements are 0.58 and 0.20 of it -- pinned by
++// the unit test, theme-generic by construction.
++inline SkColor GetMediaStripIconColor(SkColor surface, bool enabled) {
++  return color_utils::AlphaBlend(color_utils::GetColorWithMaxContrast(surface),
++                                 surface, enabled ? 0.58f : 0.20f);
++}
++
++// Header row site name / metadata title.
++inline SkColor GetMediaStripPrimaryTextColor(SkColor surface) {
++  return color_utils::AlphaBlend(color_utils::GetColorWithMaxContrast(surface),
++                                 surface, 0.87f);
++}
++
++// Metadata artist line.
++inline SkColor GetMediaStripSecondaryTextColor(SkColor surface) {
++  return color_utils::AlphaBlend(color_utils::GetColorWithMaxContrast(surface),
++                                 surface, 0.55f);
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_MEDIA_STRIP_H_
+Index: src/chrome/browser/ui/helium/arc_media_strip_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_media_strip_unittest.cc
+@@ -0,0 +1,264 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_media_strip.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++// Arc's own strip, 2026-08-19: width 261, slot centers 22 / 76 / 130 / 184.5
++// / 239 -- evenly spaced, symmetric, play/pause dead center.
++TEST(ArcMediaStripTest, SlotCentersMatchTheMeasuredArcStrip) {
++  constexpr int kArcWidth = 261;
++  const int expected[] = {22, 76, 130, 184, 238};
++  for (int slot = 0; slot < 5; ++slot) {
++    EXPECT_NEAR(expected[slot], MediaStripSlotCenter(kArcWidth, slot), 1)
++        << "slot " << slot;
++  }
++  // Play/pause is the pill's own center.
++  EXPECT_NEAR(kArcWidth / 2, MediaStripSlotCenter(kArcWidth, 2), 1);
++}
++
++// Symmetry is a property, not a lucky width: the favicon sits as far from the
++// left edge as the volume button from the right, at any width.
++TEST(ArcMediaStripTest, SlotCentersAreSymmetric) {
++  for (const int width : {120, 144, 200, 261, 262, 384}) {
++    for (int slot = 0; slot < 5; ++slot) {
++      EXPECT_NEAR(width,
++                  MediaStripSlotCenter(width, slot) +
++                      MediaStripSlotCenter(width, 4 - slot),
++                  1)
++          << "width " << width << " slot " << slot;
++    }
++  }
++}
++
++// At the minimum width the five glyphs still clear each other -- that is what
++// the minimum is for.
++TEST(ArcMediaStripTest, SlotsClearEachOtherAtTheMinimumWidth) {
++  for (int slot = 0; slot < 4; ++slot) {
++    EXPECT_GE(MediaStripSlotCenter(kMediaStripMinWidth, slot + 1) -
++                  MediaStripSlotCenter(kMediaStripMinWidth, slot),
++              kMediaStripIconSize);
++  }
++}
++
++// Arc's expansion is exactly two of its rows; ours adds the fused metadata
++// row only when there is metadata to put in it.
++TEST(ArcMediaStripTest, ExpandedHeightMatchesTheRows) {
++  EXPECT_EQ(2 * kMediaStripRowHeight, MediaStripExpandedHeight(false));
++  EXPECT_EQ(2 * kMediaStripRowHeight + kMediaStripMetadataRowHeight,
++            MediaStripExpandedHeight(true));
++}
++
++// progress 0 is the pill itself; progress 1 is the full panel.
++TEST(ArcMediaStripTest, PanelBoundsEndpoints) {
++  const int bottom = 700;
++  const int expanded = MediaStripExpandedHeight(true);
++  const MediaStripPanelBounds rest =
++      GetMediaStripPanelBounds(bottom, expanded, 0.0, 1000);
++  EXPECT_EQ(kMediaStripRowHeight, rest.height);
++  EXPECT_EQ(bottom - kMediaStripRowHeight, rest.y);
++  const MediaStripPanelBounds full =
++      GetMediaStripPanelBounds(bottom, expanded, 1.0, 1000);
++  EXPECT_EQ(expanded, full.height);
++  EXPECT_EQ(bottom - expanded, full.y);
++}
++
++// The bottom edge is pinned through the whole tween -- the pill does not
++// move, the panel rises out of it -- and the height never retreats.
++TEST(ArcMediaStripTest, PanelBottomIsPinnedAndGrowthIsMonotonic) {
++  const int bottom = 700;
++  const int expanded = MediaStripExpandedHeight(true);
++  int last_height = 0;
++  for (int step = 0; step <= 10; ++step) {
++    const MediaStripPanelBounds bounds =
++        GetMediaStripPanelBounds(bottom, expanded, step / 10.0, 1000);
++    EXPECT_EQ(bottom, bounds.y + bounds.height) << "step " << step;
++    EXPECT_GE(bounds.height, last_height) << "step " << step;
++    last_height = bounds.height;
++  }
++  // Out-of-range progress clamps to the endpoints.
++  EXPECT_EQ(kMediaStripRowHeight,
++            GetMediaStripPanelBounds(bottom, expanded, -0.5, 1000).height);
++  EXPECT_EQ(expanded,
++            GetMediaStripPanelBounds(bottom, expanded, 1.5, 1000).height);
++}
++
++// A short sidebar caps the panel instead of pushing it out the top, and the
++// cap never goes below the pill itself.
++TEST(ArcMediaStripTest, PanelHeightIsClampedToTheAvailableRoom) {
++  const int bottom = 100;
++  const int expanded = MediaStripExpandedHeight(true);
++  EXPECT_EQ(80, GetMediaStripPanelBounds(bottom, expanded, 1.0, 80).height);
++  EXPECT_EQ(kMediaStripRowHeight,
++            GetMediaStripPanelBounds(bottom, expanded, 1.0, 10).height);
++  EXPECT_GE(GetMediaStripPanelBounds(bottom, expanded, 1.0, 80).y, 0);
++}
++
++// The strip shows for *every* session in this window -- active tab included.
++// Arc skips the active tab's session; the user overrode that on 2026-08-20
++// ("show whenever anything is playing"), which is why there is no
++// is_active_tab fact left to consult.
++TEST(ArcMediaStripTest, SelectionCollectsEveryEligibleItem) {
++  EXPECT_EQ(std::vector<int>({0}),
++            SelectMediaStripItems({{.in_this_window = true}}));
++  EXPECT_EQ(std::vector<int>({0, 2}),
++            SelectMediaStripItems({{.in_this_window = true},
++                                   {.in_this_window = false},
++                                   {.in_this_window = true}}));
++  EXPECT_TRUE(SelectMediaStripItems({}).empty());
++}
++
++TEST(ArcMediaStripTest, SelectionSkipsOtherWindowsAndDismissed) {
++  EXPECT_TRUE(SelectMediaStripItems({{.in_this_window = false}}).empty());
++  EXPECT_TRUE(SelectMediaStripItems({{.in_this_window = true,
++                                      .dismissed = true}})
++                  .empty());
++}
++
++// Hidden below the width where the slots collide: a collapsed 42pt sidebar
++// (strip 26) hides it, the narrowest expanded sidebar (160pt, strip 144)
++// shows it.
++TEST(ArcMediaStripTest, VisibilityHasAWidthFloor) {
++  EXPECT_FALSE(ShouldShowSidebarMediaStrip(1, 26));
++  EXPECT_FALSE(ShouldShowSidebarMediaStrip(1, kMediaStripMinWidth - 1));
++  EXPECT_TRUE(ShouldShowSidebarMediaStrip(1, kMediaStripMinWidth));
++  EXPECT_TRUE(ShouldShowSidebarMediaStrip(2, 144));
++  EXPECT_FALSE(ShouldShowSidebarMediaStrip(0, 300));
++}
++
++int Luminance(SkColor color) {
++  return (SkColorGetR(color) + SkColorGetG(color) + SkColorGetB(color)) / 3;
++}
++
++// Arc's glyphs on its white pill: enabled ~(125,124,124), disabled
++// ~(211,210,210). Ours must land there on a white surface and flip direction
++// on a dark one.
++TEST(ArcMediaStripTest, IconColorsMatchArcOnAWhiteSurface) {
++  EXPECT_NEAR(125, Luminance(GetMediaStripIconColor(SK_ColorWHITE, true)), 2);
++  EXPECT_NEAR(210, Luminance(GetMediaStripIconColor(SK_ColorWHITE, false)), 2);
++  const SkColor dark_surface = SkColorSetRGB(0x30, 0x30, 0x30);
++  EXPECT_GT(Luminance(GetMediaStripIconColor(dark_surface, true)),
++            Luminance(dark_surface));
++  EXPECT_GT(Luminance(GetMediaStripIconColor(dark_surface, true)),
++            Luminance(GetMediaStripIconColor(dark_surface, false)));
++}
++
++// The pill is the sidebar floating card -- pure white on light, a lift on
++// dark, and the same answer as the active tab row's card so the two cannot
++// drift apart. (The hairline is gone: the card is borderless, the shadow
++// carries the elevation.)
++TEST(ArcMediaStripTest, SurfaceIsTheSidebarFloatingCard) {
++  const SkColor dark_sidebar = SkColorSetRGB(0x35, 0x35, 0x35);
++  EXPECT_GT(Luminance(GetMediaStripSurfaceColor(dark_sidebar)),
++            Luminance(dark_sidebar));
++  EXPECT_EQ(SK_ColorWHITE, GetMediaStripSurfaceColor(SK_ColorWHITE));
++  EXPECT_EQ(GetSidebarFloatingCardColor(dark_sidebar),
++            GetMediaStripSurfaceColor(dark_sidebar));
++  // Text hierarchy holds on both.
++  for (const SkColor surface : {SK_ColorWHITE, dark_sidebar}) {
++    EXPECT_NE(GetMediaStripPrimaryTextColor(surface),
++              GetMediaStripSecondaryTextColor(surface));
++  }
++}
++
++// The strip joined the unified capsule radius when it became a floating card
++// (user 2026-08-20). If kVerticalTabCornerRadius ever moves off 12, move
++// this with it.
++TEST(ArcMediaStripTest, CornerRadiusIsTheUnifiedCapsuleRadius) {
++  EXPECT_EQ(12, kMediaStripCornerRadius);
++}
++
++// r5: one capsule per extra session, stack-gapped; zero extras, zero
++// overlay. Nothing is hovered, so nothing is pushed.
++TEST(ArcMediaStripTest, OverlayStackHeightCountsExtrasOnly) {
++  constexpr int kSlot = kMediaStripRowHeight + kMediaStripStackGap;
++  EXPECT_EQ(0, MediaStripOverlayStackHeight(0, kMediaStripNoHover,
++                                            kMediaStripRowHeight));
++  EXPECT_EQ(0, MediaStripOverlayStackHeight(-1, kMediaStripNoHover,
++                                            kMediaStripRowHeight));
++  EXPECT_EQ(kSlot, MediaStripOverlayStackHeight(1, kMediaStripNoHover,
++                                                kMediaStripRowHeight));
++  EXPECT_EQ(3 * kSlot, MediaStripOverlayStackHeight(3, kMediaStripNoHover,
++                                                    kMediaStripRowHeight));
++  // A collapsed panel is exactly one row tall, so hovering with it closed
++  // must read identically to not hovering at all.
++  EXPECT_EQ(3 * kSlot,
++            MediaStripOverlayStackHeight(3, 0, kMediaStripRowHeight));
++}
++
++// r6, the user's ask: expanding a capsule must never cover a sibling. The
++// capsules above the hovered one move up by exactly the panel's growth, so
++// the gap between the panel's top edge and the capsule above it is the
++// unified 8 -- at every frame of the tween, whichever capsule is hovered.
++TEST(ArcMediaStripTest, ExpandingAPanelPushesOnlyTheCapsulesAboveIt) {
++  constexpr int kSlot = kMediaStripRowHeight + kMediaStripStackGap;
++  constexpr int kPanel = 99;  // header + title + controls
++  // Hovering the base capsule (index 0) of a two-session stack.
++  EXPECT_EQ(0, MediaStripCapsuleOffsetFromBase(0, 0, kPanel));
++  EXPECT_EQ(kSlot + (kPanel - kMediaStripRowHeight),
++            MediaStripCapsuleOffsetFromBase(1, 0, kPanel));
++  // Hovering the floating capsule (index 1): the base does not move, and
++  // neither does the hovered capsule itself.
++  EXPECT_EQ(0, MediaStripCapsuleOffsetFromBase(0, 1, kPanel));
++  EXPECT_EQ(kSlot, MediaStripCapsuleOffsetFromBase(1, 1, kPanel));
++  // Three capsules, middle one hovered: only the top one is displaced.
++  EXPECT_EQ(kSlot, MediaStripCapsuleOffsetFromBase(1, 1, kPanel));
++  EXPECT_EQ(2 * kSlot + (kPanel - kMediaStripRowHeight),
++            MediaStripCapsuleOffsetFromBase(2, 1, kPanel));
++  EXPECT_EQ(0, MediaStripExpansionShift(kMediaStripRowHeight));
++  EXPECT_EQ(0, MediaStripExpansionShift(0));
++}
++
++// The 8pt gap is the whole point: derive it from the two functions rather
++// than restating it, so a change to either has to keep them consistent.
++TEST(ArcMediaStripTest, ExpandedPanelKeepsTheUnifiedGapToTheCapsuleAbove) {
++  constexpr int kBaseTop = 800;
++  for (int panel = kMediaStripRowHeight; panel <= 99; ++panel) {
++    for (size_t hovered = 0; hovered <= 2; ++hovered) {
++      // The panel's bottom edge is pinned to the hovered capsule's bottom.
++      const int anchor_bottom =
++          kBaseTop -
++          MediaStripCapsuleOffsetFromBase(hovered, hovered, panel) +
++          kMediaStripRowHeight;
++      const int panel_top = anchor_bottom - panel;
++      const int above_bottom =
++          kBaseTop -
++          MediaStripCapsuleOffsetFromBase(hovered + 1, hovered, panel) +
++          kMediaStripRowHeight;
++      EXPECT_EQ(kMediaStripStackGap, panel_top - above_bottom)
++          << "panel " << panel << " hovered " << hovered;
++    }
++  }
++}
++
++// The clamp has to budget for the capsules the panel is about to displace,
++// or the topmost one is pushed through the address row.
++TEST(ArcMediaStripTest, MaxPanelHeightBudgetsForTheDisplacedCapsules) {
++  constexpr int kSlot = kMediaStripRowHeight + kMediaStripStackGap;
++  // Two overlay capsules, base hovered: both get pushed.
++  EXPECT_EQ(500 - 2 * kSlot, MediaStripMaxPanelHeight(500, 2, 0));
++  // Topmost hovered: nothing above it, so the full room is available.
++  EXPECT_EQ(500, MediaStripMaxPanelHeight(500, 2, 2));
++  // Nothing hovered, no budget to reserve.
++  EXPECT_EQ(500, MediaStripMaxPanelHeight(500, 2, kMediaStripNoHover));
++  // Never below one row, however cramped.
++  EXPECT_EQ(kMediaStripRowHeight, MediaStripMaxPanelHeight(20, 2, 0));
++  EXPECT_EQ(kMediaStripRowHeight, MediaStripMaxPanelHeight(0, 0, 0));
++}
++
++// The r5 metadata row is a plain 33pt row (single line since the artist
++// line was cut, user 2026-08-20); the scrim's fade band is a real band.
++TEST(ArcMediaStripTest, StackGeometryHoldsItsShape) {
++  EXPECT_EQ(kMediaStripRowHeight, kMediaStripMetadataRowHeight);
++  EXPECT_GT(kMediaScrimFadeHeight, 0);
++  // Card-to-card is the sidebar-wide 8 (M3.9c-pre-r2's unified gaps).
++  EXPECT_EQ(8, kMediaStripStackGap);
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -38,11 +38,13 @@
+ #include "chrome/browser/ui/views/frame/base_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
++#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+ #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+ #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
+ #include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+@@ -52,6 +54,10 @@
+ #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
+ #include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
++#include "chrome/browser/ui/helium/arc_media_strip.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h"
++#include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_view.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/tabs/public/tab_group.h"
+@@ -100,6 +106,7 @@ constexpr ShadowFrameView::ShadowAlpha k
+      .light_ambient = 0.0,
+      .dark_key = 0.6,
+      .dark_ambient = 0.0});
++
+ }  // namespace
+ 
+ DEFINE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(VerticalTabStripRegionView,
+@@ -154,10 +161,17 @@ VerticalTabStripRegionView::VerticalTabS
+   arc_address_row_->SetPaintToLayer();
+   arc_address_row_->layer()->SetFillsBoundsOpaquely(false);
+   arc_address_row_->layer()->SetMasksToBounds(true);
++  // helium-fork: the gap below the row is the favorites grid's gap, not the top
++  // row's. It is the seam the user reads against the gaps between two capsules
++  // directly under it, so it has to be the same number -- kArcTopContainerGap
++  // happens to sit next to it in this file but answers a different question
++  // (breathing room around the traffic-light row).
+   arc_address_row_->SetProperty(
+       views::kMarginsKey,
+-      gfx::Insets::TLBR(0, region_horizontal_padding, kArcTopContainerGap,
+-                        region_horizontal_padding));
++      gfx::Insets::TLBR(
++          0, region_horizontal_padding,
++          GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteGridGap),
++          region_horizontal_padding));
+ 
+   bottom_button_container_ =
+       AddChildView(std::make_unique<VerticalTabStripBottomContainer>(
+@@ -174,6 +188,47 @@ VerticalTabStripRegionView::VerticalTabS
+       gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
+                         0, region_horizontal_padding));
+ 
++  // helium-fork: the media strip pill sits under the bottom container --
++  // which is the flex child that absorbs all leftover height with its button
++  // pinned to its own top -- so it hugs the sidebar's bottom, lifted by one
++  // tab row: the user reserved that band for the future spaces switcher
++  // (2026-08-20) and nothing else may squat in it -- r5's pause-all card did
++  // and r6 removed it. The layout collapses adjacent margins (probe-measured
++  // 2026-08-20: the visible gap IS max(this, interior 6)), so the bottom
++  // margin states the whole reserved band outright: one tab row (34) plus
++  // the 8pt edge system.
++  media_strip_controller_ = std::make_unique<HeliumMediaStripController>(
++      browser_view->browser(),
++      base::BindRepeating(&VerticalTabStripRegionView::OnMediaStripModelChanged,
++                          base::Unretained(this)));
++  media_scrim_ = AddChildView(std::make_unique<HeliumMediaScrimView>());
++  media_scrim_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  media_strip_shadow_ = AddChildView(std::make_unique<HeliumCardShadowView>());
++  media_strip_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  media_strip_shadow_->SetShadowCornerRadius(helium::kMediaStripCornerRadius);
++  media_strip_shadow_->SetVisible(false);
++  media_strip_ = AddChildView(std::make_unique<HeliumMediaStripView>(
++      media_strip_controller_.get(),
++      base::BindRepeating(
++          [](VerticalTabStripRegionView* region) {
++            region->OnMediaCapsuleHovered(region->media_strip_);
++          },
++          base::Unretained(this))));
++  media_strip_->SetProperty(
++      views::kMarginsKey,
++      gfx::Insets::TLBR(
++          kBottomContainerGap, region_horizontal_padding,
++          8 + GetLayoutConstant(LayoutConstant::kVerticalTabHeight),
++          region_horizontal_padding));
++
++  // r5: the floating half of the stack -- capsules for sessions beyond the
++  // first, over the tab rows. A plain positioning host: no layer of its own
++  // (its children carry theirs) and, critically, nothing here may ever mask
++  // to bounds -- the capsules' shadow siblings overhang it on every side.
++  media_overlay_stack_ = AddChildView(std::make_unique<views::View>());
++  media_overlay_stack_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  media_overlay_stack_->SetVisible(false);
++
+   gemini_button_ = AddChildView(std::make_unique<views::View>());
+ 
+   resize_area_ = AddChildView(std::make_unique<views::ResizeArea>(this));
+@@ -205,12 +260,52 @@ VerticalTabStripRegionView::VerticalTabS
+       kExpandOnHoverShadowElevation, kExpandOnHoverShadowAlpha));
+   shadow_frame_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+ 
++  // helium-fork: the active tab row's floating-card shadow. It lives here
++  // and not inside the tab strip: every layer on the way down (the scroll
++  // viewport, TabStripView) masks to bounds, which decapitated the ring
++  // whenever the active row was the list's first or last (probe 2026-08-20).
++  // The region's layer never clips; child index 0 stacks the shadow's layer
++  // beneath the tab strip's, so rows and their text paint over the ring. The
++  // unpinned container aims it -- it knows rows, drags and the scroll
++  // offset.
++  active_row_shadow_ =
++      AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
++  active_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  active_row_shadow_->SetVisible(false);
++  pinned_row_shadow_ =
++      AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
++  pinned_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  pinned_row_shadow_->SetVisible(false);
++
++  // helium-fork: the media strip's hover panel -- last child, so it paints
++  // above the tab list it overlays; ignored by the layout, positioned from
++  // the pill's bounds in Layout(). Expanding it therefore cannot reflow
++  // anything.
++  media_strip_panel_shadow_ =
++      AddChildView(std::make_unique<HeliumCardShadowView>());
++  media_strip_panel_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  media_strip_panel_shadow_->SetShadowCornerRadius(
++      helium::kMediaStripCornerRadius);
++  media_strip_panel_shadow_->SetVisible(false);
++  media_strip_panel_ =
++      AddChildView(std::make_unique<HeliumMediaStripExpandedView>(
++          media_strip_controller_.get(),
++          base::BindRepeating(
++              &VerticalTabStripRegionView::OnMediaStripPointerLeft,
++              base::Unretained(this)),
++          base::BindRepeating(&VerticalTabStripRegionView::LayoutMediaStack,
++                              base::Unretained(this))));
++  media_strip_panel_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  media_strip_->SetShadowFrame(media_strip_shadow_);
++  media_strip_panel_->SetShadowFrame(media_strip_panel_shadow_);
++
+   SetNotifyEnterExitOnChild(true);
+   UpdateColors();
+   UpdateInteriorMargin();
+ }
+ 
+ VerticalTabStripRegionView::~VerticalTabStripRegionView() {
++  media_strip_hover_lock_.reset();
+   for (const auto& lock : hover_locks_) {
+     lock->ClearRegionViewOnDestruction();
+   }
+@@ -293,6 +388,17 @@ bool VerticalTabStripRegionView::IsPosit
+     return false;
+   }
+ 
++  // helium-fork: the media strip and its hover panel overlay the bottom
++  // container's empty stretch, and that stretch is checked next and reads
++  // its empty areas as caption -- which swallowed every click on the panel's
++  // upper rows as a window drag (probe-hit 2026-08-19). While the strip's UI
++  // is under the pointer, it is UI, never caption.
++  if (IsHitInView(media_strip_panel_, point) ||
++      IsHitInView(media_strip_, point) ||
++      IsHitInView(media_overlay_stack_, point)) {
++    return false;
++  }
++
+   if (IsHitInView(bottom_button_container_, point)) {
+     gfx::Point point_in_child = point;
+     views::View::ConvertPointToTarget(this, bottom_button_container_,
+@@ -314,6 +420,15 @@ bool VerticalTabStripRegionView::IsPosit
+     if (!child->GetVisible()) {
+       continue;
+     }
++    // helium-fork: card shadows overhang their cards on every side (the view
++    // is the card outset by the blur reach), and the media scrim spans the
++    // sidebar's width over the empty stretch. Both are decoration --
++    // treating them as UI here would eat the window-drag area around every
++    // floating card.
++    if (views::IsViewClass<HeliumCardShadowView>(child) ||
++        views::IsViewClass<HeliumMediaScrimView>(child)) {
++      continue;
++    }
+ 
+     gfx::Point point_in_child = point;
+     views::View::ConvertPointToTarget(this, child, &point_in_child);
+@@ -465,6 +580,34 @@ void VerticalTabStripRegionView::Layout(
+       gfx::Rect(resize_area_x, 0, resize_area_width_, bounds().height()));
+   shadow_frame_->SetBoundsRect(GetLocalBounds());
+ 
++  // Lazy injection: TabStripView (and its containers) may not exist yet at
++  // construction time. Re-calling is a cheap resync.
++  if (active_row_shadow_ && tab_strip_view_) {
++    if (UnpinnedTabContainerView* const unpinned_container =
++            tab_strip_view_->GetUnpinnedTabsContainer()) {
++      unpinned_container->SetCardShadowFrame(active_row_shadow_);
++    }
++  }
++  if (pinned_row_shadow_ && tab_strip_view_) {
++    if (PinnedTabContainerView* const pinned_container =
++            tab_strip_view_->GetPinnedTabsContainer()) {
++      if (WorkspaceSidebarView* const sidebar =
++              pinned_container->workspace_view()) {
++        sidebar->SetCardShadowFrame(pinned_row_shadow_);
++      }
++    }
++  }
++
++  if (media_strip_ && media_strip_panel_) {
++    LayoutMediaStack();
++    const size_t hovered = HoveredMediaCapsuleIndex();
++    const gfx::Rect anchor = CapsuleBoundsInRegion(
++        hovered_media_capsule_ ? hovered_media_capsule_.get()
++                               : media_strip_.get());
++    media_strip_panel_->SetAnchor(anchor,
++                                  MaxMediaPanelHeightFor(anchor, hovered));
++  }
++
+   // Ensure that we update the drop arrow position so that it does not render in
+   // the collapsed state when expand on hover is active.
+   if (drop_arrow_) {
+@@ -472,6 +615,263 @@ void VerticalTabStripRegionView::Layout(
+   }
+ }
+ 
++void VerticalTabStripRegionView::OnBoundsChanged(
++    const gfx::Rect& previous_bounds) {
++  BaseTabStripRegionView::OnBoundsChanged(previous_bounds);
++  // The strip's width gate (helium::kMediaStripMinWidth) rides the sidebar's
++  // drag-resize and collapse, both of which land here.
++  UpdateMediaStripVisibility();
++}
++
++void VerticalTabStripRegionView::OnMediaStripModelChanged() {
++  SyncMediaCapsules();
++  if (media_strip_) {
++    media_strip_->UpdateFromModel();
++  }
++  if (media_strip_panel_) {
++    media_strip_panel_->UpdateFromModel();
++  }
++  UpdateMediaStripVisibility();
++}
++
++void VerticalTabStripRegionView::SyncMediaCapsules() {
++  if (!media_strip_ || !media_strip_controller_ || !media_overlay_stack_) {
++    return;
++  }
++  const std::vector<const HeliumMediaStripModel*> rows =
++      media_strip_controller_->rows();
++  // The base capsule is the oldest session -- bind order is display order
++  // (rows never reshuffle), so rows[0] keeps its slot until it dies.
++  media_strip_->SetBoundItemId(rows.empty() ? std::string()
++                                            : rows[0]->item_id);
++  std::vector<std::string> ids;
++  for (size_t i = 1; i < rows.size(); ++i) {
++    ids.push_back(rows[i]->item_id);
++  }
++  if (ids != overlay_capsule_ids_) {
++    // Rebuild on membership change only, same rule as everything else here:
++    // metadata churn updates in place and a pressed button is never deleted
++    // under the pointer.
++    if (hovered_media_capsule_ && hovered_media_capsule_ != media_strip_) {
++      hovered_media_capsule_ = nullptr;
++    }
++    for (HeliumMediaStripView* capsule : overlay_capsules_) {
++      media_overlay_stack_->RemoveChildViewT(capsule);
++    }
++    for (HeliumCardShadowView* shadow : overlay_capsule_shadows_) {
++      media_overlay_stack_->RemoveChildViewT(shadow);
++    }
++    overlay_capsules_.clear();
++    overlay_capsule_shadows_.clear();
++    for (const std::string& id : ids) {
++      // Shadow first, capsule second: the pair's paint order within the
++      // stack puts every ring under every card body.
++      HeliumCardShadowView* shadow = media_overlay_stack_->AddChildView(
++          std::make_unique<HeliumCardShadowView>());
++      shadow->SetVisible(false);
++      overlay_capsule_shadows_.push_back(shadow);
++      HeliumMediaStripView* capsule = media_overlay_stack_->AddChildView(
++          std::make_unique<HeliumMediaStripView>(
++              media_strip_controller_.get(),
++              base::BindRepeating(
++                  [](VerticalTabStripRegionView* region,
++                     size_t capsule_index) {
++                    if (capsule_index < region->overlay_capsules_.size()) {
++                      region->OnMediaCapsuleHovered(
++                          region->overlay_capsules_[capsule_index]);
++                    }
++                  },
++                  base::Unretained(this), overlay_capsules_.size())));
++      capsule->SetBoundItemId(id);
++      capsule->SetShadowFrame(shadow);
++      overlay_capsules_.push_back(capsule);
++    }
++    overlay_capsule_ids_ = ids;
++    InvalidateLayout();
++  }
++  for (HeliumMediaStripView* capsule : overlay_capsules_) {
++    capsule->UpdateFromModel();
++  }
++}
++
++size_t VerticalTabStripRegionView::HoveredMediaCapsuleIndex() const {
++  if (!hovered_media_capsule_) {
++    return helium::kMediaStripNoHover;
++  }
++  if (hovered_media_capsule_ == media_strip_) {
++    return 0;
++  }
++  for (size_t i = 0; i < overlay_capsules_.size(); ++i) {
++    if (overlay_capsules_[i] == hovered_media_capsule_) {
++      return i + 1;
++    }
++  }
++  return helium::kMediaStripNoHover;
++}
++
++int VerticalTabStripRegionView::MaxMediaPanelHeightFor(
++    const gfx::Rect& anchor,
++    size_t hovered_index) const {
++  // Up to the bottom of the address row, minus one stacked slot for every
++  // capsule the panel is about to push up: the panel may never overlap the
++  // row or the caption area, and neither may the capsules it displaces.
++  const int ceiling =
++      arc_top_container_ ? arc_top_container_->bounds().bottom() : 0;
++  return helium::MediaStripMaxPanelHeight(
++      std::max(0, anchor.bottom() - ceiling),
++      static_cast<int>(overlay_capsules_.size()), hovered_index);
++}
++
++void VerticalTabStripRegionView::LayoutMediaStack() {
++  if (!media_strip_ || !media_overlay_stack_) {
++    return;
++  }
++  const gfx::Rect strip = media_strip_->bounds();
++  // The floating stack rides directly above the base capsule, one 33pt card
++  // per extra session, stack-gapped -- plus, while a panel is open, the
++  // panel's own growth for every capsule above the hovered one. That is what
++  // keeps an expanding panel from covering its neighbours (user 2026-08-20);
++  // feeding it the panel's *live* height puts the slide on the panel's tween.
++  const size_t hovered = HoveredMediaCapsuleIndex();
++  const int panel_height = media_strip_panel_
++                               ? media_strip_panel_->panel_height()
++                               : helium::kMediaStripRowHeight;
++  const int stack_height = helium::MediaStripOverlayStackHeight(
++      static_cast<int>(overlay_capsules_.size()), hovered, panel_height);
++  media_overlay_stack_->SetBounds(strip.x(), strip.y() - stack_height,
++                                  strip.width(), stack_height);
++  for (size_t i = 0; i < overlay_capsules_.size(); ++i) {
++    const int local_y =
++        stack_height - helium::MediaStripCapsuleOffsetFromBase(
++                           i + 1, hovered, panel_height);
++    overlay_capsules_[i]->SetBounds(0, local_y, strip.width(),
++                                    helium::kMediaStripRowHeight);
++  }
++  if (media_scrim_) {
++    // The scrim covers the whole floating zone plus its fade band above,
++    // full sidebar width so the rows' own margins dissolve with them. An
++    // open panel that reaches higher than the stack extends it.
++    int top = strip.y() - stack_height;
++    if (!overlay_capsules_.empty() && media_strip_panel_ &&
++        media_strip_panel_->GetVisible()) {
++      top = std::min(top, media_strip_panel_->bounds().y());
++    }
++    const int scrim_top = top - helium::kMediaScrimFadeHeight;
++    media_scrim_->SetBounds(0, scrim_top, width(),
++                            std::max(0, strip.y() - scrim_top));
++  }
++}
++
++gfx::Rect VerticalTabStripRegionView::CapsuleBoundsInRegion(
++    const HeliumMediaStripView* capsule) const {
++  if (!capsule) {
++    return gfx::Rect();
++  }
++  if (capsule == media_strip_) {
++    return capsule->bounds();
++  }
++  gfx::Rect bounds = capsule->bounds();
++  if (media_overlay_stack_) {
++    bounds.Offset(media_overlay_stack_->bounds().OffsetFromOrigin());
++  }
++  return bounds;
++}
++
++bool VerticalTabStripRegionView::AnyMediaAreaHovered() const {
++  if (media_strip_panel_ && media_strip_panel_->IsMouseHovered()) {
++    return true;
++  }
++  if (media_strip_ && media_strip_->IsMouseHovered()) {
++    return true;
++  }
++  for (const HeliumMediaStripView* capsule : overlay_capsules_) {
++    if (capsule->IsMouseHovered()) {
++      return true;
++    }
++  }
++  return false;
++}
++
++void VerticalTabStripRegionView::OnMediaCapsuleHovered(
++    HeliumMediaStripView* capsule) {
++  if (!capsule || !media_strip_panel_) {
++    return;
++  }
++  hovered_media_capsule_ = capsule;
++  media_strip_panel_->SetBoundItemId(capsule->bound_item_id());
++  const gfx::Rect anchor = CapsuleBoundsInRegion(capsule);
++  media_strip_panel_->SetAnchor(
++      anchor, MaxMediaPanelHeightFor(anchor, HoveredMediaCapsuleIndex()));
++  SetMediaStripExpanded(true);
++}
++
++void VerticalTabStripRegionView::UpdateMediaStripVisibility() {
++  if (!media_strip_ || !media_strip_controller_) {
++    return;
++  }
++  const int strip_width =
++      width() - 2 * GetLayoutConstant(
++                        LayoutConstant::kVerticalTabStripHorizontalPadding);
++  const bool shown = helium::ShouldShowSidebarMediaStrip(
++      media_strip_controller_->ready_row_count(), strip_width);
++  media_strip_->SetShown(shown);
++  // The floating half: capsules for sessions beyond the first, plus the
++  // scrim under them -- one shown flag, one trigger frame, one 200ms fade
++  // for all of it (M3.3h).
++  const bool stack_shown = shown && !overlay_capsules_.empty();
++  if (media_overlay_stack_) {
++    media_overlay_stack_->SetVisible(stack_shown);
++  }
++  for (HeliumMediaStripView* capsule : overlay_capsules_) {
++    capsule->SetShown(stack_shown);
++  }
++  if (media_scrim_) {
++    media_scrim_->SetShown(stack_shown);
++  }
++  if (!shown) {
++    SetMediaStripExpanded(false);
++  }
++}
++
++void VerticalTabStripRegionView::SetMediaStripExpanded(bool expanded) {
++  if (!media_strip_panel_) {
++    return;
++  }
++  if (expanded && (!media_strip_ || !media_strip_->shown())) {
++    return;
++  }
++  if (media_strip_panel_->expanded() == expanded) {
++    return;
++  }
++  media_strip_panel_->SetExpanded(expanded);
++  if (expanded) {
++    // Hovering the panel must not also flip the collapsed sidebar's
++    // expand-on-hover state under it.
++    if (!media_strip_hover_lock_) {
++      media_strip_hover_lock_ =
++          GetExpandOnHoverLock(ExpandOnHoverLockType::kKeepCurrentState);
++    }
++  } else {
++    media_strip_hover_lock_.reset();
++  }
++}
++
++void VerticalTabStripRegionView::OnMediaStripPointerLeft() {
++  // Leaving one media view is only leaving the media *area* if the cursor is
++  // on none of them; IsMouseHovered() re-checks against the live cursor, so
++  // a stray or swallowed exit event costs nothing.
++  if (AnyMediaAreaHovered()) {
++    return;
++  }
++  if (media_strip_panel_ && media_strip_panel_->expanded()) {
++    SetMediaStripExpanded(false);
++  }
++  // hovered_media_capsule_ deliberately stays set until the collapse tween
++  // lands: it is what the shrinking panel is anchored to *and* what tells
++  // LayoutMediaStack how far the capsules above it are still pushed up.
++  // Clearing it here made them snap home on the first frame of the collapse.
++}
++
+ views::View* VerticalTabStripRegionView::GetDefaultFocusableChild() {
+   const int active_index = tab_strip_model_->active_index();
+   if (active_index != TabStripModel::kNoTab) {
+@@ -554,10 +954,16 @@ void VerticalTabStripRegionView::OnMouse
+     mouse_exit_timer_.Stop();
+   }
+   UpdateExpandOnHoverState(true);
++  // The media panel's own exit event can be swallowed when the pointer warps
++  // straight into the web contents (macOS delivers no views-side exit then),
++  // so the region's stream doubles as the collapse signal -- the same
++  // derive-from-ground-truth medicine as the address row's extensions.
++  OnMediaStripPointerLeft();
+ }
+ 
+ void VerticalTabStripRegionView::OnMouseExited(const ui::MouseEvent& event) {
+   HandleMouseExited();
++  OnMediaStripPointerLeft();
+ }
+ 
+ void VerticalTabStripRegionView::HandleMouseExited() {
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -34,7 +34,12 @@
+ 
+ class ArcSidebarTopContainer;
+ class BrowserView;
++class HeliumMediaScrimView;
++class HeliumMediaStripController;
++class HeliumMediaStripExpandedView;
++class HeliumMediaStripView;
+ class VerticalTabStripBottomContainer;
++class HeliumCardShadowView;
+ class ShadowFrameView;
+ 
+ namespace tabs {
+@@ -121,6 +126,7 @@ class VerticalTabStripRegionView final
+   void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnMouseMoved(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
++  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
+ 
+   void OnTabGroupFocusChanged(
+       std::optional<tab_groups::TabGroupId> new_focused_group_id,
+@@ -262,6 +268,65 @@ class VerticalTabStripRegionView final
+   raw_ptr<views::View> arc_address_row_ = nullptr;
+   raw_ptr<VerticalTabStripBottomContainer> bottom_button_container_ = nullptr;
+   raw_ptr<views::View> gemini_button_ = nullptr;
++
++  // helium-fork: the Arc-style bottom media strip. The controller owns the
++  // data (media session mojo, tab-strip observation); the pill is a layout
++  // child right under the bottom container; the hover panel is an overlay
++  // child added last so it paints above the tab list and never reflows it.
++  // See chrome/browser/ui/helium/arc_media_strip.h for the whole spec.
++  std::unique_ptr<HeliumMediaStripController> media_strip_controller_;
++  raw_ptr<HeliumMediaStripView> media_strip_ = nullptr;
++  raw_ptr<HeliumMediaStripExpandedView> media_strip_panel_ = nullptr;
++  // The strip's and the panel's floating-card shadows: sibling
++  // Card shadows (HeliumCardShadowView) inserted around their targets in the
++  // child order that stacks them correctly, driven by the
++  // targets themselves (bounds + fade opacity).
++  raw_ptr<HeliumCardShadowView> media_strip_shadow_ = nullptr;
++  raw_ptr<HeliumCardShadowView> media_strip_panel_shadow_ = nullptr;
++  // The active tab row's floating-card shadow. Owned here -- the scroll
++  // machinery below TabStripView masks to bounds and would clip it -- and
++  // aimed by the unpinned container (injected lazily from Layout()).
++  raw_ptr<HeliumCardShadowView> active_row_shadow_ = nullptr;
++  // Its twin for the active *pinned* row (aimed by WorkspaceSidebarView; the
++  // active tab is unique, so at most one of the two is ever lit).
++  raw_ptr<HeliumCardShadowView> pinned_row_shadow_ = nullptr;
++  std::unique_ptr<ExpandOnHoverLock> media_strip_hover_lock_;
++  // r5: one capsule per session. media_strip_ is the base capsule (oldest
++  // session, keeps the layout-flow slot); every later session gets a
++  // floating capsule inside media_overlay_stack_ (an overlay over the tab
++  // rows), each with its own shadow sibling in the stack. The scrim fades
++  // the rows out underneath the floating portion. r6 retired the
++  // pause-all/mute-all card that used to reveal under the base capsule (the
++  // user only wants the per-session controls); the 42pt band it borrowed
++  // stays reserved for the spaces switcher.
++  raw_ptr<HeliumMediaScrimView> media_scrim_ = nullptr;
++  raw_ptr<views::View> media_overlay_stack_ = nullptr;
++  std::vector<raw_ptr<HeliumMediaStripView>> overlay_capsules_;
++  std::vector<raw_ptr<HeliumCardShadowView>> overlay_capsule_shadows_;
++  std::vector<std::string> overlay_capsule_ids_;
++  // The capsule the panel is currently expanded out of (base or overlay);
++  // null when collapsed.
++  raw_ptr<HeliumMediaStripView> hovered_media_capsule_ = nullptr;
++
++  void OnMediaStripModelChanged();
++  void UpdateMediaStripVisibility();
++  void SetMediaStripExpanded(bool expanded);
++  void OnMediaStripPointerLeft();
++  void SyncMediaCapsules();
++  void OnMediaCapsuleHovered(HeliumMediaStripView* capsule);
++  gfx::Rect CapsuleBoundsInRegion(const HeliumMediaStripView* capsule) const;
++  bool AnyMediaAreaHovered() const;
++  // Stack index of `hovered_media_capsule_` (0 = base capsule, j = overlay
++  // capsule j-1), or helium::kMediaStripNoHover when nothing is expanded.
++  size_t HoveredMediaCapsuleIndex() const;
++  // Positions the overlay capsules, their shadows and the scrim. Called from
++  // Layout() and again on every frame of the panel's expand tween, so the
++  // capsules above an opening panel slide out of its way on the same
++  // timeline instead of being covered by it (r6, user 2026-08-20).
++  void LayoutMediaStack();
++  // How tall the panel may grow out of `hovered_index` without pushing the
++  // capsules above it past the address row.
++  int MaxMediaPanelHeightFor(const gfx::Rect& anchor, size_t hovered_index) const;
+   raw_ptr<views::ResizeArea> resize_area_ = nullptr;
+   raw_ptr<ShadowFrameView> shadow_frame_ = nullptr;
+   int resize_area_width_;
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.cc
+@@ -0,0 +1,512 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h"
++
++#include <algorithm>
++#include <list>
++#include <utility>
++
++#include "base/containers/flat_map.h"
++#include "base/no_destructor.h"
++#include "base/unguessable_token.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/global_media_controls/media_notification_service.h"
++#include "chrome/browser/ui/global_media_controls/media_notification_service_factory.h"
++#include "chrome/browser/ui/helium/arc_media_strip.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/tabs/tab_muted_utils.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "content/public/browser/media_session.h"
++#include "content/public/browser/media_session_service.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "mojo/public/cpp/bindings/receiver.h"
++#include "services/media_session/public/cpp/media_image.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++
++namespace {
++
++content::WebContents* WebContentsForItem(const std::string& item_id) {
++  return content::MediaSession::GetWebContentsFromRequestId(item_id);
++}
++
++}  // namespace
++
++HeliumMediaStripModel::HeliumMediaStripModel() = default;
++HeliumMediaStripModel::HeliumMediaStripModel(const HeliumMediaStripModel&) =
++    default;
++HeliumMediaStripModel& HeliumMediaStripModel::operator=(
++    const HeliumMediaStripModel&) = default;
++HeliumMediaStripModel::~HeliumMediaStripModel() = default;
++
++// One live session's connections and row model. Self-reports through the
++// owner; the two "session ended" callbacks delete |this| via RemoveRow, so
++// they return immediately afterwards. Deleting the mojo receivers from
++// within their own dispatch and the WebContentsObserver from within
++// WebContentsDestroyed are both supported patterns (the old single-session
++// code already reset its receivers mid-dispatch).
++class HeliumMediaStripController::SessionRow
++    : public content::WebContentsObserver,
++      public media_session::mojom::MediaControllerObserver,
++      public media_session::mojom::MediaSessionObserver,
++      public media_session::mojom::MediaControllerImageObserver {
++ public:
++  SessionRow(HeliumMediaStripController* owner,
++             const std::string& item_id,
++             content::WebContents* contents,
++             media_session::mojom::MediaControllerManager* manager)
++      : content::WebContentsObserver(contents), owner_(owner) {
++    model_.item_id = item_id;
++    model_.muted = contents->IsAudioMuted();
++    BindController(manager);
++    BindSession();
++  }
++  SessionRow(const SessionRow&) = delete;
++  SessionRow& operator=(const SessionRow&) = delete;
++  ~SessionRow() override = default;
++
++  // Rebinds when the item re-enters the manager's active list. Losing audio
++  // focus (a muted tab, an expired pause) leaves the old MediaController
++  // remote connected but *mute*: no disconnect, no updates, dead actions
++  // (probe-hit 2026-08-20 -- a paused row kept its playing glyph forever).
++  // A fresh controller's AddObserver replays the latest state, healing the
++  // model in the same breath.
++  void SetInActiveList(bool in_list,
++                       media_session::mojom::MediaControllerManager* manager) {
++    if (in_list && !in_active_list_ && manager) {
++      BindController(manager);
++    }
++    in_active_list_ = in_list;
++  }
++
++  const HeliumMediaStripModel& model() const { return model_; }
++  media_session::mojom::MediaController* media_controller() {
++    return media_controller_.get();
++  }
++  // Every transport action goes here, never through media_controller(): this
++  // one is the WebContents' own session and survives audio focus loss, which
++  // the controller does not (see the class comment). content::MediaSession
++  // rather than the mojom interface it implements -- DidReceiveAction() is
++  // only on the concrete one, and the pause path needs it.
++  content::MediaSession* session() {
++    content::WebContents* const contents = web_contents();
++    return contents ? content::MediaSession::GetIfExists(contents) : nullptr;
++  }
++  bool session_active() const { return session_active_; }
++  bool session_inactive() const { return session_inactive_; }
++
++  // content::WebContentsObserver:
++  void DidUpdateAudioMutingState(bool muted) override {
++    model_.muted = muted;
++    owner_->NotifyModelChanged();
++  }
++  void WebContentsDestroyed() override {
++    owner_->RemoveRow(this);  // Deletes |this|.
++  }
++
++  // media_session::mojom::MediaControllerObserver and
++  // media_session::mojom::MediaSessionObserver: the four overlapping methods
++  // have identical C++ signatures, so each override below serves both
++  // bindings. Only the controller line ever delivers a null session info --
++  // the direct line's parameter is non-nullable in mojom -- so the teardown
++  // branch keeps meaning exactly what it meant before r6.
++  void MediaSessionInfoChanged(
++      media_session::mojom::MediaSessionInfoPtr session_info) override {
++    if (!session_info) {
++      // Audio focus abandoned -- the session is over.
++      owner_->RemoveRow(this);  // Deletes |this|.
++      return;
++    }
++    // The first info is what makes the row real -- appearing before it would
++    // show a row with every control in its zero state for a frame.
++    model_.has_item = true;
++    model_.is_playing = session_info->playback_state ==
++                        media_session::mojom::MediaPlaybackState::kPlaying;
++    // Audio focus, which is *not* the playback state (a session commonly
++    // holds focus while paused, and commonly plays on without it -- a muted
++    // tab, or one that another app took the speaker from). The transport
++    // dispatch needs it because MediaSessionImpl::Suspend() bails on
++    // !IsActive() and Stop() DCHECKs on kInactive.
++    using SessionState = media_session::mojom::MediaSessionInfo::SessionState;
++    session_active_ = session_info->state == SessionState::kActive ||
++                      session_info->state == SessionState::kDucking;
++    session_inactive_ = session_info->state == SessionState::kInactive;
++    model_.pip_active =
++        session_info->picture_in_picture_state ==
++        media_session::mojom::MediaPictureInPictureState::kInPictureInPicture;
++    owner_->NotifyModelChanged();
++  }
++  void MediaSessionMetadataChanged(
++      const std::optional<media_session::MediaMetadata>& metadata) override {
++    model_.title = metadata ? metadata->title : std::u16string();
++    model_.artist = metadata ? metadata->artist : std::u16string();
++    model_.source_title = metadata ? metadata->source_title : std::u16string();
++    owner_->NotifyModelChanged();
++  }
++  void MediaSessionActionsChanged(
++      const std::vector<media_session::mojom::MediaSessionAction>& actions)
++      override {
++    const auto has =
++        [&actions](media_session::mojom::MediaSessionAction action) {
++          return std::find(actions.begin(), actions.end(), action) !=
++                 actions.end();
++        };
++    model_.can_previous =
++        has(media_session::mojom::MediaSessionAction::kPreviousTrack);
++    model_.can_next =
++        has(media_session::mojom::MediaSessionAction::kNextTrack);
++    model_.can_pip =
++        has(media_session::mojom::MediaSessionAction::kEnterPictureInPicture) ||
++        has(media_session::mojom::MediaSessionAction::kExitPictureInPicture);
++    owner_->NotifyModelChanged();
++  }
++  void MediaSessionChanged(
++      const std::optional<base::UnguessableToken>& request_id) override {}
++  void MediaSessionPositionChanged(
++      const std::optional<media_session::MediaPosition>& position) override {}
++
++  // media_session::mojom::MediaSessionObserver only. The strip's icon comes
++  // pre-decoded from the controller's ObserveImages, so the raw image list is
++  // of no use here.
++  void MediaSessionImagesChanged(
++      const base::flat_map<media_session::mojom::MediaSessionImageType,
++                           std::vector<media_session::MediaImage>>& images)
++      override {}
++
++  // media_session::mojom::MediaControllerImageObserver:
++  void MediaControllerImageChanged(
++      media_session::mojom::MediaSessionImageType type,
++      const SkBitmap& bitmap) override {
++    if (type != media_session::mojom::MediaSessionImageType::kSourceIcon) {
++      return;
++    }
++    model_.favicon = bitmap.drawsNothing()
++                         ? gfx::ImageSkia()
++                         : gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
++    owner_->NotifyModelChanged();
++  }
++  void MediaControllerChapterImageChanged(int chapter_index,
++                                          const SkBitmap& bitmap) override {}
++
++ private:
++  void BindController(media_session::mojom::MediaControllerManager* manager) {
++    observer_receiver_.reset();
++    icon_receiver_.reset();
++    media_controller_.reset();
++    content::WebContents* const contents = web_contents();
++    if (!contents || !manager) {
++      return;
++    }
++    manager->CreateMediaControllerForSession(
++        media_controller_.BindNewPipeAndPassReceiver(),
++        content::MediaSession::GetRequestIdFromWebContents(contents));
++    // AddObserver replays the latest state, so the model fills in without a
++    // poll; has_item flips on that replayed info.
++    media_controller_->AddObserver(
++        observer_receiver_.BindNewPipeAndPassRemote());
++    media_controller_->ObserveImages(
++        media_session::mojom::MediaSessionImageType::kSourceIcon,
++        helium::kMediaStripFaviconSize, 2 * helium::kMediaStripFaviconSize,
++        icon_receiver_.BindNewPipeAndPassRemote());
++  }
++
++  // Bound once, for the row's whole life: content::MediaSession is per
++  // WebContents and outlives any number of audio focus handovers, so there is
++  // nothing here to heal and no rebinding path to get wrong.
++  void BindSession() {
++    session_observer_receiver_.reset();
++    if (content::MediaSession* const media_session = session()) {
++      media_session->AddObserver(
++          session_observer_receiver_.BindNewPipeAndPassRemote());
++    }
++  }
++
++  const raw_ptr<HeliumMediaStripController> owner_;
++  bool in_active_list_ = true;
++  bool session_active_ = false;
++  bool session_inactive_ = false;
++
++  mojo::Remote<media_session::mojom::MediaController> media_controller_;
++  mojo::Receiver<media_session::mojom::MediaControllerObserver>
++      observer_receiver_{this};
++  mojo::Receiver<media_session::mojom::MediaControllerImageObserver>
++      icon_receiver_{this};
++  mojo::Receiver<media_session::mojom::MediaSessionObserver>
++      session_observer_receiver_{this};
++
++  HeliumMediaStripModel model_;
++};
++
++HeliumMediaStripController::HeliumMediaStripController(
++    Browser* browser,
++    base::RepeatingClosure on_model_changed)
++    : browser_(browser), on_model_changed_(std::move(on_model_changed)) {
++  MediaNotificationService* const service =
++      MediaNotificationServiceFactory::GetForProfile(browser_->profile());
++  if (!service) {
++    // No service (some profile types); the strip simply never shows.
++    return;
++  }
++  item_manager_ = service->media_item_manager();
++  item_manager_observation_.Observe(item_manager_);
++  browser_->tab_strip_model()->AddObserver(this);
++  content::GetMediaSessionService().BindMediaControllerManager(
++      controller_manager_.BindNewPipeAndPassReceiver());
++  RescanItems();
++}
++
++HeliumMediaStripController::~HeliumMediaStripController() {
++  if (item_manager_) {
++    browser_->tab_strip_model()->RemoveObserver(this);
++  }
++}
++
++std::vector<const HeliumMediaStripModel*> HeliumMediaStripController::rows()
++    const {
++  std::vector<const HeliumMediaStripModel*> ready;
++  ready.reserve(rows_.size());
++  for (const std::unique_ptr<SessionRow>& row : rows_) {
++    if (row->model().has_item) {
++      ready.push_back(&row->model());
++    }
++  }
++  return ready;
++}
++
++int HeliumMediaStripController::ready_row_count() const {
++  int count = 0;
++  for (const std::unique_ptr<SessionRow>& row : rows_) {
++    if (row->model().has_item) {
++      ++count;
++    }
++  }
++  return count;
++}
++
++const HeliumMediaStripModel& HeliumMediaStripController::model() const {
++  for (const std::unique_ptr<SessionRow>& row : rows_) {
++    if (row->model().has_item) {
++      return row->model();
++    }
++  }
++  static const base::NoDestructor<HeliumMediaStripModel> kEmpty;
++  return *kEmpty;
++}
++
++void HeliumMediaStripController::TogglePlayPause(const std::string& item_id) {
++  SessionRow* const row = FindRow(item_id);
++  content::MediaSession* const session = row ? row->session() : nullptr;
++  if (!session) {
++    return;
++  }
++  // Not MediaController::ToggleSuspendResume(): that one reads the
++  // controller's *cached* session info and early-returns when it is null,
++  // which is precisely the dead-button case. The model's is_playing comes
++  // from the direct observer, so it is fresh even with no audio focus.
++  using SuspendType = media_session::mojom::MediaSession::SuspendType;
++  if (!row->model().is_playing) {
++    // Resume() routes to the site's play handler first and requests audio
++    // focus itself, so it needs no help.
++    session->Resume(SuspendType::kUI);
++    return;
++  }
++  if (row->session_active()) {
++    session->Suspend(SuspendType::kUI);
++    return;
++  }
++  // Playing without audio focus -- a muted tab, or one another app took the
++  // speaker from. Suspend() returns at its `if (!IsActive())` line *before*
++  // it would have routed the action, so it is a silent no-op here; that is
++  // the second half of the dead-button report. DidReceiveAction(kPause) is
++  // the same thing Suspend() would have done and has no focus check: it
++  // suspends every player outside the routed frame directly and hands the
++  // action to the site's own pause handler.
++  session->DidReceiveAction(media_session::mojom::MediaSessionAction::kPause);
++}
++
++void HeliumMediaStripController::PreviousTrack(const std::string& item_id) {
++  SessionRow* const row = FindRow(item_id);
++  if (content::MediaSession* const session = row ? row->session() : nullptr) {
++    session->PreviousTrack();
++  }
++}
++
++void HeliumMediaStripController::NextTrack(const std::string& item_id) {
++  SessionRow* const row = FindRow(item_id);
++  if (content::MediaSession* const session = row ? row->session() : nullptr) {
++    session->NextTrack();
++  }
++}
++
++void HeliumMediaStripController::ToggleMute(const std::string& item_id) {
++  SessionRow* const row = FindRow(item_id);
++  content::WebContents* const contents = row ? row->web_contents() : nullptr;
++  if (!contents) {
++    return;
++  }
++  // The tab's mute, exactly like the tab strip's speaker click. The model is
++  // updated from DidUpdateAudioMutingState, not here.
++  SetTabAudioMuted(contents, !contents->IsAudioMuted(),
++                   TabMutedReason::kAudioIndicator, std::string());
++}
++
++void HeliumMediaStripController::TogglePictureInPicture(
++    const std::string& item_id) {
++  SessionRow* const row = FindRow(item_id);
++  content::MediaSession* const session = row ? row->session() : nullptr;
++  if (!session) {
++    return;
++  }
++  if (row->model().pip_active) {
++    session->ExitPictureInPicture();
++  } else {
++    session->EnterPictureInPicture();
++  }
++}
++
++void HeliumMediaStripController::Dismiss(const std::string& item_id) {
++  SessionRow* const row = FindRow(item_id);
++  if (!row) {
++    return;
++  }
++  dismissed_item_ids_.insert(item_id);
++  // MediaSessionImpl::Stop() DCHECKs that the session still holds focus, and
++  // going through content::MediaSession means we can now be called when it
++  // does not. Nothing is playing in that state, so there is nothing to stop.
++  if (content::MediaSession* const session =
++          row->session_inactive() ? nullptr : row->session()) {
++    session->Stop(media_session::mojom::MediaSession::SuspendType::kUI);
++  }
++  RemoveRow(row);
++}
++
++void HeliumMediaStripController::ActivateSource(const std::string& item_id) {
++  // Local tab activation rather than MediaController::Raise(): the strip only
++  // ever binds tabs of this window (selection policy), and the mojo Raise
++  // proved a no-op here on the probe. The strip *stays* -- it shows for every
++  // session now, active tab included (user 2026-08-20; Arc hides it there).
++  SessionRow* const row = FindRow(item_id);
++  content::WebContents* const contents = row ? row->web_contents() : nullptr;
++  if (!contents) {
++    return;
++  }
++  const int index =
++      browser_->tab_strip_model()->GetIndexOfWebContents(contents);
++  if (index != TabStripModel::kNoTab) {
++    browser_->tab_strip_model()->ActivateTabAt(index);
++  }
++}
++
++void HeliumMediaStripController::OnItemListChanged() {
++  RescanItems();
++  NotifyModelChanged();
++}
++
++void HeliumMediaStripController::OnTabStripModelChanged(
++    TabStripModel* tab_strip_model,
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  // Any structural change can move a playing tab into or out of this window
++  // -- and a tab dragged *in* arrives with its item already in the
++  // profile-wide manager, so OnItemListChanged never fires for it. Rescan on
++  // everything; it is a handful of id lookups.
++  RescanItems();
++  NotifyModelChanged();
++}
++
++void HeliumMediaStripController::RescanItems() {
++  if (!item_manager_) {
++    return;
++  }
++  const std::list<std::string> id_list = item_manager_->GetActiveItemIds();
++  const std::vector<std::string> ids(id_list.begin(), id_list.end());
++
++  // Forget dismissals whose sessions are gone, so the same site playing
++  // again later is a fresh item.
++  base::flat_set<std::string> still_active_dismissed;
++  for (const std::string& id : ids) {
++    if (dismissed_item_ids_.contains(id)) {
++      still_active_dismissed.insert(id);
++    }
++  }
++  dismissed_item_ids_ = std::move(still_active_dismissed);
++
++  TabStripModel* const tab_strip_model = browser_->tab_strip_model();
++  std::vector<helium::MediaStripItemFacts> facts;
++  facts.reserve(ids.size());
++  for (const std::string& id : ids) {
++    content::WebContents* const contents = WebContentsForItem(id);
++    helium::MediaStripItemFacts item;
++    // Cast/presentation items have no WebContents and fall out here; the
++    // strip is session media only (v1).
++    item.in_this_window = contents &&
++                          tab_strip_model->GetIndexOfWebContents(contents) !=
++                              TabStripModel::kNoTab;
++    item.dismissed = dismissed_item_ids_.contains(id);
++    facts.push_back(item);
++  }
++
++  // Bind rows for new eligible items. Append order is display order; an
++  // already-bound row just stays where it is (stickiness: the list decides
++  // who joins, the four end-of-life signals decide who leaves).
++  if (controller_manager_) {
++    for (const int index : helium::SelectMediaStripItems(facts)) {
++      const std::string& id = ids[static_cast<size_t>(index)];
++      if (!FindRow(id)) {
++        rows_.push_back(std::make_unique<SessionRow>(
++            this, id, WebContentsForItem(id), controller_manager_.get()));
++      }
++    }
++  }
++
++  // Rebind rows whose items came back to the active list (see
++  // SessionRow::SetInActiveList).
++  const base::flat_set<std::string> active_ids(ids.begin(), ids.end());
++  for (const std::unique_ptr<SessionRow>& row : rows_) {
++    row->SetInActiveList(active_ids.contains(row->model().item_id),
++                         controller_manager_.get());
++  }
++
++  // The one membership signal the sessions cannot deliver themselves: the
++  // tab left this window (detached, not destroyed).
++  std::erase_if(rows_, [tab_strip_model](
++                           const std::unique_ptr<SessionRow>& row) {
++    content::WebContents* const contents = row->web_contents();
++    return !contents || tab_strip_model->GetIndexOfWebContents(contents) ==
++                            TabStripModel::kNoTab;
++  });
++}
++
++HeliumMediaStripController::SessionRow* HeliumMediaStripController::FindRow(
++    const std::string& item_id) const {
++  if (item_id.empty()) {
++    return nullptr;
++  }
++  for (const std::unique_ptr<SessionRow>& row : rows_) {
++    if (row->model().item_id == item_id) {
++      return row.get();
++    }
++  }
++  return nullptr;
++}
++
++void HeliumMediaStripController::RemoveRow(SessionRow* row) {
++  const auto it = std::find_if(
++      rows_.begin(), rows_.end(),
++      [row](const std::unique_ptr<SessionRow>& owned) {
++        return owned.get() == row;
++      });
++  if (it == rows_.end()) {
++    return;
++  }
++  rows_.erase(it);
++  NotifyModelChanged();
++}
++
++void HeliumMediaStripController::NotifyModelChanged() {
++  if (on_model_changed_) {
++    on_model_changed_.Run();
++  }
++}
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h
+@@ -0,0 +1,186 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_MEDIA_STRIP_CONTROLLER_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_MEDIA_STRIP_CONTROLLER_H_
++
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/containers/flat_set.h"
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "components/global_media_controls/public/media_item_manager.h"
++#include "components/global_media_controls/public/media_item_manager_observer.h"
++#include "mojo/public/cpp/bindings/remote.h"
++#include "services/media_session/public/mojom/media_controller.mojom.h"
++#include "services/media_session/public/mojom/media_session.mojom.h"
++#include "ui/gfx/image/image_skia.h"
++
++class Browser;
++
++namespace content {
++class WebContents;
++}
++
++// helium-fork: everything one row of the sidebar media strip shows, in one
++// struct the views can render without asking anything else. Pushed whole on
++// every change; `has_item` flips true only once the row's first session info
++// has arrived, so a row never appears half-populated (the fork's "everything
++// in one operation appears together" rule).
++struct HeliumMediaStripModel {
++  HeliumMediaStripModel();
++  HeliumMediaStripModel(const HeliumMediaStripModel&);
++  HeliumMediaStripModel& operator=(const HeliumMediaStripModel&);
++  ~HeliumMediaStripModel();
++
++  // The MediaItemManager item id (== the media session request id), the
++  // stable identity the view diffs rows by and the buttons address.
++  std::string item_id;
++  bool has_item = false;
++  bool is_playing = false;
++  bool can_previous = false;
++  bool can_next = false;
++  bool can_pip = false;
++  bool pip_active = false;
++  bool muted = false;
++  std::u16string title;
++  std::u16string artist;
++  std::u16string source_title;
++  gfx::ImageSkia favicon;
++};
++
++// helium-fork: the data half of the sidebar media strip (arc_media_strip.h
++// holds the policy, HeliumMediaStripView the pixels).
++//
++// One SessionRow per live media session in this window, in *bind order* --
++// stable, so a pause or a new track cannot reshuffle the list. Membership is
++// decided by SelectMediaStripItems() over the MediaItemManager's active ids,
++// but a bound row is sticky: muting the tab (the strip's own volume button!)
++// or a long pause drops the session out of the manager's *active* list while
++// the session, the tab and our MediaController binding all stay alive --
++// evicting by list would strand the user with no way to unmute (probe-hit
++// 2026-08-19). A row leaves on exactly four signals: its WebContents dies,
++// its session's info goes null (audio focus abandoned), its tab leaves this
++// window, or the user dismisses it.
++//
++// Each row deliberately binds its own MediaController mojo remote instead of
++// taking the MediaSessionNotificationItem's view slot: SetView() is a single
++// slot, and a persistent strip in it would fight the media dialog bubble over
++// the same item. MediaControllerManager explicitly supports any number of
++// controllers per session, so the strip observes and drives each session
++// directly and the dialog keeps working untouched.
++//
++// But a MediaController is *only* as durable as the session's audio focus:
++// AudioFocusManager::CreateMediaControllerForSession only binds while the id
++// is on the focus stack, and the MediaController itself is owned by the
++// AudioFocusRequest -- abandon focus (a long pause, a muted tab, another app
++// taking the speaker) and the pipe dies without a word. Rebinding cannot help
++// either: the id is off the stack, so the receiver is dropped silently. The
++// button then does nothing at all, which is what the user hit ("sometimes it
++// just will not pause", 2026-08-20).
++//
++// So every row runs two lines to the same session (r6):
++//   * the MediaController, for membership, teardown (null session info) and
++//     the pre-decoded source icon;
++//   * a *direct* content::MediaSession -- one per WebContents, wholly
++//     independent of audio focus -- which is both the authoritative source of
++//     playback state / actions / metadata and the target of every transport
++//     action. It cannot go zombie, so the buttons cannot go dead.
++// The two overlapping observer methods have identical C++ signatures, so one
++// override serves both bindings; only the controller line ever passes null.
++//
++// Mute is the tab's, not the session's: MediaController::SetMute() silently
++// no-ops unless the session has exactly one player and never advertises the
++// action, so the strip mutes the WebContents the way the tab strip's speaker
++// icon does. The muted bit is fed back only by DidUpdateAudioMutingState, so
++// mutes from anywhere (tab context menu included) stay in sync.
++class HeliumMediaStripController
++    : public global_media_controls::MediaItemManagerObserver,
++      public TabStripModelObserver {
++ public:
++  HeliumMediaStripController(Browser* browser,
++                             base::RepeatingClosure on_model_changed);
++  HeliumMediaStripController(const HeliumMediaStripController&) = delete;
++  HeliumMediaStripController& operator=(const HeliumMediaStripController&) =
++      delete;
++  ~HeliumMediaStripController() override;
++
++  // The rows that are ready to render (first session info arrived), in bind
++  // order. Pointers are owned by the controller and valid until the next
++  // model-changed notification.
++  std::vector<const HeliumMediaStripModel*> rows() const;
++  int ready_row_count() const;
++
++  // The single-session strip's row: the first ready one, or an empty model
++  // when there is none (has_item false). The single-pill UI reads this and
++  // uses the parameterless button methods below; the list UI addresses rows
++  // by item id.
++  const HeliumMediaStripModel& model() const;
++
++  // The strip's buttons, addressed to one row.
++  void TogglePlayPause(const std::string& item_id);
++  void PreviousTrack(const std::string& item_id);
++  void NextTrack(const std::string& item_id);
++  void ToggleMute(const std::string& item_id);
++  void TogglePictureInPicture(const std::string& item_id);
++  // The X: stop the session and keep this item out of the strip until the
++  // session itself goes away.
++  void Dismiss(const std::string& item_id);
++  // The favicon or any of the row's text: bring the playing tab forward. The
++  // strip stays -- it shows for every session now, active tab included (user
++  // 2026-08-20; Arc hides it there).
++  void ActivateSource(const std::string& item_id);
++
++  // global_media_controls::MediaItemManagerObserver:
++  void OnItemListChanged() override;
++  void OnMediaDialogOpened() override {}
++  void OnMediaDialogClosed() override {}
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(
++      TabStripModel* tab_strip_model,
++      const TabStripModelChange& change,
++      const TabStripSelectionChange& selection) override;
++
++ private:
++  // One live session: its mojo binding, its tab observation, its row model.
++  // Owns nothing but connections; tells the controller when its model
++  // changed or its session ended.
++  class SessionRow;
++
++  // Re-derives the row set from the manager's active ids: prunes stale
++  // dismissals, binds rows for new eligible items (append -- bind order is
++  // the display order), and drops rows whose tab left this window. Never
++  // drops a row merely for leaving the active list (stickiness, above).
++  void RescanItems();
++  SessionRow* FindRow(const std::string& item_id) const;
++  // Removes `row` and notifies. Safe to call from the row's own callbacks --
++  // the caller must return immediately afterwards.
++  void RemoveRow(SessionRow* row);
++  void NotifyModelChanged();
++
++  const raw_ptr<Browser> browser_;
++  const base::RepeatingClosure on_model_changed_;
++
++  raw_ptr<global_media_controls::MediaItemManager> item_manager_ = nullptr;
++  base::ScopedObservation<global_media_controls::MediaItemManager,
++                          global_media_controls::MediaItemManagerObserver>
++      item_manager_observation_{this};
++
++  mojo::Remote<media_session::mojom::MediaControllerManager>
++      controller_manager_;
++
++  // Bind order == display order.
++  std::vector<std::unique_ptr<SessionRow>> rows_;
++
++  // Items the user closed from the strip. Pruned as the sessions leave the
++  // active list, so a site that starts playing again gets its strip back.
++  base::flat_set<std::string> dismissed_item_ids_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_MEDIA_STRIP_CONTROLLER_H_
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_view.cc
+@@ -0,0 +1,677 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_view.h"
++
++#include <memory>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "cc/paint/paint_flags.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_media_strip.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
++#include "components/strings/grit/components_strings.h"
++#include "components/vector_icons/vector_icons.h"
++#include "skia/ext/image_operations.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/models/image_model.h"
++#include "ui/compositor/layer.h"
++#include "ui/color/color_provider.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/image/image_skia_operations.h"
++#include "ui/gfx/skia_paint_util.h"
++#include "ui/strings/grit/ui_strings.h"
++#include "ui/views/background.h"
++#include "ui/views/controls/button/button.h"
++#include "ui/views/controls/image_view.h"
++
++namespace {
++
++// One glyph button of the strip. No hover backplate: Arc's strip icons are
++// bare glyphs whose color carries the enabled state.
++std::unique_ptr<views::ImageButton> MakeStripButton(
++    base::RepeatingClosure pressed) {
++  auto button = std::make_unique<views::ImageButton>(
++      base::BindRepeating([](base::RepeatingClosure cb) { cb.Run(); },
++                          std::move(pressed)));
++  button->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
++  button->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
++  return button;
++}
++
++// Resolves a per-capsule action id at *press* time: bound id if that row is
++// still alive, else the controller's primary row -- so a rebind between
++// press-down and press-up never fires at the wrong tab.
++std::string ResolveItemId(HeliumMediaStripController* controller,
++                          const std::string& bound_item_id) {
++  if (!bound_item_id.empty()) {
++    for (const HeliumMediaStripModel* row : controller->rows()) {
++      if (row->item_id == bound_item_id) {
++        return bound_item_id;
++      }
++    }
++  }
++  return controller->model().item_id;
++}
++
++const HeliumMediaStripModel& ResolveRow(
++    HeliumMediaStripController* controller,
++    const std::string& bound_item_id) {
++  if (!bound_item_id.empty()) {
++    for (const HeliumMediaStripModel* row : controller->rows()) {
++      if (row->item_id == bound_item_id) {
++        return *row;
++      }
++    }
++  }
++  return controller->model();
++}
++
++void CenterViewAt(views::View* view, int center_x, int center_y, int size) {
++  view->SetBounds(center_x - size / 2, center_y - size / 2, size, size);
++}
++
++void SetGlyph(views::ImageButton* button,
++              const gfx::VectorIcon& icon,
++              SkColor color,
++              int size) {
++  button->SetImageModel(views::Button::STATE_NORMAL,
++                        ui::ImageModel::FromVectorIcon(icon, color, size));
++  // Disabled state shares the image; the color already encodes it.
++  button->SetImageModel(views::Button::STATE_DISABLED,
++                        ui::ImageModel::FromVectorIcon(icon, color, size));
++}
++
++void PaintStripSurface(gfx::Canvas* canvas,
++                       const gfx::Rect& bounds,
++                       SkColor surface) {
++  cc::PaintFlags fill;
++  fill.setStyle(cc::PaintFlags::kFill_Style);
++  fill.setAntiAlias(true);
++  fill.setColor(surface);
++  canvas->DrawRoundRect(gfx::RectF(bounds), helium::kMediaStripCornerRadius,
++                        fill);
++  // Borderless by design: the card's elevation is carried entirely by its
++  // shadow (Dia-measured 2026-08-20), painted by a sibling HeliumCardShadowView
++  // -- this view's own paint is clipped to its bounds.
++}
++
++// The five control slots shared by the pill and the panel's bottom row.
++struct StripControls {
++  views::ImageButton* favicon;
++  views::ImageButton* previous;
++  views::ImageButton* play_pause;
++  views::ImageButton* next;
++  views::ImageButton* mute;
++};
++
++void LayoutStripControls(const StripControls& controls,
++                         int width,
++                         int center_y) {
++  views::View* const slots[5] = {controls.favicon, controls.previous,
++                                 controls.play_pause, controls.next,
++                                 controls.mute};
++  for (int i = 0; i < 5; ++i) {
++    // Buttons get a hit target comfortably larger than the glyph.
++    CenterViewAt(slots[i], helium::MediaStripSlotCenter(width, i), center_y,
++                 helium::kMediaStripRowHeight);
++  }
++}
++
++void UpdateStripControls(const StripControls& controls,
++                         const HeliumMediaStripModel& model,
++                         SkColor surface) {
++  const SkColor enabled_color =
++      helium::GetMediaStripIconColor(surface, /*enabled=*/true);
++  const SkColor disabled_color =
++      helium::GetMediaStripIconColor(surface, /*enabled=*/false);
++
++  controls.favicon->SetTooltipText(model.source_title);
++  controls.previous->SetTooltipText(l10n_util::GetStringUTF16(
++      IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PREVIOUS_TRACK));
++  controls.play_pause->SetTooltipText(l10n_util::GetStringUTF16(
++      model.is_playing ? IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PAUSE
++                       : IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_PLAY));
++  controls.next->SetTooltipText(l10n_util::GetStringUTF16(
++      IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_NEXT_TRACK));
++  controls.mute->SetTooltipText(l10n_util::GetStringUTF16(
++      model.muted ? IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_UNMUTE
++                  : IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_MUTE));
++
++  if (model.favicon.isNull()) {
++    SetGlyph(controls.favicon, vector_icons::kGlobeIcon, enabled_color,
++             helium::kMediaStripFaviconSize);
++  } else {
++    controls.favicon->SetImageModel(
++        views::Button::STATE_NORMAL,
++        ui::ImageModel::FromImageSkia(
++            gfx::ImageSkiaOperations::CreateResizedImage(
++                model.favicon, skia::ImageOperations::RESIZE_BEST,
++                gfx::Size(helium::kMediaStripFaviconSize,
++                          helium::kMediaStripFaviconSize))));
++  }
++
++  SetGlyph(controls.previous, vector_icons::kMediaPreviousTrackOldIcon,
++           model.can_previous ? enabled_color : disabled_color,
++           helium::kMediaStripIconSize);
++  controls.previous->SetEnabled(model.can_previous);
++
++  SetGlyph(controls.play_pause,
++           model.is_playing ? vector_icons::kPauseOldIcon
++                            : vector_icons::kPlayArrowOldIcon,
++           enabled_color, helium::kMediaStripIconSize);
++
++  SetGlyph(controls.next, vector_icons::kMediaNextTrackOldIcon,
++           model.can_next ? enabled_color : disabled_color,
++           helium::kMediaStripIconSize);
++  controls.next->SetEnabled(model.can_next);
++
++  SetGlyph(controls.mute,
++           model.muted ? vector_icons::kVolumeOffIcon
++                       : vector_icons::kVolumeUpFilledIcon,
++           enabled_color, helium::kMediaStripIconSize);
++}
++
++}  // namespace
++
++// ---------------------------------------------------------------------------
++// HeliumMediaStripView -- one session's capsule.
++
++HeliumMediaStripView::HeliumMediaStripView(
++    HeliumMediaStripController* controller,
++    base::RepeatingClosure on_hovered)
++    : views::AnimationDelegateViews(this),
++      controller_(controller),
++      on_hovered_(std::move(on_hovered)) {
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  layer()->SetOpacity(0.0f);
++  SetVisible(false);
++  SetNotifyEnterExitOnChild(true);
++  shown_animation_.SetSlideDuration(base::Milliseconds(200));
++
++  favicon_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::ActivateSource)));
++  previous_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::PreviousTrack)));
++  play_pause_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::TogglePlayPause)));
++  next_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::NextTrack)));
++  mute_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::ToggleMute)));
++}
++
++HeliumMediaStripView::~HeliumMediaStripView() = default;
++
++base::RepeatingClosure HeliumMediaStripView::BoundAction(
++    ControllerAction action) {
++  // `this` outlives its buttons; the id member is read at press time.
++  return base::BindRepeating(
++      [](HeliumMediaStripView* view, ControllerAction action) {
++        (view->controller_->*action)(
++            ResolveItemId(view->controller_, view->bound_item_id_));
++      },
++      base::Unretained(this), action);
++}
++
++void HeliumMediaStripView::SetBoundItemId(const std::string& item_id) {
++  if (bound_item_id_ == item_id) {
++    return;
++  }
++  bound_item_id_ = item_id;
++  UpdateFromModel();
++}
++
++const HeliumMediaStripModel& HeliumMediaStripView::BoundRow() const {
++  return ResolveRow(controller_, bound_item_id_);
++}
++
++void HeliumMediaStripView::UpdateFromModel() {
++  UpdateStripControls({favicon_button_, previous_button_, play_pause_button_,
++                       next_button_, mute_button_},
++                      BoundRow(), SurfaceColor());
++  SchedulePaint();
++}
++
++void HeliumMediaStripView::SetShadowFrame(HeliumCardShadowView* shadow_frame) {
++  shadow_frame_ = shadow_frame;
++  SyncShadow();
++}
++
++void HeliumMediaStripView::SetShown(bool shown) {
++  if (shown_ == shown) {
++    return;
++  }
++  shown_ = shown;
++  if (shown) {
++    // Visible from the first frame of the fade -- the fade is opacity only,
++    // so the layout change happens exactly once, here.
++    SetVisible(true);
++    shown_animation_.Show();
++  } else {
++    shown_animation_.Hide();
++  }
++}
++
++void HeliumMediaStripView::Layout(PassKey) {
++  LayoutStripControls({favicon_button_, previous_button_, play_pause_button_,
++                       next_button_, mute_button_},
++                      width(), height() / 2);
++}
++
++gfx::Size HeliumMediaStripView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  return gfx::Size(0, helium::kMediaStripRowHeight);
++}
++
++void HeliumMediaStripView::OnPaintBackground(gfx::Canvas* canvas) {
++  PaintStripSurface(canvas, GetLocalBounds(), SurfaceColor());
++}
++
++void HeliumMediaStripView::OnMouseEntered(const ui::MouseEvent& event) {
++  if (on_hovered_) {
++    on_hovered_.Run();
++  }
++}
++
++void HeliumMediaStripView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  UpdateFromModel();
++}
++
++void HeliumMediaStripView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
++  views::View::OnBoundsChanged(previous_bounds);
++  SyncShadow();
++}
++
++void HeliumMediaStripView::AnimationProgressed(
++    const gfx::Animation* animation) {
++  layer()->SetOpacity(static_cast<float>(animation->GetCurrentValue()));
++  SyncShadow();
++}
++
++void HeliumMediaStripView::AnimationEnded(const gfx::Animation* animation) {
++  layer()->SetOpacity(static_cast<float>(animation->GetCurrentValue()));
++  if (animation->GetCurrentValue() == 0.0) {
++    SetVisible(false);
++  }
++  SyncShadow();
++}
++
++void HeliumMediaStripView::SyncShadow() {
++  if (!shadow_frame_) {
++    return;
++  }
++  // The shadow is a sibling layer: it inherits neither this view's fade
++  // opacity nor its visibility, and a hidden-but-boundsy shadow would still
++  // register in the region's caption hit-test. Drive all three by hand.
++  const float opacity = layer()->opacity();
++  const bool shadow_visible =
++      GetVisible() && opacity > 0.0f &&
++      helium::CanShowCardShadow(width(), height(),
++                                helium::kMediaStripCornerRadius);
++  shadow_frame_->SetVisible(shadow_visible);
++  shadow_frame_->SetShadowOpacity(opacity);
++  shadow_frame_->SetShadowCornerRadius(helium::kMediaStripCornerRadius);
++  shadow_frame_->SetCardBounds(bounds());
++}
++
++SkColor HeliumMediaStripView::SurfaceColor() const {
++  const ui::ColorProvider* const provider = GetColorProvider();
++  const SkColor sidebar =
++      provider ? provider->GetColor(kColorToolbar) : SK_ColorWHITE;
++  return helium::GetMediaStripSurfaceColor(sidebar);
++}
++
++BEGIN_METADATA(HeliumMediaStripView)
++END_METADATA
++
++// ---------------------------------------------------------------------------
++// HeliumMediaStripExpandedView -- the hover panel.
++
++HeliumMediaStripExpandedView::HeliumMediaStripExpandedView(
++    HeliumMediaStripController* controller,
++    base::RepeatingClosure on_pointer_left,
++    base::RepeatingClosure on_bounds_changed)
++    : views::AnimationDelegateViews(this),
++      controller_(controller),
++      on_pointer_left_(std::move(on_pointer_left)),
++      on_bounds_changed_(std::move(on_bounds_changed)) {
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  layer()->SetMasksToBounds(true);
++  layer()->SetOpacity(0.0f);
++  SetVisible(false);
++  SetNotifyEnterExitOnChild(true);
++  expand_animation_.SetSlideDuration(base::Milliseconds(200));
++
++  site_label_ = AddChildView(std::make_unique<views::Label>());
++  site_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  site_label_->SetFontList(
++      site_label_->font_list().DeriveWithWeight(gfx::Font::Weight::SEMIBOLD));
++  // The panel rides a fading layer; labels there cannot use subpixel
++  // rendering (Label::PaintText DCHECKs on a non-opaque paint surface).
++  site_label_->SetSubpixelRenderingEnabled(false);
++  // Text is a click target for "activate the source" (the panel handles the
++  // click itself), never an event eater.
++  site_label_->SetCanProcessEventsWithinSubtree(false);
++  pip_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::TogglePictureInPicture)));
++  close_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::Dismiss)));
++
++  title_label_ = AddChildView(std::make_unique<views::Label>());
++  title_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  title_label_->SetFontList(
++      title_label_->font_list().DeriveWithWeight(gfx::Font::Weight::SEMIBOLD));
++  title_label_->SetSubpixelRenderingEnabled(false);
++  title_label_->SetCanProcessEventsWithinSubtree(false);
++
++  favicon_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::ActivateSource)));
++  previous_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::PreviousTrack)));
++  play_pause_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::TogglePlayPause)));
++  next_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::NextTrack)));
++  mute_button_ = AddChildView(MakeStripButton(
++      BoundAction(&HeliumMediaStripController::ToggleMute)));
++}
++
++HeliumMediaStripExpandedView::~HeliumMediaStripExpandedView() = default;
++
++base::RepeatingClosure HeliumMediaStripExpandedView::BoundAction(
++    ControllerAction action) {
++  return base::BindRepeating(
++      [](HeliumMediaStripExpandedView* view, ControllerAction action) {
++        (view->controller_->*action)(
++            ResolveItemId(view->controller_, view->bound_item_id_));
++      },
++      base::Unretained(this), action);
++}
++
++void HeliumMediaStripExpandedView::SetBoundItemId(const std::string& item_id) {
++  if (bound_item_id_ == item_id) {
++    return;
++  }
++  bound_item_id_ = item_id;
++  UpdateFromModel();
++}
++
++const HeliumMediaStripModel& HeliumMediaStripExpandedView::BoundRow() const {
++  return ResolveRow(controller_, bound_item_id_);
++}
++
++void HeliumMediaStripExpandedView::UpdateFromModel() {
++  const SkColor surface = SurfaceColor();
++  const SkColor enabled_color =
++      helium::GetMediaStripIconColor(surface, /*enabled=*/true);
++  const HeliumMediaStripModel& model = BoundRow();
++
++  site_label_->SetText(model.source_title);
++  site_label_->SetEnabledColor(
++      helium::GetMediaStripPrimaryTextColor(surface));
++  SetGlyph(pip_button_,
++           model.pip_active ? vector_icons::kPipExitOldIcon
++                            : vector_icons::kPictureInPictureAltOldIcon,
++           model.can_pip
++               ? enabled_color
++               : helium::GetMediaStripIconColor(surface, /*enabled=*/false),
++           helium::kMediaStripIconSize);
++  pip_button_->SetEnabled(model.can_pip);
++  pip_button_->SetTooltipText(l10n_util::GetStringUTF16(
++      model.pip_active ? IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_EXIT_PIP
++                       : IDS_MEDIA_MESSAGE_CENTER_MEDIA_NOTIFICATION_ACTION_ENTER_PIP));
++  SetGlyph(close_button_, vector_icons::kCloseIcon, enabled_color,
++           helium::kMediaStripIconSize - 2);
++  close_button_->SetTooltipText(l10n_util::GetStringUTF16(IDS_APP_CLOSE));
++
++  // Single line since r5: the title, falling back to the artist so a
++  // title-less session still shows something readable. The artist's own line
++  // is gone (user 2026-08-20).
++  title_label_->SetText(model.title.empty() ? model.artist : model.title);
++  title_label_->SetEnabledColor(
++      helium::GetMediaStripPrimaryTextColor(surface));
++  title_label_->SetVisible(!title_label_->GetText().empty());
++
++  UpdateStripControls({favicon_button_, previous_button_, play_pause_button_,
++                       next_button_, mute_button_},
++                      model, surface);
++  UpdatePanelBounds();
++  DeprecatedLayoutImmediately();
++  SchedulePaint();
++}
++
++void HeliumMediaStripExpandedView::SetAnchor(const gfx::Rect& strip_bounds,
++                                             int max_available_height) {
++  anchor_strip_bounds_ = strip_bounds;
++  max_available_height_ = max_available_height;
++  UpdatePanelBounds();
++}
++
++void HeliumMediaStripExpandedView::SetShadowFrame(
++    HeliumCardShadowView* shadow_frame) {
++  shadow_frame_ = shadow_frame;
++  UpdatePanelBounds();
++}
++
++void HeliumMediaStripExpandedView::SetExpanded(bool expanded) {
++  if (expanded_ == expanded) {
++    return;
++  }
++  expanded_ = expanded;
++  if (expanded) {
++    SetVisible(true);
++    expand_animation_.Show();
++  } else {
++    expand_animation_.Hide();
++  }
++  UpdatePanelBounds();
++}
++
++void HeliumMediaStripExpandedView::Layout(PassKey) {
++  const int panel_width = width();
++  const int panel_height = height();
++  // Rows anchor to the *bottom*, so the controls stay put over the capsule
++  // they grew out of and the header slides into view as the panel rises.
++  const int controls_top = panel_height - helium::kMediaStripRowHeight;
++  LayoutStripControls({favicon_button_, previous_button_, play_pause_button_,
++                       next_button_, mute_button_},
++                      panel_width,
++                      controls_top + helium::kMediaStripRowHeight / 2);
++
++  const bool has_metadata = title_label_->GetVisible();
++  const int metadata_top =
++      controls_top - (has_metadata ? helium::kMediaStripMetadataRowHeight : 0);
++  if (has_metadata) {
++    const int text_x = helium::kMediaStripHeaderLeftInset;
++    const int text_width =
++        std::max(0, panel_width - 2 * helium::kMediaStripHeaderLeftInset);
++    // Centered in its 33pt row -- the tab capsule's own text rhythm (~8pt of
++    // air), which is what the user asked the media text to match.
++    title_label_->SetBounds(
++        text_x, metadata_top + (helium::kMediaStripMetadataRowHeight - 17) / 2,
++        text_width, 17);
++  }
++
++  const int header_top = metadata_top - helium::kMediaStripRowHeight;
++  const int header_center_y = header_top + helium::kMediaStripRowHeight / 2;
++  CenterViewAt(close_button_,
++               panel_width - helium::kMediaStripCloseCenterFromRight,
++               header_center_y, helium::kMediaStripRowHeight - 4);
++  CenterViewAt(pip_button_,
++               panel_width - helium::kMediaStripPipCenterFromRight,
++               header_center_y, helium::kMediaStripRowHeight - 4);
++  const int site_width =
++      std::max(0, panel_width - helium::kMediaStripHeaderLeftInset -
++                      (helium::kMediaStripPipCenterFromRight +
++                       helium::kMediaStripRowHeight / 2));
++  site_label_->SetBounds(helium::kMediaStripHeaderLeftInset, header_top + 7,
++                         site_width, helium::kMediaStripRowHeight - 14);
++}
++
++void HeliumMediaStripExpandedView::OnPaintBackground(gfx::Canvas* canvas) {
++  PaintStripSurface(canvas, GetLocalBounds(), SurfaceColor());
++}
++
++bool HeliumMediaStripExpandedView::OnMousePressed(const ui::MouseEvent& event) {
++  // Claim the press so the release below is ours; child buttons have already
++  // taken theirs by the time this runs.
++  return true;
++}
++
++void HeliumMediaStripExpandedView::OnMouseReleased(
++    const ui::MouseEvent& event) {
++  // Any non-button spot on the panel activates the source -- the user asked
++  // for the title/URL to be clickable like Arc (2026-08-20), and the labels
++  // pass events through by construction.
++  if (event.IsOnlyLeftMouseButton() && HitTestPoint(event.location())) {
++    controller_->ActivateSource(ResolveItemId(controller_, bound_item_id_));
++  }
++}
++
++void HeliumMediaStripExpandedView::OnMouseExited(const ui::MouseEvent& event) {
++  if (on_pointer_left_) {
++    on_pointer_left_.Run();
++  }
++}
++
++void HeliumMediaStripExpandedView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  UpdateFromModel();
++}
++
++void HeliumMediaStripExpandedView::AnimationProgressed(
++    const gfx::Animation* animation) {
++  UpdatePanelBounds();
++}
++
++void HeliumMediaStripExpandedView::AnimationEnded(
++    const gfx::Animation* animation) {
++  UpdatePanelBounds();
++  if (animation->GetCurrentValue() == 0.0) {
++    SetVisible(false);
++  }
++}
++
++SkColor HeliumMediaStripExpandedView::SurfaceColor() const {
++  const ui::ColorProvider* const provider = GetColorProvider();
++  const SkColor sidebar =
++      provider ? provider->GetColor(kColorToolbar) : SK_ColorWHITE;
++  return helium::GetMediaStripSurfaceColor(sidebar);
++}
++
++int HeliumMediaStripExpandedView::ExpandedHeight() const {
++  const HeliumMediaStripModel& model = BoundRow();
++  return helium::MediaStripExpandedHeight(!model.title.empty() ||
++                                          !model.artist.empty());
++}
++
++void HeliumMediaStripExpandedView::UpdatePanelBounds() {
++  if (anchor_strip_bounds_.IsEmpty()) {
++    return;
++  }
++  const double progress = expand_animation_.GetCurrentValue();
++  // Grows upward out of the hovered capsule, bottom edge pinned.
++  const helium::MediaStripPanelBounds panel = helium::GetMediaStripPanelBounds(
++      anchor_strip_bounds_.bottom(), ExpandedHeight(), progress,
++      max_available_height_);
++  const gfx::Rect panel_bounds(anchor_strip_bounds_.x(), panel.y,
++                               anchor_strip_bounds_.width(), panel.height);
++  SetBoundsRect(panel_bounds);
++  // Height and fade ride the same tween value: synchronized by construction.
++  layer()->SetOpacity(static_cast<float>(progress));
++  if (shadow_frame_) {
++    // Sibling layer: fade opacity and visibility do not carry over (and a
++    // hidden-but-boundsy shadow would still hit the caption test).
++    const bool shadow_visible =
++        GetVisible() && progress > 0.0 &&
++        helium::CanShowCardShadow(panel_bounds.width(), panel_bounds.height(),
++                                  helium::kMediaStripCornerRadius);
++    shadow_frame_->SetVisible(shadow_visible);
++    shadow_frame_->SetShadowOpacity(progress);
++    shadow_frame_->SetShadowCornerRadius(helium::kMediaStripCornerRadius);
++    shadow_frame_->SetCardBounds(panel_bounds);
++  }
++  // Last: the region slides the capsules above this panel by exactly the
++  // growth we just applied, so the two moves land in the same frame.
++  if (on_bounds_changed_) {
++    on_bounds_changed_.Run();
++  }
++}
++
++BEGIN_METADATA(HeliumMediaStripExpandedView)
++END_METADATA
++
++// ---------------------------------------------------------------------------
++// HeliumMediaScrimView -- the fade behind the floating capsules.
++
++HeliumMediaScrimView::HeliumMediaScrimView()
++    : views::AnimationDelegateViews(this) {
++  // Never interactive: the tab rows dissolving under it stay clickable while
++  // they are still readable, and the capsules above it take their own hits.
++  SetCanProcessEventsWithinSubtree(false);
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  layer()->SetOpacity(0.0f);
++  SetVisible(false);
++  shown_animation_.SetSlideDuration(base::Milliseconds(200));
++}
++
++HeliumMediaScrimView::~HeliumMediaScrimView() = default;
++
++void HeliumMediaScrimView::SetShown(bool shown) {
++  if (shown_ == shown) {
++    return;
++  }
++  shown_ = shown;
++  if (shown) {
++    SetVisible(true);
++    shown_animation_.Show();
++  } else {
++    shown_animation_.Hide();
++  }
++}
++
++void HeliumMediaScrimView::AnimationProgressed(
++    const gfx::Animation* animation) {
++  layer()->SetOpacity(static_cast<float>(animation->GetCurrentValue()));
++}
++
++void HeliumMediaScrimView::AnimationEnded(const gfx::Animation* animation) {
++  layer()->SetOpacity(static_cast<float>(animation->GetCurrentValue()));
++  if (animation->GetCurrentValue() == 0.0) {
++    SetVisible(false);
++  }
++}
++
++void HeliumMediaScrimView::OnPaint(gfx::Canvas* canvas) {
++  const ui::ColorProvider* const provider = GetColorProvider();
++  if (!provider) {
++    return;
++  }
++  const SkColor sidebar = provider->GetColor(kColorToolbar);
++  const int fade = std::min(helium::kMediaScrimFadeHeight, height());
++  if (fade > 0) {
++    cc::PaintFlags gradient;
++    gradient.setShader(gfx::CreateGradientShader(
++        gfx::Point(0, 0), gfx::Point(0, fade),
++        SkColorSetA(sidebar, 0), sidebar));
++    canvas->DrawRect(gfx::RectF(0, 0, width(), fade), gradient);
++  }
++  if (height() > fade) {
++    canvas->FillRect(gfx::Rect(0, fade, width(), height() - fade), sidebar);
++  }
++}
++
++BEGIN_METADATA(HeliumMediaScrimView)
++END_METADATA
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_view.h
+@@ -0,0 +1,221 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_MEDIA_STRIP_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_MEDIA_STRIP_VIEW_H_
++
++#include <string>
++
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/animation/slide_animation.h"
++#include "ui/views/animation/animation_delegate_views.h"
++#include "ui/views/controls/button/image_button.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/view.h"
++
++class HeliumCardShadowView;
++
++// helium-fork: the faces of the sidebar's bottom media area. Geometry and
++// colors all come from chrome/browser/ui/helium/arc_media_strip.h; the data
++// comes as HeliumMediaStripModel rows pushed by the controller. The region
++// view owns every one of these and decides when each is on screen.
++//
++// r5 (user-chosen 2026-08-20): one capsule *per session*, stacked upward --
++// the oldest session keeps the original pill's place in the layout flow, and
++// every later one floats above it as an overlay over the tab rows (a scrim
++// fades the rows out underneath, so the list never reflows when sessions
++// come and go). Hovering a capsule expands *that* capsule into the panel,
++// which is where its picture-in-picture and close buttons live. The r4
++// multi-session list is gone.
++
++// One session's capsule: [favicon | previous | play-pause | next | mute].
++// Which session is this capsule's business is bound by the region's sync
++// (SetBoundItemId); every button resolves the id at press time, so a rebind
++// never fires an action at the wrong tab.
++class HeliumMediaStripView : public views::View,
++                             public views::AnimationDelegateViews {
++  METADATA_HEADER(HeliumMediaStripView, views::View)
++
++ public:
++  // `on_hovered` fires with this view as sender context (the region binds a
++  // closure per capsule).
++  HeliumMediaStripView(HeliumMediaStripController* controller,
++                       base::RepeatingClosure on_hovered);
++  HeliumMediaStripView(const HeliumMediaStripView&) = delete;
++  HeliumMediaStripView& operator=(const HeliumMediaStripView&) = delete;
++  ~HeliumMediaStripView() override;
++
++  // Binds this capsule to one session. Empty id = follow the controller's
++  // primary (first ready) row, which is what the base capsule does.
++  void SetBoundItemId(const std::string& item_id);
++  const std::string& bound_item_id() const { return bound_item_id_; }
++  // The bound row's live model, or the primary row when unbound/gone.
++  const HeliumMediaStripModel& BoundRow() const;
++
++  void UpdateFromModel();
++  // Fades the pill in or out; visibility flips at the fade's ends so the
++  // layout only ever changes once per appearance.
++  void SetShown(bool shown);
++  bool shown() const { return shown_; }
++
++  // The card's shadow: a sibling HeliumCardShadowView (region-owned for the
++  // base capsule, stack-owned for overlay capsules -- either way the shadow
++  // and this view share a parent, so bounds() carries over unchanged). Its
++  // layer does not ride this view's fading layer, so this view drives its
++  // bounds, visibility and opacity by hand.
++  void SetShadowFrame(HeliumCardShadowView* shadow_frame);
++
++  // views::View:
++  void Layout(PassKey) override;
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  void OnPaintBackground(gfx::Canvas* canvas) override;
++  void OnMouseEntered(const ui::MouseEvent& event) override;
++  void OnThemeChanged() override;
++  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
++
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
++ private:
++  SkColor SurfaceColor() const;
++  void SyncShadow();
++  // A strip button acting on this capsule's bound row, id resolved at press.
++  using ControllerAction =
++      void (HeliumMediaStripController::*)(const std::string&);
++  base::RepeatingClosure BoundAction(ControllerAction action);
++
++  const raw_ptr<HeliumMediaStripController> controller_;
++  const base::RepeatingClosure on_hovered_;
++  std::string bound_item_id_;
++
++  raw_ptr<views::ImageButton> favicon_button_ = nullptr;
++  raw_ptr<views::ImageButton> previous_button_ = nullptr;
++  raw_ptr<views::ImageButton> play_pause_button_ = nullptr;
++  raw_ptr<views::ImageButton> next_button_ = nullptr;
++  raw_ptr<views::ImageButton> mute_button_ = nullptr;
++
++  raw_ptr<HeliumCardShadowView> shadow_frame_ = nullptr;
++
++  bool shown_ = false;
++  gfx::SlideAnimation shown_animation_{this};
++};
++
++// The hover panel of one capsule: header (site name, picture-in-picture,
++// close), the single-line title row, the controls row -- grown *upward* out
++// of the hovered capsule, bottom edge pinned. An overlay child (ignored by
++// layout, manual bounds); the tab list never reflows. Bound to the hovered
++// capsule's session via SetBoundItemId, same resolution rules as the
++// capsule's.
++class HeliumMediaStripExpandedView : public views::View,
++                                     public views::AnimationDelegateViews {
++  METADATA_HEADER(HeliumMediaStripExpandedView, views::View)
++
++ public:
++  // `on_bounds_changed` fires on every frame of the expand tween, so the
++  // region can slide the capsules above this panel out of its way on the
++  // same timeline (r6; without it an opening panel covers its neighbours).
++  HeliumMediaStripExpandedView(HeliumMediaStripController* controller,
++                               base::RepeatingClosure on_pointer_left,
++                               base::RepeatingClosure on_bounds_changed);
++  HeliumMediaStripExpandedView(const HeliumMediaStripExpandedView&) = delete;
++  HeliumMediaStripExpandedView& operator=(const HeliumMediaStripExpandedView&) =
++      delete;
++  ~HeliumMediaStripExpandedView() override;
++
++  void SetBoundItemId(const std::string& item_id);
++  void UpdateFromModel();
++  // Where the hovered capsule is (region-view coordinates) and how much room
++  // there is above it. Fed by the region view.
++  void SetAnchor(const gfx::Rect& strip_bounds, int max_available_height);
++  void SetExpanded(bool expanded);
++  bool expanded() const { return expanded_; }
++  // This panel's live height, animation included: 33 while collapsed, the
++  // interpolated value mid-tween. The region feeds it straight back into
++  // helium::MediaStripCapsuleOffsetFromBase.
++  int panel_height() const { return height(); }
++  // Same contract as HeliumMediaStripView::SetShadowFrame.
++  void SetShadowFrame(HeliumCardShadowView* shadow_frame);
++
++  // views::View:
++  void Layout(PassKey) override;
++  void OnPaintBackground(gfx::Canvas* canvas) override;
++  bool OnMousePressed(const ui::MouseEvent& event) override;
++  void OnMouseReleased(const ui::MouseEvent& event) override;
++  void OnMouseExited(const ui::MouseEvent& event) override;
++  void OnThemeChanged() override;
++
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
++ private:
++  SkColor SurfaceColor() const;
++  const HeliumMediaStripModel& BoundRow() const;
++  int ExpandedHeight() const;
++  void UpdatePanelBounds();
++  using ControllerAction =
++      void (HeliumMediaStripController::*)(const std::string&);
++  base::RepeatingClosure BoundAction(ControllerAction action);
++
++  const raw_ptr<HeliumMediaStripController> controller_;
++  const base::RepeatingClosure on_pointer_left_;
++  const base::RepeatingClosure on_bounds_changed_;
++  std::string bound_item_id_;
++
++  raw_ptr<views::Label> site_label_ = nullptr;
++  raw_ptr<views::ImageButton> pip_button_ = nullptr;
++  raw_ptr<views::ImageButton> close_button_ = nullptr;
++  raw_ptr<views::Label> title_label_ = nullptr;
++  raw_ptr<views::ImageButton> favicon_button_ = nullptr;
++  raw_ptr<views::ImageButton> previous_button_ = nullptr;
++  raw_ptr<views::ImageButton> play_pause_button_ = nullptr;
++  raw_ptr<views::ImageButton> next_button_ = nullptr;
++  raw_ptr<views::ImageButton> mute_button_ = nullptr;
++
++  raw_ptr<HeliumCardShadowView> shadow_frame_ = nullptr;
++
++  gfx::Rect anchor_strip_bounds_;
++  int max_available_height_ = 0;
++  bool expanded_ = false;
++  gfx::SlideAnimation expand_animation_{this};
++};
++
++// The fade behind the floating capsules: sidebar-colored, transparent at its
++// top edge and solid from the fade band down, so tab rows dissolve before
++// they reach the stack instead of colliding with it (user 2026-08-20). Not
++// interactive; its opacity is driven by the region alongside the overlay
++// stack's own fade so the two can never appear apart (M3.3h).
++class HeliumMediaScrimView : public views::View,
++                            public views::AnimationDelegateViews {
++  METADATA_HEADER(HeliumMediaScrimView, views::View)
++
++ public:
++  HeliumMediaScrimView();
++  HeliumMediaScrimView(const HeliumMediaScrimView&) = delete;
++  HeliumMediaScrimView& operator=(const HeliumMediaScrimView&) = delete;
++  ~HeliumMediaScrimView() override;
++
++  // Same 200ms opacity fade as the capsules, triggered on the same frame --
++  // scrim and stack appear and disappear as one move (M3.3h).
++  void SetShown(bool shown);
++  bool shown() const { return shown_; }
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override;
++
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
++ private:
++  bool shown_ = false;
++  gfx::SlideAnimation shown_animation_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_MEDIA_STRIP_VIEW_H_

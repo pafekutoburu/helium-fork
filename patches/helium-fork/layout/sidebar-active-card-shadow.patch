@@ -1,0 +1,678 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -4124,6 +4124,8 @@ static_library("ui") {
+       "views/frame/top_container_view.cc",
+       "views/frame/top_container_view.h",
+       "views/frame/top_controls_slide_controller.h",
++      "views/frame/helium_card_shadow_view.cc",
++      "views/frame/helium_card_shadow_view.h",
+       "views/frame/vertical_tab_strip_region_view.cc",
+       "views/frame/vertical_tab_strip_region_view.h",
+       "views/tabs/vertical/helium_media_strip_controller.cc",
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
+@@ -205,12 +205,17 @@ void WorkspaceService::BindTab(tabs::Tab
+   // A binding change is a view change even though no entry moved: the
+   // sidebar row switches to its live tab, and the Today section stops
+   // drawing that tab. Adopting an already-open tab produces no view-tree
+-  // event of its own, so without this the tab would stay visible in Today.
++  // event of its own, so without these the tab would stay visible in Today.
++  // The bindings signal goes first: it is what actually hides the ghost row,
++  // and it must not wait behind however many sidebar observers NotifyChanged
++  // walks.
++  NotifyBindingsChanged();
+   NotifyChanged();
+ }
+ 
+ void WorkspaceService::UnbindTab(tabs::TabHandle handle) {
+   if (tab_to_entry_.erase(handle) > 0) {
++    NotifyBindingsChanged();
+     NotifyChanged();
+   }
+ }
+@@ -330,6 +335,12 @@ void WorkspaceService::NotifyChanged() {
+   }
+ }
+ 
++void WorkspaceService::NotifyBindingsChanged() {
++  for (Observer& observer : observers_) {
++    observer.OnWorkspaceBindingsChanged();
++  }
++}
++
+ int WorkspaceService::NextPosition(WorkspaceEntry::Section section) const {
+   int max_position = -1;
+   for (const WorkspaceEntry& entry : entries_) {
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.h
++++ src/chrome/browser/ui/helium_workspace/workspace_service.h
+@@ -46,6 +46,15 @@ class WorkspaceService : public KeyedSer
+     // hides tabs that are bound, so a binding change is a view change even
+     // when no entry was touched.
+     virtual void OnWorkspaceEntriesChanged() {}
++
++    // Fired only when the tab<->entry binding set changes (BindTab /
++    // UnbindTab), never on the high-frequency persisted-metadata writes that
++    // drive OnWorkspaceEntriesChanged(). The Today container keys its
++    // "hide entry tabs" layout filter off this: a binding flip is invisible
++    // to the view tree (the rows exist either way), so someone must
++    // invalidate the layout, and title/favicon churn must not (r5,
++    // 2026-08-20).
++    virtual void OnWorkspaceBindingsChanged() {}
+   };
+ 
+   static constexpr size_t kMaxFavorites = 12;
+@@ -114,6 +123,7 @@ class WorkspaceService : public KeyedSer
+   // whole list. Structural edits (add/remove/section) stay synchronous.
+   void SchedulePersist();
+   void NotifyChanged();
++  void NotifyBindingsChanged();
+   int NextPosition(WorkspaceEntry::Section section) const;
+ 
+   const raw_ptr<PrefService> prefs_;
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -49,6 +49,9 @@ WorkspaceTabController::WorkspaceTabCont
+                                 *this) {
+   if (TabStripModel* model = browser_window_->GetTabStripModel()) {
+     model->AddObserver(this);
++    // Registered before RootTabCollectionNode ever exists (see the header's
++    // ORDER CONTRACT on OnChildrenAdded): the claim must precede the row.
++    model->Root()->AddObserver(this);
+   }
+ 
+   // Deferred: BrowserWindowFeatures::Init() runs before this window's
+@@ -62,6 +65,7 @@ WorkspaceTabController::WorkspaceTabCont
+ WorkspaceTabController::~WorkspaceTabController() {
+   if (TabStripModel* model = browser_window_->GetTabStripModel()) {
+     model->RemoveObserver(this);
++    model->Root()->RemoveObserver(this);
+   }
+ }
+ 
+@@ -296,11 +300,36 @@ void WorkspaceTabController::UnpinTab(ta
+   model->SetTabPinned(index, false);
+ }
+ 
++void WorkspaceTabController::OnChildrenAdded(
++    const tabs::TabCollection::Position& position,
++    const tabs::TabCollectionNodes& handles,
++    bool insert_from_detached) {
++  // Only the synchronous window inside OpenEntry() ever sets the pending id,
++  // so everything else that inserts children (drags into the window, session
++  // restore, group churn) falls straight through.
++  if (pending_bind_entry_id_.empty()) {
++    return;
++  }
++  for (const tabs::TabCollectionNodeHandle& handle : handles) {
++    const tabs::TabHandle* tab_handle = std::get_if<tabs::TabHandle>(&handle);
++    tabs::TabInterface* const tab = tab_handle ? tab_handle->Get() : nullptr;
++    if (tab) {
++      BindTabToEntry(tab, pending_bind_entry_id_);
++    }
++  }
++  pending_bind_entry_id_.clear();
++}
++
+ void WorkspaceTabController::OnTabStripModelChanged(
+     TabStripModel* tab_strip_model,
+     const TabStripModelChange& change,
+     const TabStripSelectionChange& selection) {
+   if (change.type() == TabStripModelChange::kInserted) {
++    // Idempotent fallback only: OnChildrenAdded() normally consumed the
++    // pending id earlier in this same stack (BindTab early-returns on a
++    // same-value rebind anyway). If an upstream reorder ever bypasses the
++    // collection path, this degrades to the old one-frame ghost, not to a
++    // missing bind.
+     if (pending_bind_entry_id_.empty()) {
+       return;
+     }
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -11,6 +11,8 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "components/tabs/public/tab_collection.h"
++#include "components/tabs/public/tab_collection_observer.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "ui/base/models/image_model.h"
+ #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+@@ -37,7 +39,8 @@ class WorkspaceService;
+ //     as an entry instead. The pinned region must stay empty: it is what
+ //     makes TabStripModel::empty() -- and therefore "closing the last tab
+ //     closes the window" -- correct.
+-class WorkspaceTabController : public TabStripModelObserver {
++class WorkspaceTabController : public TabStripModelObserver,
++                               public tabs::TabCollectionObserver {
+  public:
+   DECLARE_USER_DATA(WorkspaceTabController);
+ 
+@@ -90,6 +93,23 @@ class WorkspaceTabController : public Ta
+       TabStripModel* tab_strip_model,
+       const TabStripModelChange& change,
+       const TabStripSelectionChange& selection) override;
++
++  // tabs::TabCollectionObserver:
++  // The ghost-row fix (r5): claim the pending entry's tab *before* the view
++  // layer builds its row. TabStripModel notifies its TabCollection observers
++  // first (AddTabRecursive) and its TabStripModelObservers second (kInserted)
++  // -- and the collection walks observers in registration order. This
++  // controller is constructed from BrowserWindowFeatures::Init()
++  // (browser.cc), before the window (and with it RootTabCollectionNode,
++  // which builds the rows) exists, so registering here puts the bind ahead
++  // of row creation and the row's first target layout already hides it.
++  // ORDER CONTRACT: if RootTabCollectionNode ever registers first, nothing
++  // breaks -- the kInserted consumer below still binds, the
++  // OnWorkspaceBindingsChanged() safety net still relayouts -- but the
++  // one-frame ghost row returns.
++  void OnChildrenAdded(const tabs::TabCollection::Position& position,
++                       const tabs::TabCollectionNodes& handles,
++                       bool insert_from_detached) override;
+   void OnTabChangedAt(tabs::TabInterface* tab,
+                       int index,
+                       TabChangeType change_type) override;
+Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
+@@ -0,0 +1,107 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
++
++#include "base/numerics/safe_conversions.h"
++#include "cc/paint/draw_looper.h"
++#include "cc/paint/paint_canvas.h"
++#include "cc/paint/paint_flags.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "third_party/skia/include/core/SkClipOp.h"
++#include "third_party/skia/include/core/SkPoint.h"
++#include "third_party/skia/include/core/SkRRect.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_provider.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
++#include "ui/gfx/geometry/insets_f.h"
++#include "ui/gfx/geometry/outsets.h"
++#include "ui/gfx/geometry/skia_conversions.h"
++
++BEGIN_METADATA(HeliumCardShadowView)
++END_METADATA
++
++HeliumCardShadowView::HeliumCardShadowView() {
++  SetCanProcessEventsWithinSubtree(false);
++  // A layer of its own: the host stacks it by child order (index 0 puts it
++  // beneath the tab strip's layer) and fades it via SetShadowOpacity.
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++}
++
++HeliumCardShadowView::~HeliumCardShadowView() = default;
++
++void HeliumCardShadowView::SetCardBounds(const gfx::Rect& card_bounds) {
++  gfx::Rect bounds = card_bounds;
++  bounds.Outset(gfx::Outsets::VH(helium::kSidebarCardShadowOutsetV,
++                                 helium::kSidebarCardShadowOutsetH));
++  SetBoundsRect(bounds);
++}
++
++void HeliumCardShadowView::SetShadowOpacity(double opacity) {
++  layer()->SetOpacity(static_cast<float>(opacity));
++}
++
++void HeliumCardShadowView::SetShadowCornerRadius(int corner_radius) {
++  if (corner_radius_ == corner_radius) {
++    return;
++  }
++  corner_radius_ = corner_radius;
++  SchedulePaint();
++}
++
++void HeliumCardShadowView::OnPaint(gfx::Canvas* canvas) {
++  const ui::ColorProvider* const provider = GetColorProvider();
++  const bool is_dark =
++      provider && color_utils::IsDark(provider->GetColor(kColorToolbar));
++
++  gfx::RectF card{gfx::SizeF(size())};
++  card.Inset(gfx::InsetsF::VH(helium::kSidebarCardShadowOutsetV,
++                              helium::kSidebarCardShadowOutsetH));
++  const SkScalar radius = SkIntToScalar(corner_radius_);
++  const SkRRect card_rrect =
++      SkRRect::MakeRectXY(gfx::RectFToSkRect(card), radius, radius);
++
++  // Only the ring paints: the blur bleeds inward too, and while the opaque
++  // card covers that at rest, the card's fade animations would let it show
++  // through -- carve the card's own silhouette out instead.
++  cc::PaintCanvas* const paint_canvas = canvas->sk_canvas();
++  cc::PaintCanvasAutoRestore restore(paint_canvas, /*save=*/true);
++  paint_canvas->clipRRect(card_rrect, SkClipOp::kDifference,
++                          /*do_anti_alias=*/true);
++
++  for (const helium::SidebarCardShadowPass& pass :
++       helium::kSidebarCardShadowPasses) {
++    const double alpha = is_dark ? pass.dark_alpha : pass.light_alpha;
++    gfx::RectF pass_rect = card;
++    pass_rect.Inset(gfx::InsetsF::VH(0, pass.inset_h));
++    const SkRRect pass_rrect =
++        SkRRect::MakeRectXY(gfx::RectFToSkRect(pass_rect), radius, radius);
++    cc::DrawLooperBuilder looper;
++    looper.AddShadow(
++        {0, SkIntToScalar(pass.offset_y)}, SkDoubleToScalar(pass.sigma),
++        SkColor4f::FromColor(SkColorSetA(
++            SK_ColorBLACK, base::ClampRound<U8CPU>(255.0 * alpha))),
++        cc::DrawLooper::kOverrideAlphaFlag);
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setColor(SK_ColorTRANSPARENT);
++    flags.setLooper(looper.Detach());
++    paint_canvas->drawRRect(pass_rrect, flags);
++  }
++}
++
++void HeliumCardShadowView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  const ui::ColorProvider* const provider = GetColorProvider();
++  const bool is_dark =
++      provider && color_utils::IsDark(provider->GetColor(kColorToolbar));
++  if (was_dark_ != is_dark) {
++    was_dark_ = is_dark;
++    SchedulePaint();
++  }
++}
+Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/helium_card_shadow_view.h
+@@ -0,0 +1,51 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_HELIUM_CARD_SHADOW_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_HELIUM_CARD_SHADOW_VIEW_H_
++
++#include <optional>
++
++#include "ui/gfx/geometry/rect.h"
++#include "ui/views/view.h"
++
++// helium-fork: the floating card's soft shadow -- a self-painted pair of
++// blurred round-rects (constants in arc_sidebar_surface.h), not a ui::Shadow.
++// The MD ninepatch model clamps its elevation to (min_dim - 2r)/4, which
++// pins a 34pt row at radius 12 to a tight directional cast; Dia's look is a
++// broad, near-centered halo that model cannot express at any parameter.
++//
++// Non-interactive. The view's bounds are the *card's* bounds outset by
++// kSidebarCardShadowOutset{H,V} -- callers hand over the card rect via
++// SetCardBounds() and never SetBoundsRect() directly. Because the bounds
++// overhang the card on every side, hosts that hit-test children for
++// window-caption purposes must skip this class explicitly
++// (SetCanProcessEventsWithinSubtree() stops events, not HitTestPoint()).
++class HeliumCardShadowView : public views::View {
++  METADATA_HEADER(HeliumCardShadowView, views::View)
++
++ public:
++  HeliumCardShadowView();
++  ~HeliumCardShadowView() override;
++
++  // Positions the shadow around `card_bounds` (in the parent's coordinates).
++  void SetCardBounds(const gfx::Rect& card_bounds);
++
++  // The fade knob, mirrored from the card it underlines: a sibling layer
++  // inherits neither the card's opacity animation nor its visibility.
++  void SetShadowOpacity(double opacity);
++
++  // The card's corner radius (the blurred silhouette follows it).
++  void SetShadowCornerRadius(int corner_radius);
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override;
++  void OnThemeChanged() override;
++
++ private:
++  int corner_radius_ = 8;
++  std::optional<bool> was_dark_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_HELIUM_CARD_SHADOW_VIEW_H_
+Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
++++ src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
+@@ -49,6 +49,10 @@ class PinnedTabContainerView
+   std::optional<BrowserRootView::DropIndex> GetLinkDropIndex(
+       const gfx::Point& loc_in_container);
+ 
++  // helium-fork: the Arc sidebar this container hosts; the region view walks
++  // through here to aim the pinned rows' card shadow at it.
++  WorkspaceSidebarView* workspace_view() { return workspace_view_; }
++
+  private:
+   // DraggedTabsContainer:
+   views::ScrollView* GetScrollViewForContainer() const override;
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+@@ -8,8 +8,11 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
+ #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
+ #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+@@ -20,12 +23,14 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/views/controls/scroll_view.h"
+ #include "ui/views/layout/delegating_layout_manager.h"
+ #include "ui/views/layout/layout_types.h"
+ #include "ui/views/layout/proposed_layout.h"
+ #include "ui/views/view.h"
+ #include "ui/views/view_class_properties.h"
++#include "ui/views/view_observer.h"
+ #include "ui/views/view_targeter.h"
+ #include "ui/views/view_targeter_delegate.h"
+ #include "ui/views/view_utils.h"
+@@ -88,6 +93,97 @@ class UnpinnedTabContainerViewTargeter :
+ 
+ }  // namespace
+ 
++// helium-fork: watches the active row so the card shadow can follow it --
++// deletion, widget removal, bounds (layout animations move rows frame by
++// frame), visibility, and the layer transform (a drag parks the row's bounds
++// and moves it by transform instead, so bounds changes alone would leave the
++// shadow behind). Watching only; all decisions live in
++// UnpinnedTabContainerView::UpdateCardShadow().
++class UnpinnedTabContainerView::CardShadowTracker : public views::ViewObserver {
++ public:
++  explicit CardShadowTracker(UnpinnedTabContainerView* container)
++      : container_(container) {}
++  CardShadowTracker(const CardShadowTracker&) = delete;
++  CardShadowTracker& operator=(const CardShadowTracker&) = delete;
++  ~CardShadowTracker() override = default;
++
++  void SetTarget(views::View* target) {
++    if (target_ != target) {
++      observation_.Reset();
++      target_ = target;
++      if (target_) {
++        observation_.Observe(target_.get());
++      }
++    }
++    // Resync even on identity: the same row can change facts (drag state)
++    // without changing target.
++    container_->UpdateCardShadow();
++  }
++  views::View* target() { return target_; }
++
++  // views::ViewObserver:
++  void OnViewIsDeleting(views::View* observed_view) override {
++    observation_.Reset();
++    target_ = nullptr;
++    container_->UpdateCardShadow();
++  }
++  void OnViewRemovedFromWidget(views::View* observed_view) override {
++    container_->UpdateCardShadow();
++  }
++  void OnViewBoundsChanged(views::View* observed_view) override {
++    container_->UpdateCardShadow();
++  }
++  void OnViewVisibilityChanged(views::View* observed_view,
++                               views::View* starting_view,
++                               bool visible) override {
++    container_->UpdateCardShadow();
++  }
++  void OnViewLayerTransformed(views::View* observed_view) override {
++    container_->UpdateCardShadow();
++  }
++
++ private:
++  const raw_ptr<UnpinnedTabContainerView> container_;
++  raw_ptr<views::View> target_ = nullptr;
++  base::ScopedObservation<views::View, views::ViewObserver> observation_{this};
++};
++
++// helium-fork r5: a tab<->entry binding flip changes only the answer of
++// IsWorkspaceEntryTab() -- every row view exists either way -- so nothing in
++// the view tree invalidates the layout when a pinned entry claims its
++// freshly-created tab. Without this, the claim lands after the row's first
++// target layout and the "ghost" stays until some unrelated invalidation
++// (typically the page's title arriving). Bindings only; the entries signal
++// fires on every persisted title/favicon write and must not thrash Today.
++class UnpinnedTabContainerView::BindingsObserver
++    : public helium_workspace::WorkspaceService::Observer {
++ public:
++  BindingsObserver(UnpinnedTabContainerView* container,
++                   helium_workspace::WorkspaceService* service)
++      : container_(container) {
++    observation_.Observe(service);
++  }
++  BindingsObserver(const BindingsObserver&) = delete;
++  BindingsObserver& operator=(const BindingsObserver&) = delete;
++  ~BindingsObserver() override = default;
++
++  // helium_workspace::WorkspaceService::Observer:
++  void OnWorkspaceBindingsChanged() override {
++    // Drag-time geometry must stay monotonic (see pitfalls: nothing that
++    // moves with the pointer may feed host_size); the drop's settle layout
++    // recomputes everything anyway.
++    if (!container_->IsDragging()) {
++      container_->InvalidateLayout();
++    }
++  }
++
++ private:
++  const raw_ptr<UnpinnedTabContainerView> container_;
++  base::ScopedObservation<helium_workspace::WorkspaceService,
++                          helium_workspace::WorkspaceService::Observer>
++      observation_{this};
++};
++
+ UnpinnedTabContainerView::UnpinnedTabContainerView(
+     TabCollectionNode* collection_node)
+     : DraggedTabsContainer(static_cast<views::View&>(*this),
+@@ -105,6 +201,10 @@ UnpinnedTabContainerView::UnpinnedTabCon
+   SetEventTargeter(std::make_unique<views::ViewTargeter>(
+       std::make_unique<UnpinnedTabContainerViewTargeter>(this)));
+ 
++  // helium-fork: the tracker half of the active row's card shadow; the view
++  // half is region-owned and injected via SetCardShadowFrame.
++  card_shadow_tracker_ = std::make_unique<CardShadowTracker>(this);
++
+   collection_node->set_remove_child_from_node(base::BindRepeating(
+       &TabCollectionAnimatingLayoutManager::AnimateAndDestroyChildView,
+       base::Unretained(&layout_manager_.get())));
+@@ -342,6 +442,97 @@ bool UnpinnedTabContainerView::ShouldSna
+   return views::IsViewClass<SplitTabView>(&child_view);
+ }
+ 
++void UnpinnedTabContainerView::AddedToWidget() {
++  views::View::AddedToWidget();
++  // The service is profile-keyed and only reachable once the widget chain
++  // exists. Const-cast: GetWorkspaceService() is const for its layout-time
++  // callers; observing needs the real thing.
++  if (auto* service = const_cast<helium_workspace::WorkspaceService*>(
++          GetWorkspaceService())) {
++    bindings_observer_ = std::make_unique<BindingsObserver>(this, service);
++  }
++}
++
++void UnpinnedTabContainerView::RemovedFromWidget() {
++  bindings_observer_.reset();
++  views::View::RemovedFromWidget();
++}
++
++void UnpinnedTabContainerView::SetCardShadowTarget(views::View* target) {
++  if (card_shadow_tracker_) {
++    card_shadow_tracker_->SetTarget(target);
++  }
++}
++
++void UnpinnedTabContainerView::SetCardShadowFrame(
++    HeliumCardShadowView* card_shadow) {
++  if (card_shadow_ != card_shadow) {
++    card_shadow_ = card_shadow;
++    card_shadow_scroll_subscription_ = {};
++  }
++  UpdateCardShadow();
++}
++
++void UnpinnedTabContainerView::UpdateCardShadow() {
++  if (!card_shadow_ || !card_shadow_tracker_) {
++    return;
++  }
++  views::ScrollView* const scroll_view = GetScrollViewForContainer();
++  // Layer scrolling never touches view bounds, so no observer fires when the
++  // list scrolls under the row -- follow the offset directly. Subscribed
++  // lazily: the container is not inside its scroll view yet when the region
++  // injects the shadow.
++  if (scroll_view && !card_shadow_scroll_subscription_) {
++    card_shadow_scroll_subscription_ = scroll_view->AddContentsScrolledCallback(
++        base::BindRepeating(&UnpinnedTabContainerView::UpdateCardShadow,
++                            base::Unretained(this)));
++  }
++  views::View* const shadow_parent = card_shadow_->parent();
++  views::View* const target = card_shadow_tracker_->target();
++  const int radius =
++      GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius);
++  bool shadow_visible =
++      target && target->GetVisible() && Contains(target) && shadow_parent &&
++      scroll_view &&
++      helium::CanShowCardShadow(target->width(), target->height(), radius);
++  // r5 hid the shadow for the whole drag; the user overruled that on
++  // 2026-08-20 -- the card keeps its shadow while it is carried. The drag
++  // handler parks the row's bounds and moves it by layer transform, which
++  // ConvertRectToTarget already folds in (View::GetTransformRelativeTo), so
++  // the only thing this needed was a transform observer on the tracker.
++  const bool dragging = shadow_visible && IsViewDragging(*target);
++  gfx::RectF rect;
++  if (shadow_visible) {
++    rect = gfx::RectF(gfx::SizeF(target->size()));
++    views::View::ConvertRectToTarget(target, shadow_parent, &rect);
++    rect.Offset(-scroll_view->CurrentOffset().x(),
++                -scroll_view->CurrentOffset().y());
++    // The region's layer never clips, so a row scrolled to the list's edge
++    // would cast outside the scroll area; hide instead (the row's own card
++    // is being clipped there anyway). A *dragged* row is exempt: it rides its
++    // own layer above the scroll view and is not clipped either, so clipping
++    // its shadow would be the odd one out.
++    if (!dragging) {
++      gfx::RectF scroll_rect(gfx::SizeF(scroll_view->size()));
++      views::View::ConvertRectToTarget(scroll_view, shadow_parent,
++                                       &scroll_rect);
++      scroll_rect.Inset(-1.0f);
++      shadow_visible = scroll_rect.Contains(rect);
++    }
++  }
++  if (!shadow_visible) {
++    card_shadow_->SetVisible(false);
++    return;
++  }
++  // The unified capsule radius; a split half's inset variant differs by a
++  // couple of points, invisible at these shadow alphas.
++  card_shadow_->SetShadowCornerRadius(radius);
++  // The card rect, not the (outset) shadow rect: SetCardBounds() grows the
++  // view itself, and the edge test above must keep judging the row.
++  card_shadow_->SetCardBounds(gfx::ToEnclosingRect(rect));
++  card_shadow_->SetVisible(true);
++}
++
+ void UnpinnedTabContainerView::ResetCollectionNode() {
+   collection_node_ = nullptr;
+ }
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+@@ -5,6 +5,8 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_UNPINNED_TAB_CONTAINER_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_UNPINNED_TAB_CONTAINER_VIEW_H_
+ 
++#include <memory>
++
+ #include "base/callback_list.h"
+ #include "base/memory/raw_ptr.h"
+ #include "chrome/browser/ui/views/frame/browser_root_view.h"
+@@ -14,6 +16,7 @@
+ #include "ui/views/layout/delegating_layout_manager.h"
+ #include "ui/views/view.h"
+ 
++class HeliumCardShadowView;
+ class TabCollectionNode;
+ class TabGroupView;
+ 
+@@ -37,6 +40,10 @@ class UnpinnedTabContainerView
+   UnpinnedTabContainerView& operator=(const UnpinnedTabContainerView&) = delete;
+   ~UnpinnedTabContainerView() override;
+ 
++  // views::View:
++  void AddedToWidget() override;
++  void RemovedFromWidget() override;
++
+   // LayoutDelegate:
+   views::ProposedLayout CalculateProposedLayout(
+       const views::SizeBounds& size_bounds) const override;
+@@ -58,6 +65,15 @@ class UnpinnedTabContainerView
+   std::optional<BrowserRootView::DropIndex> GetLinkDropIndex(
+       const gfx::Point& point_in_local_coords);
+ 
++  // helium-fork: aims the active row's floating-card shadow at `target` (the
++  // active tab's TabView, wherever it nests -- groups, splits), or hides it
++  // (null / not displayable). TabStripView::OnTabChanged is the caller.
++  void SetCardShadowTarget(views::View* target);
++  // The shadow view itself is owned by the *region* view -- every layer on
++  // the way down here (scroll viewport, TabStripView) masks to bounds and
++  // would clip the ring off edge rows. This container just aims it.
++  void SetCardShadowFrame(HeliumCardShadowView* card_shadow);
++
+  private:
+   // helium-fork: the profile's workspace model, or null (off-the-record
+   // windows, or before this view has a widget). Tabs bound to an entry are
+@@ -80,10 +96,25 @@ class UnpinnedTabContainerView
+ 
+   void ResetCollectionNode();
+ 
++  // helium-fork: follows the active row for the card shadow. Every trigger
++  // (activation, layout-animation frames, drag, deletion, visibility)
++  // funnels into UpdateCardShadow() so they all compute the same answer.
++  class CardShadowTracker;
++  class BindingsObserver;
++  void UpdateCardShadow();
++
+   raw_ptr<TabCollectionNode> collection_node_;
+   const raw_ref<TabCollectionAnimatingLayoutManager> layout_manager_;
+ 
+   base::CallbackListSubscription node_destroyed_subscription_;
++
++  raw_ptr<HeliumCardShadowView> card_shadow_ = nullptr;
++  std::unique_ptr<CardShadowTracker> card_shadow_tracker_;
++  // helium-fork r5: watches WorkspaceService binding flips so the layout's
++  // IsWorkspaceEntryTab() filter is re-evaluated the moment a tab is claimed
++  // or released -- the view tree itself never changes on a bind.
++  std::unique_ptr<BindingsObserver> bindings_observer_;
++  base::CallbackListSubscription card_shadow_scroll_subscription_;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_UNPINNED_TAB_CONTAINER_VIEW_H_

@@ -366,3 +366,10 @@ helium-fork/layout/omnibox-panel-gestures.patch
 helium-fork/layout/contents-loading-bar.patch
 helium-fork/layout/sidebar-row-field-chrome.patch
 helium-fork/layout/sidebar-toggle-cancel-fix.patch
+helium-fork/layout/sidebar-row-edit-panel.patch
+helium-fork/layout/page-info-quick-actions.patch
+helium-fork/layout/sidebar-surface-chrome.patch
+helium-fork/layout/sidebar-extension-reveal.patch
+helium-fork/layout/sidebar-media-strip.patch
+helium-fork/layout/sidebar-active-card-shadow.patch
+helium-fork/color/arc-app-surface-light.patch

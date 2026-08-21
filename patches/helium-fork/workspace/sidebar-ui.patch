@@ -1952,3 +1952,53 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
    } else {
      title = WindowMetadataController::FormatTitleForDisplay(title);
    }
+Index: src/chrome/browser/ui/helium_workspace/workspace_favicon.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_favicon.h
+@@ -0,0 +1,45 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_FAVICON_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_FAVICON_H_
++
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/favicon_status.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/web_contents.h"
++
++namespace helium_workspace {
++
++// Whether |tab| has a favicon the site actually served, as opposed to the
++// placeholder globe.
++//
++// This distinction has no other home in the tree and both sides of the
++// sidebar's icon handling need it. A tab that has not fetched an icon yet --
++// one that was just opened, for instance -- still reports a favicon: content
++// initialises FaviconStatus with `valid = false` and the default globe image,
++// so `IsImage()` is true and the placeholder passes for a real icon. Getting
++// this wrong in either direction is visible to the user:
++//
++//   - Writing without checking overwrites an entry's good icon with a globe
++//     the moment its tab is reopened, and that overwrite is persisted.
++//   - Reading without checking prefers a loading tab's globe over the icon
++//     already stored on the entry, so the row blanks out while it loads.
++inline bool TabHasRealFavicon(const tabs::TabInterface* tab) {
++  if (!tab) {
++    return false;
++  }
++  content::WebContents* contents = tab->GetContents();
++  if (!contents) {
++    return false;
++  }
++  content::NavigationEntry* entry =
++      contents->GetController().GetLastCommittedEntry();
++  return entry && entry->GetFavicon().valid;
++}
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_FAVICON_H_

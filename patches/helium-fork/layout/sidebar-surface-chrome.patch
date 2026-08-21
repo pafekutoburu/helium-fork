@@ -1,0 +1,1635 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -378,9 +378,11 @@ static_library("ui") {
+     "helium/arc_band_tint_store.h",
+     "helium/arc_caption_opacity.h",
+     "helium/arc_card_layout.h",
++    "helium/arc_favorite_accent.h",
+     "helium/arc_loading_bar.h",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_omnibox_panel.h",
++    "helium/arc_sidebar_surface.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+@@ -6027,10 +6029,14 @@ test("helium_workspace_unittests") {
+     "helium/arc_caption_opacity_unittest.cc",
+     "helium/arc_card_layout.h",
+     "helium/arc_card_layout_unittest.cc",
++    "helium/arc_favorite_accent.h",
++    "helium/arc_favorite_accent_unittest.cc",
+     "helium/arc_loading_bar.h",
+     "helium/arc_loading_bar_unittest.cc",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_minimal_field_state_unittest.cc",
++    "helium/arc_sidebar_surface.h",
++    "helium/arc_sidebar_surface_unittest.cc",
+     "helium/arc_omnibox_panel.h",
+     "helium/arc_omnibox_panel_unittest.cc",
+     "helium_workspace/workspace_blank_tab.h",
+@@ -6061,10 +6067,12 @@ test("helium_workspace_unittests") {
+     "//components/tabs:test_support",
+     "//testing/gmock",
+     "//testing/gtest",
+-    # helium-fork: arc_band_colors.h is header-only and deliberately free of
+-    # //ui/views, so the color derivations behind the address bar band can be
+-    # asserted in this lightweight target. //ui/gfx:color_utils exists for
+-    # exactly this ("without importing all the gfx").
++    # helium-fork: arc_band_colors.h, arc_sidebar_surface.h and
++    # arc_favorite_accent.h are header-only and deliberately free of //ui/views,
++    # so the color derivations behind the address bar band, the sidebar's
++    # capsules and the selected favorite's accent can all be asserted in this
++    # lightweight target. //ui/gfx:color_utils exists for exactly this
++    # ("without importing all the gfx").
+     "//ui/gfx:color_utils",
+     # helium-fork: same deal for arc_card_layout.h -- gfx::Rect/Insets only,
+     # no //ui/views, so the card's geometry contract is assertable here.
+Index: src/chrome/browser/ui/helium/arc_favorite_accent.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_favorite_accent.h
+@@ -0,0 +1,100 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_FAVORITE_ACCENT_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_FAVORITE_ACCENT_H_
++
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/color_utils.h"
++
++// helium-fork: the selected favorites card takes its color from its own
++// favicon rather than from a theme accent.
++//
++// What Arc actually does, measured 2026-08-19: it scales the favicon up to
++// fill the capsule, blurs it heavily, clips it to the rounded rect, and paints
++// it over the card -- then strokes the ring from the *same* blurred field.
++// Sampling the selected card column by column shows the fill's warm-to-cool
++// run lining up with the icon's own dots left to right (R-B +8.5 at 9% across,
++// +1.0 at 40%, -10.9 at 90%, against icon dots of orange/green/blue in that
++// order), and the chroma peaking on the icon's row and falling off toward the
++// top and bottom edges. A single dominant color cannot produce either of
++// those; a blurred copy produces both for free.
++//
++// So this file holds the decisions that are not "draw the image": how much of
++// it the wash gets, how the ring's stroke color is normalized, and when the
++// icon has no color worth taking.
++//
++// Header-only and free of //ui/views, so the thresholds are pinnable in the
++// lightweight test target.
++namespace helium {
++
++// How much of the blurred favicon the background wash shows, over the card's
++// own active fill. It has to stay a wash -- any stronger and the card stops
++// reading as a surface and starts reading as a thumbnail.
++inline constexpr float kFavoriteAccentFillAlpha = 0.12f;
++
++// The ring is opaque: Arc's measured stroke values are what the user sees
++// with nothing composited underneath (2026-08-19: an all-red favicon rings
++// pastel red (238,129,129), letterboxd rings warm-to-cool (200,165,133) /
++// (132,183,207)). The brightness comes from FavoriteRingColor() below, not
++// from letting the card show through.
++inline constexpr float kFavoriteAccentStrokeAlpha = 1.0f;
++
++// The ring's lightness floor. Arc's ring sits at HSL lightness 0.66-0.72
++// regardless of how dark the favicon is -- a mostly-black icon (letterboxd)
++// still rings in light pastels, while the hue and saturation stay the icon's
++// own. Ours drew the blurred field directly, so a dark icon made a dark ring
++// (user: "太暗了就不太好看", 2026-08-19). 0.70 is the middle of the measured
++// range.
++inline constexpr double kFavoriteRingLightness = 0.70;
++
++// The stroke color for one cell of the blurred field: same hue, same
++// saturation, lightness lifted to the floor. Already-light colors pass
++// through untouched -- the floor only lifts, it never darkens.
++//
++// Sanity against Arc (2026-08-19): saturated youtube red (231,53,46) comes
++// out (239,122,118) against Arc's measured (238,129,129); a dark warm brown
++// (90,60,40) comes out (208,173,149) against letterboxd's warm side
++// (200,165,133).
++inline SkColor FavoriteRingColor(SkColor field) {
++  const SkColor opaque = SkColorSetA(field, SK_AlphaOPAQUE);
++  color_utils::HSL hsl;
++  color_utils::SkColorToHSL(opaque, &hsl);
++  if (hsl.l >= kFavoriteRingLightness) {
++    return opaque;
++  }
++  hsl.l = kFavoriteRingLightness;
++  return color_utils::HSLToSkColor(hsl, SK_AlphaOPAQUE);
++}
++
++// An icon with no usable color falls back to the theme accent ring. This is
++// not a contrast fallback -- the band's rule against those (a fallback there
++// paints black pages gray) is about a surface the user is reading text on,
++// which this is not. It only answers "did the icon have a color at all".
++//
++// `mean` is the average of the downsampled icon, so a logo that is mostly
++// white with one colored glyph still averages to something faintly colored and
++// passes; a grayscale wordmark, the placeholder globe, and a fully transparent
++// icon do not.
++inline bool IsUsableFavoriteAccent(SkColor mean) {
++  // Below this the blurred wash is indistinguishable from the plain fill, and
++  // the ring reads as a dirty gray rather than as the site's color.
++  constexpr double kMinSaturation = 0.15;
++  // `mean`'s alpha is the icon's coverage of its own square, and most favicons
++  // are a glyph on transparent -- a centered disc covers 20%, a thin wordmark
++  // less. So this only has to reject an icon that is empty, not one that is
++  // sparse; at 0x40 it threw out the ordinary case (a red disc on transparent
++  // fell back to the theme ring, caught on the probe 2026-08-19).
++  constexpr SkAlpha kMinAlpha = 0x08;
++  if (SkColorGetA(mean) < kMinAlpha) {
++    return false;
++  }
++  color_utils::HSL hsl;
++  color_utils::SkColorToHSL(SkColorSetA(mean, SK_AlphaOPAQUE), &hsl);
++  return hsl.s >= kMinSaturation;
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_FAVORITE_ACCENT_H_
+Index: src/chrome/browser/ui/helium/arc_favorite_accent_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_favorite_accent_unittest.cc
+@@ -0,0 +1,91 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_favorite_accent.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++TEST(ArcFavoriteAccentTest, AColorfulIconCarriesTheAccent) {
++  // The favicon the selected card was measured against: orange, green and blue
++  // dots, averaging to something clearly colored.
++  EXPECT_TRUE(IsUsableFavoriteAccent(SkColorSetRGB(0xEF, 0x87, 0x33)));
++  EXPECT_TRUE(IsUsableFavoriteAccent(SkColorSetRGB(0x66, 0xDD, 0x67)));
++  EXPECT_TRUE(IsUsableFavoriteAccent(SkColorSetRGB(0x65, 0xBA, 0xEF)));
++}
++
++// A grayscale wordmark and the placeholder globe both average to gray. Tinting
++// the ring with those gives a dirty gray ring, which reads as a rendering bug
++// rather than as the site's color -- so they take the theme accent instead.
++TEST(ArcFavoriteAccentTest, AGrayIconFallsBackToTheThemeAccent) {
++  EXPECT_FALSE(IsUsableFavoriteAccent(SkColorSetRGB(0x80, 0x80, 0x80)));
++  EXPECT_FALSE(IsUsableFavoriteAccent(SkColorSetRGB(0x00, 0x00, 0x00)));
++  EXPECT_FALSE(IsUsableFavoriteAccent(SkColorSetRGB(0xFF, 0xFF, 0xFF)));
++  // Barely-there tint: below the threshold the wash is indistinguishable from
++  // the plain fill anyway.
++  EXPECT_FALSE(IsUsableFavoriteAccent(SkColorSetRGB(0x84, 0x80, 0x80)));
++}
++
++TEST(ArcFavoriteAccentTest, AnEmptyIconFallsBackToTheThemeAccent) {
++  EXPECT_FALSE(IsUsableFavoriteAccent(SK_ColorTRANSPARENT));
++  EXPECT_FALSE(IsUsableFavoriteAccent(SkColorSetARGB(0x04, 0xEF, 0x87, 0x33)));
++}
++
++// Sparse is not empty. A glyph on a transparent square is what a favicon
++// normally is -- a centered disc covers about a fifth of it -- and the gate
++// used to reject exactly that.
++TEST(ArcFavoriteAccentTest, ASparseIconStillCarriesTheAccent) {
++  EXPECT_TRUE(IsUsableFavoriteAccent(SkColorSetARGB(0x32, 0xDC, 0x28, 0x28)));
++  EXPECT_TRUE(IsUsableFavoriteAccent(SkColorSetARGB(0x14, 0xEF, 0x87, 0x33)));
++}
++
++// The ring is opaque and the fill stays a wash: the ring's brightness now
++// comes from the lightness floor, not from compositing against the card.
++TEST(ArcFavoriteAccentTest, TheRingIsFarStrongerThanTheWash) {
++  EXPECT_GT(kFavoriteAccentStrokeAlpha, kFavoriteAccentFillAlpha * 5.0f);
++  EXPECT_LE(kFavoriteAccentFillAlpha, 0.2f);
++  EXPECT_EQ(1.0f, kFavoriteAccentStrokeAlpha);
++}
++
++int Lightness255(SkColor color) {
++  color_utils::HSL hsl;
++  color_utils::SkColorToHSL(color, &hsl);
++  return static_cast<int>(hsl.l * 255.0 + 0.5);
++}
++
++// Arc 2026-08-19: the ring sits at HSL lightness 0.66-0.72 no matter how dark
++// the favicon is -- an all-red icon rings pastel (238,129,129), letterboxd's
++// near-black field rings (200,165,133)/(132,183,207). The floor lifts a
++// saturated youtube red into that band while keeping its hue.
++TEST(ArcFavoriteAccentTest, TheRingColorIsLiftedToTheArcBand) {
++  const SkColor lifted = FavoriteRingColor(SkColorSetRGB(231, 53, 46));
++  // Against Arc's measured (238,129,129), channel by channel.
++  EXPECT_NEAR(238, SkColorGetR(lifted), 12);
++  EXPECT_NEAR(129, SkColorGetG(lifted), 12);
++  EXPECT_NEAR(129, SkColorGetB(lifted), 12);
++  // Still red: the lift changes lightness only.
++  EXPECT_GT(SkColorGetR(lifted), SkColorGetG(lifted) + 60);
++}
++
++// A dark warm cell -- the letterboxd case that shipped as a near-black ring
++// (user 2026-08-19) -- comes out in the same light pastel band as Arc's warm
++// side (200,165,133).
++TEST(ArcFavoriteAccentTest, ADarkFieldStillRingsLight) {
++  const SkColor lifted = FavoriteRingColor(SkColorSetRGB(90, 60, 40));
++  EXPECT_NEAR(255.0 * kFavoriteRingLightness, Lightness255(lifted), 3);
++  // Warm stays warm.
++  EXPECT_GT(SkColorGetR(lifted), SkColorGetB(lifted) + 30);
++}
++
++// The floor only lifts. A field that is already light keeps its own
++// lightness -- darkening it would trade one wrong ring for another.
++TEST(ArcFavoriteAccentTest, AnAlreadyLightFieldIsUntouched) {
++  const SkColor light = SkColorSetRGB(240, 220, 200);
++  EXPECT_EQ(light, FavoriteRingColor(light));
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_sidebar_surface.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_sidebar_surface.h
+@@ -0,0 +1,216 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SURFACE_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SURFACE_H_
++
++#include <algorithm>
++
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/color_utils.h"
++
++// helium-fork: the fill behind the sidebar's own capsules -- the address row
++// and each favorites card.
++//
++// These sit on the sidebar, which is the app-themed half of the window (the
++// "blue zone"), so unlike arc_band_colors.h nothing here takes a page color.
++// The one input is the sidebar's own surface and the answer is a translucent
++// mid-gray wash over it, which is why a light theme gets a slightly darker
++// capsule and a dark theme a slightly lighter one from the same two constants.
++//
++// Header-only and free of //ui/views so the constants can be pinned in the
++// lightweight test target.
++namespace helium {
++
++// The app surface: the base color of the whole "blue zone" -- the sidebar,
++// the window frame, the gutter around the content card -- in the default
++// light theme. Everything else in this header is a wash *over* this.
++//
++// Not pure white. Measured off the live Dia window 2026-08-20 (@2x, the
++// window's own layer via `screencapture -o -l<winid>`, so the desktop behind
++// it is excluded): a strictly neutral gray, RGB(225,225,225) at the top of
++// the sidebar easing to (233,233,233) at the bottom, mean #E4E4E4 = L228 --
++// the same L228 the r5 shadow calibration had already been normalizing
++// against. The user asked for it directly ("pure white is too harsh, and
++// nobody ships pure white any more", 2026-08-20).
++//
++// Dia also runs the sidebar at alpha ~0.93 over a blurred desktop (same
++// measurement: least squares over backdrop luminances 45..156 gives
++// 0.930, stable across blur radii 30..160). That half is r7's -- Helium
++// already carries the machinery (chrome/browser/ui/views/helium/
++// native_frame_materials*), it is just off by default and the Arc shell has
++// never run on the translucent path.
++//
++// Applied by the one recipe in chrome/browser/ui/color/
++// material_chrome_color_mixer.cc, and only for the default theme: a custom
++// theme or a user color still wins.
++inline constexpr SkColor kArcAppSurfaceLight = SkColorSetRGB(0xE4, 0xE4, 0xE4);
++
++// The fill for a sidebar capsule at rest and under the pointer.
++//
++// A fixed mid-gray at a fixed alpha, not the sidebar's contrasting color.
++// Three Arc measurements pin the model (all 2026-08-19, active window):
++// a dark space L116 -> L129 at rest (L136 hovered), a light space L242 ->
++// L230, and a second light space L222 -> L212.5. One gray at one alpha hits
++// all three (129.2 / 229.9 / 213.9); the contrasting-color model fit only
++// the dark one and came out twice as heavy on light themes -- which is
++// exactly what the user reported (r2 shipped it; corrected in r3).
++// The hovered alpha is fitted to the dark space's L136; neither light space
++// was measured hovered, so hover keeps the same one-model shape rather than
++// a second data point.
++//
++// Deliberately not GetBandFieldColor(): the band's field goes the other way
++// (0.10 at rest, 0.08 hovered) because there the row capsule takes the hover
++// over. Same shape, opposite intent -- merging them would make each surface's
++// measurements hostage to the other's.
++inline SkColor GetSidebarSurfaceColor(SkColor sidebar, bool hovered) {
++  // L182: solve the three resting measurements above for one overlay color;
++  // they agree on ~181.5 at alpha 0.20.
++  constexpr SkColor kWash = SkColorSetRGB(0xB6, 0xB6, 0xB6);
++  constexpr float kRestAlpha = 0.20f;
++  constexpr float kHoveredAlpha = 0.30f;
++  return color_utils::AlphaBlend(kWash, sidebar,
++                                 hovered ? kHoveredAlpha : kRestAlpha);
++}
++
++// The selected favorites card, before its favicon wash goes on top.
++//
++// White, not the gray wash: the selected card is *lit*, and Arc lights
++// it the same way in either theme. Measured 2026-08-19 on two of the user's
++// spaces -- a dark one (sidebar L116, card L167) and a light one (sidebar
++// L242, card L247) -- and both come out as white at 0.37/0.39. The dark theme
++// gets a big lift and the light one barely any, which is white saturating, not
++// two different rules.
++//
++// Deriving this from GetColorWithMaxContrast() instead fits the dark
++// measurement just as well and is wrong: on a light sidebar it steps toward
++// black, and the selected card comes out *darker* than its neighbours. Only
++// having both themes in hand tells the two models apart.
++//
++// Also deliberately not kColorTabBackgroundActiveFrameActive, which the tab
++// strip's mixer resolves to kColorToolbar -- exactly the sidebar's own color,
++// so the selected card's fill was invisible and the ring carried the whole
++// signal on its own.
++inline SkColor GetSidebarSelectedSurfaceColor(SkColor sidebar) {
++  constexpr float kSelectedAlpha = 0.37f;
++  return color_utils::AlphaBlend(SK_ColorWHITE, sidebar, kSelectedAlpha);
++}
++
++// The floating card -- the active tab row and the media strip, Dia's
++// treatment of "the tab you are on" (user 2026-08-20).
++//
++// Dia measured 2026-08-20 (@2x, light lavender theme): a pure-white capsule
++// -- body RGB(250,250,251) with a 0.5pt lighter rim we skip -- no hairline
++// anywhere, elevation carried entirely by a soft shadow. So: pure white on a
++// light sidebar. Dia's dark theme could not be measured without driving the
++// app (off-limits), so dark themes get the standard white lift instead --
++// same shape as every dark elevated surface, acceptance-tunable.
++inline SkColor GetSidebarFloatingCardColor(SkColor sidebar) {
++  return color_utils::IsDark(sidebar)
++             ? color_utils::AlphaBlend(SK_ColorWHITE, sidebar, 0.10f)
++             : SK_ColorWHITE;
++}
++
++// The card's shadow, consumed by HeliumCardShadowView (self-painted).
++//
++// Why self-painted and not ui::Shadow: the MD model welds offset.y and blur
++// to the elevation (key = (0,E) at blur 4E) and clamps E to
++// (min_dimension - 2 * corner_radius) / 4 -- a 34pt row at radius 12 caps at
++// E=2, i.e. a tight, downward `0 2px 4px` cast. Dia's look is the opposite:
++// a broad, near-centered halo. Measured 2026-08-20 off the user's Dia
++// screenshots (@2x, light lavender, bg L~228), delta below the card edge:
++//   1px +13 / 6px +12 / 12px +8 / 16px +6 / 28px +4   (still visible 14pt out)
++// above: 1px +11 / 16px +6 / 20px +3; sides decay within ~5pt. Offset is at
++// most (0,1-2). No two-gaussian sum reproduces that fat tail exactly; the
++// pair below is the closest fit and the acceptance knob is this block alone.
++//
++// Painted as a stack of blurred black round-rects (sigma in pt; a pass's
++// visible reach is roughly 3*sigma + offset). Dia's profile is
++// *anisotropic* -- the sides are done by ~5pt while the bottom carries to
++// 14pt -- which no isotropic gaussian can do alone, so the long passes pull
++// their rect *in* horizontally (inset_h): the bottom edge keeps the full
++// tail, the sides only see the tight hug. Dark themes keep black shadows at
++// doubled alpha (user 2026-08-20: no Dia dark-mode white glow; gray card +
++// black shadow).
++struct SidebarCardShadowPass {
++  int offset_y;
++  double sigma;
++  double light_alpha;
++  double dark_alpha;
++  // Horizontal inset of this pass's rect from the card's own edges.
++  int inset_h;
++};
++// Refit 2026-08-20 (second pass) against Dia and this build measured with
++// *one* instrument, same day, same 2x window screenshots -- the earlier
++// calibration compared numbers taken two different ways and so read the
++// gap backwards. Deltas below/above/beside the card edge, in device px,
++// against each side's own local backdrop:
++//   Dia below : 10.4 9.6 8.8 8.6 7.4 6.8 6.2 5.7 ... 3.2@28 1.6@40
++//   Dia above :  9.0 8.0 7.8 7.0 6.4 6.1 5.2 4.8 ... 2.6@28 1.0@40
++//   Dia beside:  9.0 9.0 8.0 8.0 8.0 6.5 6.0 5.5 ... 1.5@14
++// i.e. Dia is *near-symmetric* about the card, lighter at the contact line
++// than we were, and carries a long tail upward too. The old table was a
++// bottom-biased cast: heavier than Dia by ~3 in the first 8px below, and
++// short of it by ~2 in the 10-24px band above.
++//
++// The fit that lands all three curves within ~0.8 of Dia is one broad
++// near-centered halo carrying most of the alpha, a tight hug for the
++// contact read, and a small downward-biased pass for the bit of gravity.
++// The sides cannot be made to decay as fast as Dia's: a gaussian wide
++// enough for the vertical tail only *shifts* sideways under inset_h, it
++// does not steepen, so `beside` runs ~2 heavy past 10px. That residual is
++// the acceptance knob's known limit, not an oversight.
++inline constexpr SidebarCardShadowPass kSidebarCardShadowPasses[] = {
++    // hug: the contact line, and the only pass narrow enough to shape the
++    // sides.
++    {0, 4.5, 0.027, 0.054, 0},
++    // drift: the bit of gravity -- a downward-biased mid pass.
++    {5, 13.0, 0.018, 0.036, 3},
++    // halo: the broad near-centered fade that carries the look; inset so
++    // the sides stay as close to Dia-narrow as a gaussian allows.
++    {0, 15.0, 0.055, 0.110, 6},
++};
++
++// How far the shadow view's bounds extend past the card. Horizontal is
++// budgeted, not derived: the row already runs to within 8pt of the sidebar
++// edge (kVerticalTabStripHorizontalPadding), so 8 is every point available
++// before the shadow would paint onto the content card -- and Dia's own
++// sideways decay is done by ~7pt anyway. Vertical must swallow the longest
++// pass's practical reach (offset 0 + 2*sigma 15 = 30, offset 5 + 2*sigma 13
++// = 31; the tail beyond is sub-1% alpha).
++inline constexpr int kSidebarCardShadowOutsetH = 8;
++inline constexpr int kSidebarCardShadowOutsetV = 32;
++
++// Whether a card of this size may carry the shadow at all. Purely aesthetic
++// now (the self-painted shadow has no ninepatch DCHECK to trip, unlike the
++// ui::Shadow version this floor was born under, probe-hit 2026-08-20): a row
++// mid-entrance-animation is a sliver a few points tall, and a full-strength
++// halo around a sliver reads as a smudge. Keep the same floor: min edge >=
++// 2r + 4, the size below which the capsule's own silhouette collapses.
++inline constexpr bool CanShowCardShadow(int width, int height, int radius) {
++  return std::min(width, height) >= 2 * radius + 4;
++}
++
++// The same fill part-way through the hover tween. `progress` is the animation's
++// 0..1 value, so 0 is exactly the resting fill and 1 exactly the hovered one.
++//
++// Interpolating the alpha rather than cross-fading two painted capsules keeps
++// the row a single layer: two stacked washes would be visibly darker than
++// either endpoint at the halfway point.
++inline SkColor GetSidebarSurfaceColorAt(SkColor sidebar, double progress) {
++  const SkColor rest = GetSidebarSurfaceColor(sidebar, /*hovered=*/false);
++  const SkColor hovered = GetSidebarSurfaceColor(sidebar, /*hovered=*/true);
++  if (progress <= 0.0) {
++    return rest;
++  }
++  if (progress >= 1.0) {
++    return hovered;
++  }
++  return color_utils::AlphaBlend(hovered, rest,
++                                 static_cast<float>(progress));
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SURFACE_H_
+Index: src/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
+@@ -0,0 +1,186 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++
++#include <algorithm>
++#include <iterator>
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++// The three sidebars Arc was measured on (all 2026-08-19, active window).
++constexpr SkColor kDarkSidebar = SkColorSetRGB(0x74, 0x74, 0x74);   // L116
++constexpr SkColor kLightSidebar = SkColorSetRGB(0xF2, 0xF2, 0xF2);  // L242
++constexpr SkColor kGraySidebar = SkColorSetRGB(0xDE, 0xDE, 0xDE);   // L222
++
++int Luminance(SkColor color) {
++  return (SkColorGetR(color) + SkColorGetG(color) + SkColorGetB(color)) / 3;
++}
++
++// Arc 2026-08-19, three spaces: dark L116 -> L129 rest / L136 hovered, light
++// L242 -> L230, light L222 -> L212.5. One gray at one alpha has to hit all
++// three -- the contrast-color model fit only the dark space and shipped twice
++// as heavy on light themes (r2, user-reported). ⚠ Neither light space was
++// measured hovered, so only the dark hover value is pinned.
++TEST(ArcSidebarSurfaceTest, MatchesTheMeasuredArcValues) {
++  EXPECT_NEAR(129, Luminance(GetSidebarSurfaceColor(kDarkSidebar,
++                                                    /*hovered=*/false)),
++              1);
++  EXPECT_NEAR(136, Luminance(GetSidebarSurfaceColor(kDarkSidebar,
++                                                    /*hovered=*/true)),
++              1);
++  EXPECT_NEAR(230, Luminance(GetSidebarSurfaceColor(kLightSidebar,
++                                                    /*hovered=*/false)),
++              1);
++  EXPECT_NEAR(214, Luminance(GetSidebarSurfaceColor(kGraySidebar,
++                                                    /*hovered=*/false)),
++              2);
++}
++
++// The wash is a fixed mid-gray, so a light theme darkens where a dark one
++// lightens. A hard-coded white would make the light theme's capsule
++// invisible.
++TEST(ArcSidebarSurfaceTest, ALightSidebarDarkensInstead) {
++  for (const bool hovered : {false, true}) {
++    EXPECT_GT(Luminance(GetSidebarSurfaceColor(kDarkSidebar, hovered)),
++              Luminance(kDarkSidebar));
++    EXPECT_LT(Luminance(GetSidebarSurfaceColor(kLightSidebar, hovered)),
++              Luminance(kLightSidebar));
++  }
++}
++
++// Hover is always the stronger of the two, whichever direction the wash goes.
++TEST(ArcSidebarSurfaceTest, HoverIsAlwaysFartherFromTheSidebar) {
++  for (const SkColor sidebar : {kDarkSidebar, kLightSidebar, kGraySidebar}) {
++    const int base = Luminance(sidebar);
++    const int rest = Luminance(GetSidebarSurfaceColor(sidebar,
++                                                      /*hovered=*/false));
++    const int hovered = Luminance(GetSidebarSurfaceColor(sidebar,
++                                                         /*hovered=*/true));
++    EXPECT_GT(std::abs(hovered - base), std::abs(rest - base));
++  }
++}
++
++// Arc 2026-08-19, both of the user's spaces: dark sidebar L116 -> card L167,
++// light sidebar L242 -> card L247. Two very different steps, one rule.
++TEST(ArcSidebarSurfaceTest, TheSelectedCardMatchesTheMeasuredArcValues) {
++  EXPECT_NEAR(167, Luminance(GetSidebarSelectedSurfaceColor(kDarkSidebar)), 2);
++  EXPECT_NEAR(247, Luminance(GetSidebarSelectedSurfaceColor(kLightSidebar)), 2);
++}
++
++// The one that would have caught the light-theme bug: the selected card is lit
++// in *either* theme. Derived from the contrasting color it fits the dark
++// measurement and comes out darker than its neighbours on a light sidebar.
++TEST(ArcSidebarSurfaceTest, TheSelectedCardIsAlwaysLighter) {
++  for (const SkColor sidebar : {kDarkSidebar, kLightSidebar, kGraySidebar}) {
++    EXPECT_GT(Luminance(GetSidebarSelectedSurfaceColor(sidebar)),
++              Luminance(sidebar));
++  }
++}
++
++// ...and it is the odd one out: the unselected fills step toward the fixed
++// gray, so on a light sidebar they go the other way.
++TEST(ArcSidebarSurfaceTest, TheUnselectedFillsStepTowardTheGray) {
++  EXPECT_LT(Luminance(GetSidebarSurfaceColor(kLightSidebar,
++                                             /*hovered=*/false)),
++            Luminance(kLightSidebar));
++  EXPECT_GT(Luminance(GetSidebarSurfaceColor(kDarkSidebar,
++                                             /*hovered=*/false)),
++            Luminance(kDarkSidebar));
++}
++
++// The tween's endpoints have to be the two states exactly -- a capsule that
++// settles a shade off its resting color is a capsule that never stops looking
++// hovered.
++TEST(ArcSidebarSurfaceTest, TheTweenEndpointsAreTheTwoStates) {
++  for (const SkColor sidebar : {kDarkSidebar, kLightSidebar}) {
++    EXPECT_EQ(GetSidebarSurfaceColor(sidebar, /*hovered=*/false),
++              GetSidebarSurfaceColorAt(sidebar, 0.0));
++    EXPECT_EQ(GetSidebarSurfaceColor(sidebar, /*hovered=*/true),
++              GetSidebarSurfaceColorAt(sidebar, 1.0));
++    // Out-of-range values clamp rather than overshoot past either end.
++    EXPECT_EQ(GetSidebarSurfaceColorAt(sidebar, 0.0),
++              GetSidebarSurfaceColorAt(sidebar, -0.5));
++    EXPECT_EQ(GetSidebarSurfaceColorAt(sidebar, 1.0),
++              GetSidebarSurfaceColorAt(sidebar, 1.5));
++  }
++}
++
++// Halfway is between the endpoints, not darker than both: interpolating the
++// alpha rather than stacking two washes is what keeps it there.
++TEST(ArcSidebarSurfaceTest, TheTweenStaysBetweenItsEndpoints) {
++  const int rest = Luminance(GetSidebarSurfaceColor(kDarkSidebar,
++                                                    /*hovered=*/false));
++  const int hovered = Luminance(GetSidebarSurfaceColor(kDarkSidebar,
++                                                       /*hovered=*/true));
++  const int middle = Luminance(GetSidebarSurfaceColorAt(kDarkSidebar, 0.5));
++  EXPECT_GE(middle, rest);
++  EXPECT_LE(middle, hovered);
++}
++
++// The floating card (Dia's active-tab treatment, measured 2026-08-20): pure
++// white on any light sidebar -- including the fork's own white one -- and a
++// white lift on dark ones. ⚠ Dia's dark theme was not measurable, so only
++// the light value is a replication; the dark one is our standard lift.
++TEST(ArcSidebarSurfaceTest, TheFloatingCardIsPureWhiteOnLightAndLiftsOnDark) {
++  EXPECT_EQ(SK_ColorWHITE, GetSidebarFloatingCardColor(SK_ColorWHITE));
++  EXPECT_EQ(SK_ColorWHITE, GetSidebarFloatingCardColor(kLightSidebar));
++  EXPECT_EQ(SK_ColorWHITE, GetSidebarFloatingCardColor(kGraySidebar));
++  const SkColor dark = SkColorSetRGB(0x30, 0x30, 0x30);
++  EXPECT_GT(Luminance(GetSidebarFloatingCardColor(dark)), Luminance(dark));
++  EXPECT_LT(Luminance(GetSidebarFloatingCardColor(dark)), 255);
++}
++
++// The self-painted shadow pair (r5). The relations are the contract, the
++// exact values are acceptance-tunable against the Dia decay profile
++// (measured 2026-08-20, see arc_sidebar_surface.h).
++TEST(ArcSidebarSurfaceTest, TheCardShadowConstantsHoldTheirShape) {
++  static_assert(std::size(kSidebarCardShadowPasses) >= 2);
++  int max_reach = 0;
++  int max_offset = 0;
++  for (const SidebarCardShadowPass& pass : kSidebarCardShadowPasses) {
++    // Black at some alpha in both themes, dark heavier (a dark backdrop
++    // swallows the light values).
++    EXPECT_GT(pass.light_alpha, 0.0);
++    EXPECT_GT(pass.dark_alpha, pass.light_alpha);
++    EXPECT_GT(pass.sigma, 0.0);
++    // No pass may read directional on its own terms: offsets stay within
++    // Dia's "a point or two, maybe a drop" band.
++    EXPECT_GE(pass.offset_y, 0);
++    EXPECT_LE(pass.offset_y, 6);
++    // A pass's horizontal inset keeps its rect inside the card.
++    EXPECT_GE(pass.inset_h, 0);
++    max_reach = std::max(
++        max_reach, pass.offset_y + static_cast<int>(2.0 * pass.sigma));
++    max_offset = std::max(max_offset, pass.offset_y);
++  }
++  // The first pass is the all-sides hug: centered and full-rect.
++  EXPECT_EQ(0, kSidebarCardShadowPasses[0].offset_y);
++  EXPECT_EQ(0, kSidebarCardShadowPasses[0].inset_h);
++  // The horizontal outset is a hard budget: the row already sits 8pt from
++  // the sidebar edge (kVerticalTabStripHorizontalPadding), and one point
++  // more would paint shadow onto the content card.
++  EXPECT_EQ(8, kSidebarCardShadowOutsetH);
++  // The vertical outset must hold every pass's practical reach (offset +
++  // 2*sigma); anything less would visibly crop the fade.
++  EXPECT_GE(kSidebarCardShadowOutsetV, max_reach);
++}
++
++// The shadow's geometry floor: a full row (>=34pt at radius 12) carries it,
++// an entrance-animation sliver must not. Born as a ninepatch-DCHECK guard
++// under ui::Shadow (probe-hit 2026-08-20); kept as a pure aesthetic floor
++// now that the shadow is self-painted.
++TEST(ArcSidebarSurfaceTest, TheCardShadowHasAGeometryFloor) {
++  EXPECT_TRUE(CanShowCardShadow(240, 34, 12));
++  EXPECT_TRUE(CanShowCardShadow(240, 28, 12));
++  EXPECT_FALSE(CanShowCardShadow(240, 27, 12));
++  EXPECT_FALSE(CanShowCardShadow(240, 8, 12));
++  EXPECT_FALSE(CanShowCardShadow(20, 34, 12));
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/layout_constants.cc
+===================================================================
+--- src.orig/chrome/browser/ui/layout_constants.cc
++++ src/chrome/browser/ui/layout_constants.cc
+@@ -144,8 +144,14 @@ int GetLayoutConstant(LayoutConstant con
+       return 20;
+     case LayoutConstant::kMainBackgroundRegionCornerRadius:
+     case LayoutConstant::kToolbarCornerRadius:
+-    case LayoutConstant::kVerticalTabCornerRadius:
+       return 8;
++    case LayoutConstant::kVerticalTabCornerRadius:
++      // helium-fork: every capsule in the sidebar -- tab rows, the address
++      // row, the new-tab button -- shares the favorites cards' radius. Arc
++      // uses one radius for all of them (measured ~11.5-12.25pt, 2026-08-19)
++      // and the user asked for one design language (2026-08-19). Keep equal
++      // to kVerticalTabFavoriteCornerRadius.
++      return 12;
+     case LayoutConstant::kVerticalTabHeight:
+       // helium-fork: Arc's rows are a little taller than upstream's 30.
+       return 34;
+@@ -155,10 +161,15 @@ int GetLayoutConstant(LayoutConstant con
+       return 44;
+     case LayoutConstant::kVerticalTabFavoriteCornerRadius:
+       return 12;
++    case LayoutConstant::kVerticalTabFavoriteGridGap:
++      return 8;
+     case LayoutConstant::kVerticalTabMinWidth:
+       return 30;
+     case LayoutConstant::kVerticalTabStripHorizontalPadding:
+-      return 6;
++      // helium-fork: 8 rather than upstream helium's 6, so the sidebar's
++      // margin matches the gap between two favorites capsules. Arc has one
++      // number for both and the grid reads crooked with two.
++      return 8;
+     case LayoutConstant::kVerticalTabStripUncollapsedVerticalPadding:
+       return 6;
+     case LayoutConstant::kVerticalTabStripCollapsedVerticalPadding:
+Index: src/chrome/browser/ui/layout_constants.h
+===================================================================
+--- src.orig/chrome/browser/ui/layout_constants.h
++++ src/chrome/browser/ui/layout_constants.h
+@@ -232,6 +232,14 @@ enum class LayoutConstant {
+   // helium-fork: the corner radius of a workspace favorite capsule.
+   kVerticalTabFavoriteCornerRadius,
+ 
++  // helium-fork: the gap around the workspace favorites grid -- between two
++  // capsules, between two rows, and between the sidebar's address row and the
++  // grid's first row. Arc uses one value for all of them (measured 8pt on both
++  // a dark and a light space, 2026-08-19), and the grid reads uneven the
++  // moment they drift apart, so they share a constant rather than each file
++  // keeping its own.
++  kVerticalTabFavoriteGridGap,
++
+   // The minimum possible width for a vertical tab.
+   kVerticalTabMinWidth,
+ 
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -642,15 +642,15 @@ bool LocationBarView::IsInitialized() co
+ }
+ 
+ int LocationBarView::GetBorderRadius() const {
+-  // helium-fork: on the Arc band the field is concentric with the card it sits
+-  // in rather than carrying its own flat 8. One chain, three radii: the system
+-  // window radius, the card at radius - kHeliumBasePadding, and the field at
+-  // one more inset in again. A change to the system radius then moves all of
+-  // them together instead of leaving a mismatched pill in the corner.
++  // helium-fork: on the Arc band the field is a capsule like the sidebar's,
++  // so it takes the favorites cards' radius -- the user asked for one capsule
++  // radius across the browser (2026-08-19), and Arc's own address capsule
++  // measures the same ~12 as its cards. This deliberately leaves the
++  // window/card concentric chain (GetPaddedFrameRadius) to the card and the
++  // panel outers; only the field joins the capsule language. The edit panel's
++  // radius follows this one via ArcOmniboxPanelMetrics.
+   if (ShouldMinimizeArcChrome()) {
+-    return std::max(0, GetPaddedFrameRadius() -
+-                           GetLayoutConstant(
+-                               LayoutConstant::kHeliumBasePadding));
++    return GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteCornerRadius);
+   }
+   return ComputeBorderRadius(size());
+ }
+@@ -1562,7 +1562,8 @@ void LocationBarView::RefreshArcTitleLab
+           ShouldMinimizeArcChrome(),
+           (omnibox_view_ && omnibox_view_->HasFocus()) ||
+               GetOmniboxController()->edit_model()->user_input_in_progress(),
+-          arc_hovered_, has_title) ==
++          arc_hovered_, has_title,
++          ToolbarView::IsArcSidebarHostedFor(this)) ==
+       helium::ArcFieldContent::kHostAndTitle;
+   if (show == arc_title_label_->GetVisible() && title == arc_last_title_) {
+     return;
+@@ -2777,9 +2778,18 @@ void LocationBarView::OnOmniboxHovered(b
+ }
+ 
+ bool LocationBarView::IsArcHoverUrlPreview() const {
+-  return ShouldMinimizeArcChrome() && arc_hovered_ &&
+-         !(omnibox_view_ && omnibox_view_->HasFocus()) &&
+-         !GetOmniboxController()->edit_model()->user_input_in_progress();
++  // helium-fork: the same table RefreshArcTitleLabel() reads, asked for the
++  // other half of its answer. This used to be a hand-written copy of the same
++  // conditions, which is how it survived the sidebar row growing a rule of its
++  // own -- the row stopped previewing the URL on hover and this still said it
++  // did. `has_title` is irrelevant to the path preview, so it is passed false.
++  return helium::DecideArcFieldContent(
++             ShouldMinimizeArcChrome(),
++             (omnibox_view_ && omnibox_view_->HasFocus()) ||
++                 GetOmniboxController()->edit_model()->user_input_in_progress(),
++             arc_hovered_, /*has_title=*/false,
++             ToolbarView::IsArcSidebarHostedFor(this)) ==
++         helium::ArcFieldContent::kHostAndPath;
+ }
+ 
+ helium::ArcOmniboxPanelMetrics LocationBarView::GetArcOmniboxPanelMetrics()
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -336,6 +336,26 @@ void TabStripView::OnChildMoved(TabColle
+ }
+ 
+ void TabStripView::OnTabChanged(const tabs::TabInterface* active_tab) {
++  // helium-fork: aim the active row's floating-card shadow before any early
++  // return below -- a null or undisplayable answer must *hide* it, and the
++  // workspace-tab path would otherwise leave a stale shadow behind. A
++  // workspace tab's row does live in the Today container, but hidden and
++  // zero-height, which the container's own visibility gate turns into
++  // "hidden".
++  if (unpinned_tabs_container_view_) {
++    views::View* card_target = nullptr;
++    if (collection_node_ && active_tab) {
++      if (TabCollectionNode* const node =
++              collection_node_->GetNodeForHandle(active_tab->GetHandle())) {
++        if (node->view() &&
++            unpinned_tabs_container_view_->Contains(node->view())) {
++          card_target = node->view();
++        }
++      }
++    }
++    unpinned_tabs_container_view_->SetCardShadowTarget(card_target);
++  }
++
+   if (!collection_node_ || !active_tab) {
+     return;
+   }
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -19,6 +19,8 @@
+ #include "chrome/browser/themes/theme_properties.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
+ #include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
+@@ -87,7 +89,11 @@
+ namespace {
+ constexpr int kIconDesignWidth = 16;
+ constexpr int kTitleMinWidth = 10;
+-constexpr int kHorizontalInset = 7;
++// 9, not 7: Dia's active card carries the favicon at equal margins on all
++// three sides (18px @2x = 9pt left, top and bottom; measured 2026-08-20 off
++// the user's screenshots), and the row is 34 tall around a 16pt icon, so the
++// vertical margins are 9 by arithmetic. 7 read as "icon glued to the edge".
++constexpr int kHorizontalInset = 9;
+ constexpr int kDefaultPadding = 4;
+ constexpr int kFocusRingInset = 0.0f;
+ 
+@@ -279,6 +285,13 @@ bool TabView::IsHoverAnimationActive() c
+   return hovered_ || (hover_controller_ && hover_controller_->ShouldDraw());
+ }
+ 
++SkColor TabView::FloatingCardColor() const {
++  const ui::ColorProvider* const provider = GetColorProvider();
++  const SkColor sidebar =
++      provider ? provider->GetColor(kColorToolbar) : SK_ColorWHITE;
++  return helium::GetSidebarFloatingCardColor(sidebar);
++}
++
+ std::optional<SkColor> TabView::GetBackgroundColor() {
+   const TabStyle::TabSelectionState selection_state = GetSelectionState();
+   const bool hover_animation_active = IsHoverAnimationActive();
+@@ -291,6 +304,12 @@ std::optional<SkColor> TabView::GetBackg
+   }
+ 
+   if (active_ || hover_animation_active || should_fill_background_tab_color_) {
++    if (selection_state == TabStyle::TabSelectionState::kActive) {
++      // helium-fork: keep every consumer of "what color is this row" (the
++      // split view's merged background) on the same floating card the fill
++      // paints -- see PaintTabBackgroundFill.
++      return FloatingCardColor();
++    }
+     return tab_style_->GetCurrentTabBackgroundColor(
+         selection_state, hover_animation_active, GetHoverAnimationValue(),
+         IsFrameActive(), GetColorProvider());
+@@ -597,6 +616,16 @@ void TabView::PaintTabBackgroundFill(
+         selection_state != TabStyle::TabSelectionState::kActive) {
+       flags.setColor(
+           GetNativeFrameMaterialTabBackgroundColor(selection_state));
++    } else if (selection_state == TabStyle::TabSelectionState::kActive) {
++      // helium-fork: the active row is a Dia floating card (2026-08-20) --
++      // pure white on a light sidebar, a white lift on a dark one. A paint-
++      // time bypass, deliberately NOT a recolor of the active token: the
++      // material mixer derives the hover token from it (SetAlpha 0.45), so
++      // recoloring the token would drag every hover along. Known face:
++      // PaintTabBackgroundWithImages still paints the token's color under
++      // custom image themes. The shadow half of the card lives in
++      // UnpinnedTabContainerView.
++      flags.setColor(FloatingCardColor());
+     } else {
+       flags.setColor(tab_style_->GetCurrentTabBackgroundColor(
+           selection_state, IsHoverAnimationActive(), GetHoverAnimationValue(),
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_view.h
+@@ -205,6 +205,9 @@ class TabView : public views::View,
+   SkColor GetNativeFrameMaterialTabBackgroundColor(
+       TabStyle::TabSelectionState selection_state) const;
+   bool ShouldUseNativeFrameMaterials() const;
++  // helium-fork: the active row's Dia floating-card fill (the sidebar color
++  // through helium::GetSidebarFloatingCardColor).
++  SkColor FloatingCardColor() const;
+ 
+   bool IsDragging() const;
+ 
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+@@ -6,12 +6,18 @@
+ 
+ #include <utility>
+ 
++#include <algorithm>
++
+ #include "base/containers/span.h"
+ #include "base/functional/bind.h"
++#include "base/time/time.h"
+ #include "cc/paint/paint_flags.h"
++#include "cc/paint/paint_shader.h"
+ #include "chrome/browser/favicon/favicon_service_factory.h"
+ #include "chrome/browser/favicon/favicon_utils.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_favorite_accent.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_favicon.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tabs/tab_data.h"
+@@ -28,11 +34,16 @@
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/gfx/canvas.h"
++#include "ui/gfx/color_utils.h"
+ #include "ui/gfx/codec/png_codec.h"
+ #include "ui/gfx/favicon_size.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/gfx/image/image.h"
+ #include "ui/gfx/image/image_skia.h"
++#include "ui/gfx/image/image_skia_rep.h"
++#include "ui/gfx/skia_paint_util.h"
+ #include "ui/views/controls/menu/menu_runner.h"
+ #include "ui/views/accessibility/view_accessibility.h"
+ #include "ui/views/style/typography.h"
+@@ -51,19 +62,141 @@ enum EntryMenuCommand {
+ // Row metrics. The capsule/row heights and radii are the ones the tab strip
+ // already uses for pinned vertical tabs, so an entry row lines up with a
+ // Today row exactly.
+-constexpr int kIconLeadingInset = 2;
+-constexpr int kTitleSpacing = 8;
++// 6 + the TabIcon's 3pt attention border = a 9pt visual margin, matching the
++// Today rows (tab_view.cc kHorizontalInset) and Dia's equal-margins card. The
++// old value stacked kVerticalTabStripHorizontalPadding on top of the scroll
++// view's own left inset (see icon_x below) and landed the favicon at 13pt.
++constexpr int kIconLeadingInset = 6;
++// Puts the title's left edge at 34 from the capsule -- the same x a Today
++// row's title has (2 * kHorizontalInset + 16), so the two sections read as
++// one list.
++constexpr int kTitleSpacing = 6;
+ constexpr int kTitleTrailingInset = 8;
+ constexpr int kActiveOutlineThickness = 2;
+ 
++// helium-fork: how coarse the selected card's blurred favicon is. Three cells
++// across is what makes the wash a smooth field with a bright middle rather
++// than a recognisable thumbnail -- the sole knob for how "blurred" it reads.
++constexpr int kAccentGrid = 3;
++
++// A box average of `source` into kAccentGrid x kAccentGrid, which is a heavy
++// blur by another name. Returns an empty bitmap when the icon has no color
++// worth taking, in which case the ring falls back to the theme accent.
++//
++// Averaging happens in premultiplied space: a favicon is mostly transparent
++// around its glyph, and averaging straight colors would let fully transparent
++// pixels drag the result toward whatever garbage sits in their color channels.
++SkBitmap BoxDownsampleForAccent(const SkBitmap& source) {
++  if (source.drawsNothing()) {
++    return SkBitmap();
++  }
++  SkBitmap out;
++  out.allocN32Pixels(kAccentGrid, kAccentGrid);
++  out.eraseColor(SK_ColorTRANSPARENT);
++
++  // Cell colors and coverages are collected first, then written out opaque,
++  // with each cell blended toward the icon's overall color by how little of its
++  // square the icon covers.
++  //
++  // Opaque matters: a favicon is usually a glyph on transparent, so carrying
++  // the coverage through as alpha left the ring see-through everywhere the
++  // glyph was not -- and Arc's ring is a solid line the whole way round. The
++  // blur's shape survives as a color variation instead, which is what Arc's
++  // card measures as anyway (chroma peaking on the icon's row and falling off
++  // toward the edges, on a card that is opaque throughout).
++  SkColor cells[kAccentGrid * kAccentGrid] = {};
++  int64_t coverage[kAccentGrid * kAccentGrid] = {};
++  int64_t peak_coverage = 0;
++
++  int64_t total_a = 0;
++  int64_t total_r = 0;
++  int64_t total_g = 0;
++  int64_t total_b = 0;
++  for (int cell_y = 0; cell_y < kAccentGrid; ++cell_y) {
++    for (int cell_x = 0; cell_x < kAccentGrid; ++cell_x) {
++      const int x0 = source.width() * cell_x / kAccentGrid;
++      const int x1 = std::max(x0 + 1, source.width() * (cell_x + 1) /
++                                          kAccentGrid);
++      const int y0 = source.height() * cell_y / kAccentGrid;
++      const int y1 = std::max(y0 + 1, source.height() * (cell_y + 1) /
++                                          kAccentGrid);
++      int64_t sum_a = 0;
++      int64_t sum_r = 0;
++      int64_t sum_g = 0;
++      int64_t sum_b = 0;
++      int64_t count = 0;
++      for (int y = y0; y < std::min(y1, source.height()); ++y) {
++        for (int x = x0; x < std::min(x1, source.width()); ++x) {
++          const SkColor color = source.getColor(x, y);
++          const int64_t a = SkColorGetA(color);
++          sum_a += a;
++          sum_r += SkColorGetR(color) * a;
++          sum_g += SkColorGetG(color) * a;
++          sum_b += SkColorGetB(color) * a;
++          ++count;
++        }
++      }
++      if (count == 0) {
++        continue;
++      }
++      total_a += sum_a;
++      total_r += sum_r;
++      total_g += sum_g;
++      total_b += sum_b;
++      if (sum_a == 0) {
++        continue;
++      }
++      const size_t index = cell_y * kAccentGrid + cell_x;
++      cells[index] = SkColorSetRGB(static_cast<uint8_t>(sum_r / sum_a),
++                                   static_cast<uint8_t>(sum_g / sum_a),
++                                   static_cast<uint8_t>(sum_b / sum_a));
++      coverage[index] = sum_a / count;
++      peak_coverage = std::max(peak_coverage, coverage[index]);
++    }
++  }
++
++  if (total_a == 0 || peak_coverage == 0) {
++    return SkBitmap();
++  }
++  const SkColor mean = SkColorSetARGB(
++      static_cast<uint8_t>(total_a /
++                           (source.width() * static_cast<int64_t>(
++                                                 source.height()))),
++      static_cast<uint8_t>(total_r / total_a),
++      static_cast<uint8_t>(total_g / total_a),
++      static_cast<uint8_t>(total_b / total_a));
++  if (!helium::IsUsableFavoriteAccent(mean)) {
++    return SkBitmap();
++  }
++  const SkColor opaque_mean = SkColorSetA(mean, SK_AlphaOPAQUE);
++  for (int cell_y = 0; cell_y < kAccentGrid; ++cell_y) {
++    for (int cell_x = 0; cell_x < kAccentGrid; ++cell_x) {
++      const size_t index = cell_y * kAccentGrid + cell_x;
++      const float weight =
++          static_cast<float>(coverage[index]) / peak_coverage;
++      *out.getAddr32(cell_x, cell_y) = SkPreMultiplyColor(SkColorSetA(
++          color_utils::AlphaBlend(cells[index], opaque_mean, weight),
++          SK_AlphaOPAQUE));
++    }
++  }
++  return out;
++}
++
+ }  // namespace
+ 
+ WorkspaceEntryView::WorkspaceEntryView(Delegate* delegate, Profile* profile)
+-    : delegate_(delegate), profile_(profile) {
++    : views::AnimationDelegateViews(this),
++      delegate_(delegate),
++      profile_(profile) {
+   icon_ = AddChildView(std::make_unique<TabIcon>());
+   icon_->SetCanProcessEventsWithinSubtree(false);
+   title_label_ = AddChildView(std::make_unique<TabTitle>());
+ 
++  // helium-fork: 200ms, the same tween the sidebar's address row uses. The two
++  // capsules carry the identical fill, so a pointer crossing from one to the
++  // other must not make them look like different materials.
++  hover_animation_.SetSlideDuration(base::Milliseconds(200));
++
+   set_context_menu_controller(this);
+   GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+ }
+@@ -146,9 +279,10 @@ void WorkspaceEntryView::Layout(PassKey)
+     return;
+   }
+ 
+-  const int icon_x =
+-      GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding) +
+-      kIconLeadingInset;
++  // No kVerticalTabStripHorizontalPadding term: the pinned scroll view is
++  // already laid out at that inset (tab_strip_view.cc places it at x = the
++  // padding), so adding it here double-counted the edge.
++  const int icon_x = kIconLeadingInset;
+   icon_->SetBounds(icon_x, icon_y, icon_size.width(), icon_size.height());
+ 
+   const int title_x = icon_->bounds().right() + kTitleSpacing;
+@@ -169,44 +303,123 @@ void WorkspaceEntryView::OnPaint(gfx::Ca
+       renders_as_capsule() ? LayoutConstant::kVerticalTabFavoriteCornerRadius
+                            : LayoutConstant::kVerticalTabCornerRadius);
+ 
++  const gfx::RectF bounds(GetLocalBounds());
+   cc::PaintFlags fill;
+   fill.setStyle(cc::PaintFlags::kFill_Style);
+   fill.setAntiAlias(true);
+-  if (active_) {
+-    fill.setColor(colors->GetColor(kColorTabBackgroundActiveFrameActive));
+-    canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), radius, fill);
++
++  if (renders_as_capsule()) {
++    // helium-fork: a favorites card carries a fill at every moment, and the
++    // sidebar's address row carries the identical one -- Arc draws both with
++    // the same value (measured 2026-08-19: L129 on an L116 sidebar, L136 under
++    // the pointer, and the selected card well clear of both at L167). Rest is
++    // the state the user sees nearly always, so it is the one that had to stop
++    // being "paint nothing".
++    const SkColor sidebar = colors->GetColor(kColorToolbar);
++    fill.setColor(active_ ? helium::GetSidebarSelectedSurfaceColor(sidebar)
++                          : helium::GetSidebarSurfaceColorAt(
++                                sidebar, hover_animation_.GetCurrentValue()));
++    canvas->DrawRoundRect(bounds, radius, fill);
++    // The site's own color, blurred across the card. Only the selected one
++    // takes it: on every card at once the grid would read as wallpaper.
++    if (active_) {
++      PaintFavoriteAccent(canvas, bounds, radius, kActiveOutlineThickness);
++    }
++  } else if (active_) {
++    // The Dia floating card, same truth source as TabView::FloatingCardColor
++    // -- the active tab is a white card wherever its row lives (user
++    // 2026-08-20: global, pinned rows included; only the favorites grid keeps
++    // its own selected treatment above). The old token here resolved to the
++    // address bar's gray and read as a leftover hover.
++    fill.setColor(helium::GetSidebarFloatingCardColor(
++        colors->GetColor(kColorToolbar)));
++    canvas->DrawRoundRect(bounds, radius, fill);
+   } else if (hovered_) {
+     fill.setColor(colors->GetColor(kColorTabBackgroundInactiveHoverFrameActive));
+-    canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), radius, fill);
++    canvas->DrawRoundRect(bounds, radius, fill);
+   }
+ 
+-  // Capsules always carry an outline, so an empty grid slot still reads as a
+-  // slot; the active one gets the accent ring on top of its fill.
+-  if (active_ && renders_as_capsule()) {
++  // The selected capsule's ring. Unselected ones used to carry a hairline so
++  // an empty grid slot still read as a slot; the resting fill above does that
++  // job now, and Arc draws no outline on them either.
++  if (active_ && renders_as_capsule() && accent_.isNull()) {
++    // No usable color in the icon -- the theme accent rather than a gray ring
++    // derived from a gray logo.
+     cc::PaintFlags stroke;
+     stroke.setStyle(cc::PaintFlags::kStroke_Style);
+     stroke.setStrokeWidth(kActiveOutlineThickness);
+     stroke.setAntiAlias(true);
+     stroke.setColor(colors->GetColor(kColorVerticalTabFavoriteActiveOutline));
+-    gfx::RectF rect(GetLocalBounds());
++    gfx::RectF rect(bounds);
+     rect.Inset(kActiveOutlineThickness / 2.0f);
+-    canvas->DrawRoundRect(rect, radius, stroke);
+-  } else if (renders_as_capsule()) {
+-    const int thickness =
+-        GetLayoutConstant(LayoutConstant::kVerticalTabPinnedBorderThickness);
+-    cc::PaintFlags stroke;
+-    stroke.setStyle(cc::PaintFlags::kStroke_Style);
+-    stroke.setStrokeWidth(thickness);
+-    stroke.setAntiAlias(true);
+-    stroke.setColor(colors->GetColor(kColorVerticalTabPinnedOutline));
+-    gfx::RectF rect(GetLocalBounds());
+-    rect.Inset(thickness / 2.0f);
+-    canvas->DrawRoundRect(rect, radius, stroke);
++    // Inset shrinks the rect, so the radius has to shrink with it or the ring
++    // and the fill stop being concentric.
++    canvas->DrawRoundRect(rect, radius - kActiveOutlineThickness / 2.0f,
++                          stroke);
+   }
+ 
+   views::View::OnPaint(canvas);
+ }
+ 
++void WorkspaceEntryView::PaintFavoriteAccent(gfx::Canvas* canvas,
++                                             const gfx::RectF& bounds,
++                                             float radius,
++                                             float stroke_width) const {
++  if (accent_.isNull() || bounds.IsEmpty()) {
++    return;
++  }
++  // helium-fork: `accent_` is the favicon boxed down to a few pixels. Scaling
++  // it back up with a smooth filter is the blur -- it reproduces both halves
++  // of what Arc's selected card actually shows: the warm-to-cool run that
++  // follows the icon's own colors left to right, and the chroma peaking on the
++  // icon's row and falling off toward the edges. A single dominant color gives
++  // neither.
++  const gfx::ImageSkiaRep& rep = accent_.GetRepresentation(1.0f);
++  if (rep.is_null() || rep.pixel_width() <= 0 || rep.pixel_height() <= 0) {
++    return;
++  }
++  SkMatrix matrix = SkMatrix::MakeRectToRect(
++      SkRect::MakeIWH(rep.pixel_width(), rep.pixel_height()),
++      gfx::RectFToSkRect(bounds), SkMatrix::kFill_ScaleToFit);
++  const sk_sp<cc::PaintShader> shader = gfx::CreateImageRepShader(
++      rep, SkTileMode::kClamp, SkTileMode::kClamp, matrix);
++  if (!shader) {
++    return;
++  }
++
++  // The wash is the raw field at a whisper; the ring samples the lifted copy
++  // (ring_accent_) at full opacity, so its brightness is set by the lightness
++  // floor rather than by what shows through from underneath.
++  cc::PaintFlags wash;
++  wash.setStyle(cc::PaintFlags::kFill_Style);
++  wash.setAntiAlias(true);
++  wash.setFilterQuality(cc::PaintFlags::FilterQuality::kHigh);
++  wash.setShader(shader);
++  wash.setAlphaf(helium::kFavoriteAccentFillAlpha);
++  canvas->DrawRoundRect(bounds, radius, wash);
++
++  const gfx::ImageSkiaRep& ring_rep = ring_accent_.GetRepresentation(1.0f);
++  if (ring_rep.is_null() || ring_rep.pixel_width() <= 0 ||
++      ring_rep.pixel_height() <= 0) {
++    return;
++  }
++  const sk_sp<cc::PaintShader> ring_shader = gfx::CreateImageRepShader(
++      ring_rep, SkTileMode::kClamp, SkTileMode::kClamp, matrix);
++  if (!ring_shader) {
++    return;
++  }
++  cc::PaintFlags ring;
++  ring.setStyle(cc::PaintFlags::kStroke_Style);
++  ring.setStrokeWidth(stroke_width);
++  ring.setAntiAlias(true);
++  ring.setFilterQuality(cc::PaintFlags::FilterQuality::kHigh);
++  ring.setShader(ring_shader);
++  ring.setAlphaf(helium::kFavoriteAccentStrokeAlpha);
++  gfx::RectF rect(bounds);
++  rect.Inset(stroke_width / 2.0f);
++  canvas->DrawRoundRect(rect, radius - stroke_width / 2.0f, ring);
++}
++
+ bool WorkspaceEntryView::OnMousePressed(const ui::MouseEvent& event) {
+   return event.IsOnlyLeftMouseButton();
+ }
+@@ -220,11 +433,15 @@ void WorkspaceEntryView::OnMouseReleased
+ 
+ void WorkspaceEntryView::OnMouseEntered(const ui::MouseEvent& event) {
+   hovered_ = true;
+-  SchedulePaint();
++  hover_animation_.Show();
+ }
+ 
+ void WorkspaceEntryView::OnMouseExited(const ui::MouseEvent& event) {
+   hovered_ = false;
++  hover_animation_.Hide();
++}
++
++void WorkspaceEntryView::AnimationProgressed(const gfx::Animation* animation) {
+   SchedulePaint();
+ }
+ 
+@@ -301,6 +518,12 @@ void WorkspaceEntryView::ResolveIcon() {
+       tabs::TabData data = tabs::TabData::FromTabInterface(tab);
+       data.network_state = tabs::TabNetworkState::kNone;
+       data.should_hide_throbber = true;
++      // This branch does not go through ApplyIcon, so the accent has to be
++      // taken here too -- otherwise a card bound to a live tab keeps whatever
++      // color its stored PNG happened to give it.
++      UpdateAccentSource(data.favicon.IsImage()
++                             ? data.favicon.GetImage().AsImageSkia()
++                             : gfx::ImageSkia());
+       icon_->SetData(std::move(data));
+       return;
+     }
+@@ -353,7 +576,38 @@ void WorkspaceEntryView::OnFaviconFetche
+   ApplyIcon(ui::ImageModel::FromImage(result.image));
+ }
+ 
++void WorkspaceEntryView::UpdateAccentSource(const gfx::ImageSkia& favicon) {
++  // helium-fork: only the favorites grid wears the accent, but the update runs
++  // for every entry -- a pinned row promoted to a favorite must not have to
++  // wait for its next icon change to gain a color.
++  const gfx::ImageSkiaRep& rep = favicon.GetRepresentation(1.0f);
++  SkBitmap accent =
++      rep.is_null() ? SkBitmap() : BoxDownsampleForAccent(rep.GetBitmap());
++  accent_ = accent.drawsNothing()
++                ? gfx::ImageSkia()
++                : gfx::ImageSkia::CreateFromBitmap(accent, 1.0f);
++  // The ring's copy of the field: same hue and saturation per cell, lightness
++  // lifted to the floor. Doing it here rather than at paint time keeps the
++  // paint path a plain shader sample.
++  SkBitmap ring;
++  if (!accent.drawsNothing()) {
++    ring.allocN32Pixels(accent.width(), accent.height());
++    for (int y = 0; y < accent.height(); ++y) {
++      for (int x = 0; x < accent.width(); ++x) {
++        *ring.getAddr32(x, y) = SkPreMultiplyColor(
++            helium::FavoriteRingColor(accent.getColor(x, y)));
++      }
++    }
++  }
++  ring_accent_ = ring.drawsNothing()
++                     ? gfx::ImageSkia()
++                     : gfx::ImageSkia::CreateFromBitmap(ring, 1.0f);
++  SchedulePaint();
++}
++
+ void WorkspaceEntryView::ApplyIcon(const ui::ImageModel& favicon) {
++  UpdateAccentSource(favicon.IsImage() ? favicon.GetImage().AsImageSkia()
++                                       : gfx::ImageSkia());
+   tabs::TabData data;
+   data.title = title_;
+   data.favicon = favicon;
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+@@ -14,7 +14,10 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+ #include "components/favicon_base/favicon_types.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/animation/slide_animation.h"
++#include "ui/gfx/image/image_skia.h"
+ #include "ui/menus/simple_menu_model.h"
++#include "ui/views/animation/animation_delegate_views.h"
+ #include "ui/views/context_menu_controller.h"
+ #include "ui/views/view.h"
+ 
+@@ -41,6 +44,7 @@ class MenuRunner;
+ // TabView::OnPaint is deliberately not, because it pulls in TabStyle,
+ // GlowHoverController, theme-image lookups and the drag plumbing.
+ class WorkspaceEntryView : public views::View,
++                           public views::AnimationDelegateViews,
+                            public views::ContextMenuController,
+                            public ui::SimpleMenuModel::Delegate {
+   METADATA_HEADER(WorkspaceEntryView, views::View)
+@@ -71,6 +75,7 @@ class WorkspaceEntryView : public views:
+   void SetActive(bool active);
+ 
+   const std::string& entry_id() const { return entry_id_; }
++  bool active() const { return active_; }
+   bool renders_as_capsule() const {
+     return section_ == helium_workspace::WorkspaceEntry::Section::kFavorite;
+   }
+@@ -95,6 +100,9 @@ class WorkspaceEntryView : public views:
+   bool IsCommandIdEnabled(int command_id) const override;
+   void ExecuteCommand(int command_id, int event_flags) override;
+ 
++  // gfx::AnimationDelegate:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++
+  private:
+   // Live tab -> stored PNG -> favicon service -> default globe. The last step
+   // is not optional: TabIcon paints nothing for an empty ImageModel.
+@@ -103,6 +111,17 @@ class WorkspaceEntryView : public views:
+   void ApplyIcon(const ui::ImageModel& favicon);
+   void UpdateAccessibleState();
+ 
++  // helium-fork: keeps the selected capsule's accent in step with the icon.
++  // Every path that reaches TabIcon comes through here first, so a card can
++  // never end up wearing the previous site's colors.
++  void UpdateAccentSource(const gfx::ImageSkia& favicon);
++  // helium-fork: paints the blurred favicon over `bounds`, once as the wash
++  // under the icon and once as the ring around it. No-op without an accent.
++  void PaintFavoriteAccent(gfx::Canvas* canvas,
++                           const gfx::RectF& bounds,
++                           float radius,
++                           float stroke_width) const;
++
+   const raw_ptr<Delegate> delegate_;
+   const raw_ptr<Profile> profile_;
+ 
+@@ -116,6 +135,19 @@ class WorkspaceEntryView : public views:
+   base::WeakPtr<tabs::TabInterface> bound_tab_;
+   bool active_ = false;
+   bool hovered_ = false;
++  // helium-fork: the hover fill fades rather than snapping, at the same 200ms
++  // as the address row's capsule -- one pointer move, one visual change.
++  gfx::SlideAnimation hover_animation_{this};
++  // helium-fork: the favicon boxed down to a few pixels, which is what a heavy
++  // blur of it amounts to; scaled back up under the capsule it reproduces
++  // Arc's soft color field. Empty when the icon has no color worth taking, and
++  // the ring falls back to the theme accent.
++  gfx::ImageSkia accent_;
++  // helium-fork: the same field with each cell's lightness lifted to the
++  // ring's floor (arc_favorite_accent.h) -- the stroke samples this one, so a
++  // dark favicon still rings in light pastels the way Arc's does. Empty
++  // exactly when `accent_` is.
++  gfx::ImageSkia ring_accent_;
+ 
+   raw_ptr<TabIcon> icon_ = nullptr;
+   raw_ptr<TabTitle> title_label_ = nullptr;
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ 
++#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
++
+ #include <algorithm>
+ #include <utility>
+ 
+@@ -18,7 +20,10 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/layout_constants.h"
++#include "ui/gfx/geometry/rect_conversions.h"
++#include "ui/views/controls/scroll_view.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/grit/generated_resources.h"
+@@ -42,11 +47,17 @@ namespace {
+ // the grid from the space header, the per-row capsule maximum (the 12-entry
+ // cap in three rows) and the height of the persistent empty state.
+ constexpr int kTabPadding = 4;
+-constexpr int kFavoriteGridGap = 8;
+-constexpr int kSectionGap = 8;
+ constexpr int kMaxFavoritesPerRow = 4;
+ constexpr int kFavoritesPlaceholderHeight = 90;
+ 
++// helium-fork: one number for every gap around the grid -- between capsules,
++// between rows, and (via the address row's bottom margin) between the sidebar's
++// address row and the grid. It lives in layout_constants because the region
++// view needs the same value and two copies drift.
++int FavoriteGridGap() {
++  return GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteGridGap);
++}
++
+ // Arc space header row metrics.
+ constexpr int kSpaceHeaderHeight = 28;
+ constexpr int kSpaceHeaderChevronSize = 16;
+@@ -54,9 +65,9 @@ constexpr int kSpaceHeaderInnerSpacing =
+ constexpr int kSpaceHeaderHorizontalInset = 6;
+ 
+ int GridPerRowMax(int available_width, int min_child_width) {
+-  return std::clamp(
+-      (available_width + kFavoriteGridGap) / (min_child_width + kFavoriteGridGap),
+-      1, kMaxFavoritesPerRow);
++  const int gap = FavoriteGridGap();
++  return std::clamp((available_width + gap) / (min_child_width + gap), 1,
++                    kMaxFavoritesPerRow);
+ }
+ 
+ // Arc-style persistent placeholder shown while the Favorites grid is empty.
+@@ -388,6 +399,7 @@ void WorkspaceSidebarView::SyncBindings(
+     view->SetBoundTab(tab);
+     view->SetActive(tab && tab == active_tab);
+   }
++  UpdateCardShadow();
+ }
+ 
+ WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::ComputeLayout(
+@@ -419,25 +431,35 @@ WorkspaceSidebarView::SidebarLayout Work
+     const int capsule_height =
+         GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
+     size_t index = 0;
++    const int gap = FavoriteGridGap();
+     for (int row = 0; row < plan.rows; ++row) {
+-      const int cols = helium_workspace::FavoritesGridColsForRow(plan, row);
+-      const int capsule_width = std::max(
+-          min_child_width,
+-          (row_width - (cols - 1) * kFavoriteGridGap) / std::max(cols, 1));
++      const int cols = std::max(helium_workspace::FavoritesGridColsForRow(
++                                    plan, row),
++                                1);
++      // helium-fork: the remainder of the equal-width division is handed back
++      // one pixel at a time to the leading capsules, so a row always ends
++      // exactly on row_width. Dropping it leaves the grid's right edge short of
++      // the address row above -- three capsules in a 240pt row lose 2px, which
++      // reads as the whole grid being misaligned rather than as rounding.
++      const int content = std::max(0, row_width - (cols - 1) * gap);
++      const int base_width = std::max(min_child_width, content / cols);
++      const int remainder =
++          base_width == content / cols ? content % cols : 0;
+       int x = 0;
+       for (int col = 0; col < cols && index < favorite_count_; ++col, ++index) {
++        const int capsule_width = base_width + (col < remainder ? 1 : 0);
+         out.entry_bounds[index] =
+             gfx::Rect(x, y, capsule_width, capsule_height);
+-        x += capsule_width + kFavoriteGridGap;
++        x += capsule_width + gap;
+       }
+       y += capsule_height;
+       if (row + 1 < plan.rows) {
+-        y += kFavoriteGridGap;
++        y += gap;
+       }
+     }
+   }
+ 
+-  y += kSectionGap;
++  y += FavoriteGridGap();
+   out.header_bounds = gfx::Rect(0, y, row_width, kSpaceHeaderHeight);
+   y += kSpaceHeaderHeight;
+ 
+@@ -469,7 +491,7 @@ gfx::Size WorkspaceSidebarView::GetMinim
+   // actually needs is the space header (permanent -- it is the pinned
+   // section's visible edge), the empty-state placeholder while the grid is
+   // empty, and one row's worth of content.
+-  int height = kSpaceHeaderHeight + kSectionGap;
++  int height = kSpaceHeaderHeight + FavoriteGridGap();
+   height += favorite_count_ == 0
+                 ? kFavoritesPlaceholderHeight
+                 : GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
+@@ -501,6 +523,76 @@ void WorkspaceSidebarView::Layout(PassKe
+       view->SetBoundsRect(layout.entry_bounds[i]);
+     }
+   }
++  UpdateCardShadow();
++}
++
++void WorkspaceSidebarView::SetCardShadowFrame(
++    HeliumCardShadowView* card_shadow) {
++  if (card_shadow_ != card_shadow) {
++    card_shadow_ = card_shadow;
++    card_shadow_scroll_subscription_ = {};
++  }
++  UpdateCardShadow();
++}
++
++WorkspaceEntryView* WorkspaceSidebarView::ActiveRowEntryView() const {
++  // Only full-width rows carry the floating card; the favorites grid keeps
++  // its own selected treatment (user 2026-08-20).
++  for (WorkspaceEntryView* view : ordered_entries_) {
++    if (view->active() && !view->renders_as_capsule()) {
++      return view;
++    }
++  }
++  return nullptr;
++}
++
++void WorkspaceSidebarView::UpdateCardShadow() {
++  if (!card_shadow_) {
++    return;
++  }
++  // The pinned section's own scroll view (this view's parent is its
++  // contents); independent of Today's.
++  views::ScrollView* const scroll_view =
++      parent() ? views::ScrollView::GetScrollViewForContents(parent())
++               : nullptr;
++  // Layer scrolling never touches view bounds, so no observer fires when the
++  // section scrolls under the row -- follow the offset directly.
++  if (scroll_view && !card_shadow_scroll_subscription_) {
++    card_shadow_scroll_subscription_ = scroll_view->AddContentsScrolledCallback(
++        base::BindRepeating(&WorkspaceSidebarView::UpdateCardShadow,
++                            base::Unretained(this)));
++  }
++  views::View* const shadow_parent = card_shadow_->parent();
++  WorkspaceEntryView* const target = ActiveRowEntryView();
++  const int radius =
++      GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius);
++  bool shadow_visible =
++      target && target->GetVisible() && shadow_parent && scroll_view &&
++      GetWidget() &&
++      helium::CanShowCardShadow(target->width(), target->height(), radius);
++  gfx::RectF rect;
++  if (shadow_visible) {
++    rect = gfx::RectF(gfx::SizeF(target->size()));
++    views::View::ConvertRectToTarget(target, shadow_parent, &rect);
++    rect.Offset(-scroll_view->CurrentOffset().x(),
++                -scroll_view->CurrentOffset().y());
++    // The region's layer never clips, so a row scrolled to the section's
++    // edge would cast outside the scroll area; hide instead (the row's own
++    // card is being clipped there anyway).
++    gfx::RectF scroll_rect(gfx::SizeF(scroll_view->size()));
++    views::View::ConvertRectToTarget(scroll_view, shadow_parent, &scroll_rect);
++    scroll_rect.Inset(-1.0f);
++    shadow_visible = scroll_rect.Contains(rect);
++  }
++  if (!shadow_visible) {
++    card_shadow_->SetVisible(false);
++    return;
++  }
++  card_shadow_->SetShadowCornerRadius(radius);
++  // The card rect, not the (outset) shadow rect: SetCardBounds() grows the
++  // view itself, and the edge test above must keep judging the row.
++  card_shadow_->SetCardBounds(gfx::ToEnclosingRect(rect));
++  card_shadow_->SetVisible(true);
+ }
+ 
+ void WorkspaceSidebarView::OnEntryActivated(const std::string& entry_id) {
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -9,6 +9,7 @@
+ #include <string>
+ #include <vector>
+ 
++#include "base/callback_list.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+@@ -18,6 +19,7 @@
+ #include "ui/views/view.h"
+ 
+ class BrowserWindowInterface;
++class HeliumCardShadowView;
+ class PrefService;
+ class Profile;
+ class TabStripModel;
+@@ -61,6 +63,13 @@ class WorkspaceSidebarView : public view
+       const TabStripModelChange& change,
+       const TabStripSelectionChange& selection) override;
+ 
++  // helium-fork: aims the pinned rows' floating-card shadow at the active
++  // full-width row. Same contract as UnpinnedTabContainerView: the shadow
++  // view itself is owned by the *region* view (the only unclipped layer --
++  // the pinned scroll viewport masks to bounds like Today's does); this view
++  // only aims it, because it knows the rows and the scroll offset.
++  void SetCardShadowFrame(HeliumCardShadowView* card_shadow);
++
+   // WorkspaceEntryView::Delegate:
+   void OnEntryActivated(const std::string& entry_id) override;
+   void OnEntryToggleFavorite(const std::string& entry_id) override;
+@@ -95,6 +104,11 @@ class WorkspaceSidebarView : public view
+ 
+   SidebarLayout ComputeLayout(int width) const;
+ 
++  // Re-aims the card shadow at the active pinned row (or hides it). Called
++  // wherever the answer can change: bindings sync, layout, scroll.
++  void UpdateCardShadow();
++  WorkspaceEntryView* ActiveRowEntryView() const;
++
+   raw_ptr<Profile> profile_ = nullptr;
+   raw_ptr<helium_workspace::WorkspaceService> service_ = nullptr;
+ 
+@@ -110,6 +124,11 @@ class WorkspaceSidebarView : public view
+   base::ScopedObservation<helium_workspace::WorkspaceService,
+                           helium_workspace::WorkspaceService::Observer>
+       service_observation_{this};
++
++  // The active pinned row's floating-card shadow (region-owned, see
++  // SetCardShadowFrame).
++  raw_ptr<HeliumCardShadowView> card_shadow_ = nullptr;
++  base::CallbackListSubscription card_shadow_scroll_subscription_;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SIDEBAR_VIEW_H_

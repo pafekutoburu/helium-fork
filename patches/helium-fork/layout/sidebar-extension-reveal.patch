@@ -1,0 +1,1834 @@
+Index: src/chrome/app/settings_strings.grdp
+===================================================================
+--- src.orig/chrome/app/settings_strings.grdp
++++ src/chrome/app/settings_strings.grdp
+@@ -322,6 +322,12 @@
+     <message name="IDS_SETTINGS_MINIMAL_LOCATION_BAR" desc="Label for the toggle that enables the minimal address bar.">
+       Minimal address bar
+     </message>
++    <message name="IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS" desc="Label for the toggle that hides the extension icons in the sidebar's address row until the pointer enters the sidebar.">
++      Hide extension icons until hover
++    </message>
++    <message name="IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS_DESCRIPTION" desc="Description for the toggle that hides the extension icons in the sidebar's address row until the pointer enters the sidebar.">
++      Show the address row's extension icons only while the pointer is over the sidebar
++    </message>
+     <message name="IDS_SETTINGS_BROWSER_ZEN_MODE" desc="Label for the toggle that enables zen mode, hiding browser chrome until hover.">
+       Frameless mode
+     </message>
+Index: src/chrome/browser/extensions/api/settings_private/prefs_util.cc
+===================================================================
+--- src.orig/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ src/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -222,6 +222,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+   // the zen-mode boolean, which is now only read once during migration.
+   (*s_allowlist)[::prefs::kHeliumAddressBarMode] =
+       settings_api::PrefType::kNumber;
++  (*s_allowlist)[::prefs::kHeliumSidebarAutoHideExtensions] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumZenMode] = settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumZenModeSidebarPinned] =
+       settings_api::PrefType::kBoolean;
+Index: src/chrome/browser/extensions/extension_context_menu_model.cc
+===================================================================
+--- src.orig/chrome/browser/extensions/extension_context_menu_model.cc
++++ src/chrome/browser/extensions/extension_context_menu_model.cc
+@@ -483,8 +483,13 @@ bool ExtensionContextMenuModel::IsComman
+     // Extension pinning/unpinning is not available for Incognito as this
+     // leaves a trace of user activity.
+     case TOGGLE_VISIBILITY:
++      // helium-fork: and pinning stops once the toolbar is full. Unpinning is
++      // always offered -- greying out the way back out of a full toolbar would
++      // be a trap.
+       return !profile_->IsOffTheRecord() &&
+-             !IsExtensionForcePinned(*extension, profile_);
++             !IsExtensionForcePinned(*extension, profile_) &&
++             (is_pinned_ ||
++              ToolbarActionsModel::Get(profile_)->CanPinMoreActions());
+     // Manage extensions and view web permissions are always enabled.
+     case MANAGE_EXTENSIONS:
+     case VIEW_WEB_PERMISSIONS:
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -383,6 +383,7 @@ static_library("ui") {
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_omnibox_panel.h",
+     "helium/arc_sidebar_surface.h",
++    "helium/arc_toolbar_host.h",
+     "helium/helium_layout_state_controller.cc",
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+@@ -6037,6 +6038,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_minimal_field_state_unittest.cc",
+     "helium/arc_sidebar_surface.h",
+     "helium/arc_sidebar_surface_unittest.cc",
++    "helium/arc_toolbar_host.h",
++    "helium/arc_toolbar_host_unittest.cc",
+     "helium/arc_omnibox_panel.h",
+     "helium/arc_omnibox_panel_unittest.cc",
+     "helium_workspace/workspace_blank_tab.h",
+Index: src/chrome/browser/ui/helium/arc_minimal_field_state.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_minimal_field_state.h
++++ src/chrome/browser/ui/helium/arc_minimal_field_state.h
+@@ -26,18 +26,33 @@ enum class ArcFieldContent {
+ // `has_title` means a real, non-empty page title AND a non-empty display
+ // URL to hang it on (internal pages that show an empty omnibox never get a
+ // dangling "/ title").
++//
++// `sidebar_hosted` is the hidden address bar mode, where the field rides in the
++// sidebar row rather than the band. Arc shows the bare domain there and keeps
++// showing it: the row is narrow enough that a title only earns an ellipsis, and
++// hovering does not swap in the path either -- the pointer crosses this row on
++// its way to everything else in the sidebar, so a hover that rewrote the text
++// would flicker constantly. The real URL arrives on click, in the edit panel,
++// where it is selected and editable (Arc measured 2026-08-19: the capsule reads
++// `letterboxd.com` with the pointer parked on it, and the panel that opens on
++// click holds the full URL).
++//
++// The band keeps both the title and the hover swap. That is Dia's shape and
++// what the docked mode was measured against (2026-08-16) -- two modes, two
++// reference browsers, and this parameter is the seam between them.
+ inline constexpr ArcFieldContent DecideArcFieldContent(bool minimal,
+                                                        bool focused_or_editing,
+                                                        bool hovered,
+-                                                       bool has_title) {
++                                                       bool has_title,
++                                                       bool sidebar_hosted) {
+   if (!minimal || focused_or_editing) {
+     return ArcFieldContent::kFullUrl;
+   }
+-  if (hovered) {
++  if (hovered && !sidebar_hosted) {
+     return ArcFieldContent::kHostAndPath;
+   }
+-  return has_title ? ArcFieldContent::kHostAndTitle
+-                   : ArcFieldContent::kHostOnly;
++  return (has_title && !sidebar_hosted) ? ArcFieldContent::kHostAndTitle
++                                        : ArcFieldContent::kHostOnly;
+ }
+ 
+ }  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_minimal_field_state_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_minimal_field_state_unittest.cc
++++ src/chrome/browser/ui/helium/arc_minimal_field_state_unittest.cc
+@@ -13,14 +13,16 @@ TEST(ArcMinimalFieldStateTest, RestShows
+   EXPECT_EQ(ArcFieldContent::kHostAndTitle,
+             DecideArcFieldContent(/*minimal=*/true,
+                                   /*focused_or_editing=*/false,
+-                                  /*hovered=*/false, /*has_title=*/true));
++                                  /*hovered=*/false, /*has_title=*/true,
++                                  /*sidebar_hosted=*/false));
+ }
+ 
+ TEST(ArcMinimalFieldStateTest, RestWithoutTitleShowsHostOnly) {
+   EXPECT_EQ(ArcFieldContent::kHostOnly,
+             DecideArcFieldContent(/*minimal=*/true,
+                                   /*focused_or_editing=*/false,
+-                                  /*hovered=*/false, /*has_title=*/false));
++                                  /*hovered=*/false, /*has_title=*/false,
++                                  /*sidebar_hosted=*/false));
+ }
+ 
+ // Dia (measured 2026-08-16): hover swaps the title for the real URL; the
+@@ -29,11 +31,13 @@ TEST(ArcMinimalFieldStateTest, HoverSwap
+   EXPECT_EQ(ArcFieldContent::kHostAndPath,
+             DecideArcFieldContent(/*minimal=*/true,
+                                   /*focused_or_editing=*/false,
+-                                  /*hovered=*/true, /*has_title=*/true));
++                                  /*hovered=*/true, /*has_title=*/true,
++                                  /*sidebar_hosted=*/false));
+   EXPECT_EQ(ArcFieldContent::kHostAndPath,
+             DecideArcFieldContent(/*minimal=*/true,
+                                   /*focused_or_editing=*/false,
+-                                  /*hovered=*/true, /*has_title=*/false));
++                                  /*hovered=*/true, /*has_title=*/false,
++                                  /*sidebar_hosted=*/false));
+ }
+ 
+ TEST(ArcMinimalFieldStateTest, EditingWinsOverEverything) {
+@@ -42,7 +46,8 @@ TEST(ArcMinimalFieldStateTest, EditingWi
+       EXPECT_EQ(ArcFieldContent::kFullUrl,
+                 DecideArcFieldContent(/*minimal=*/true,
+                                       /*focused_or_editing=*/true, hovered,
+-                                      has_title));
++                                      has_title,
++                                      /*sidebar_hosted=*/false));
+     }
+   }
+ }
+@@ -53,11 +58,56 @@ TEST(ArcMinimalFieldStateTest, MinimalOf
+       for (const bool has_title : {false, true}) {
+         EXPECT_EQ(ArcFieldContent::kFullUrl,
+                   DecideArcFieldContent(/*minimal=*/false, focused, hovered,
+-                                        has_title));
++                                        has_title,
++                                        /*sidebar_hosted=*/false));
+       }
+     }
+   }
+ }
+ 
++// Arc, user-measured 2026-08-19: the sidebar row shows the bare domain. The
++// docked band keeps the title (Dia's shape, measured 2026-08-16) -- the two
++// hosts are the only thing that differs.
++TEST(ArcMinimalFieldStateTest, TheSidebarRowDropsTheTitle) {
++  EXPECT_EQ(ArcFieldContent::kHostOnly,
++            DecideArcFieldContent(/*minimal=*/true,
++                                  /*focused_or_editing=*/false,
++                                  /*hovered=*/false, /*has_title=*/true,
++                                  /*sidebar_hosted=*/true));
++}
++
++// Reversed 2026-08-19 after measuring the real Arc: the capsule reads
++// `letterboxd.com` with the pointer parked on it. The earlier assertion here
++// was written from an assumption, not from Arc. The pointer crosses this row
++// on the way to everything else in the sidebar, so a hover swap would flicker;
++// the full URL arrives on click instead, in the edit panel. The band still
++// swaps (HoverSwapsToPathEvenWithTitle above) -- two modes, two reference
++// browsers, and `sidebar_hosted` is the seam between them.
++TEST(ArcMinimalFieldStateTest, TheSidebarRowKeepsTheDomainOnHover) {
++  for (const bool has_title : {false, true}) {
++    EXPECT_EQ(ArcFieldContent::kHostOnly,
++              DecideArcFieldContent(/*minimal=*/true,
++                                    /*focused_or_editing=*/false,
++                                    /*hovered=*/true, has_title,
++                                    /*sidebar_hosted=*/true));
++  }
++}
++
++TEST(ArcMinimalFieldStateTest, TheHostIsTheOnlyDifferenceAtRest) {
++  for (const bool has_title : {false, true}) {
++    EXPECT_EQ(has_title ? ArcFieldContent::kHostAndTitle
++                        : ArcFieldContent::kHostOnly,
++              DecideArcFieldContent(/*minimal=*/true,
++                                    /*focused_or_editing=*/false,
++                                    /*hovered=*/false, has_title,
++                                    /*sidebar_hosted=*/false));
++    EXPECT_EQ(ArcFieldContent::kHostOnly,
++              DecideArcFieldContent(/*minimal=*/true,
++                                    /*focused_or_editing=*/false,
++                                    /*hovered=*/false, has_title,
++                                    /*sidebar_hosted=*/true));
++  }
++}
++
+ }  // namespace
+ }  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_toolbar_host.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_toolbar_host.h
+@@ -0,0 +1,131 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_TOOLBAR_HOST_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_TOOLBAR_HOST_H_
++
++// helium-fork: where the ToolbarView lives. Three hosts, one answer.
++//
++// The toolbar moves between the band above the page, the sidebar's address row,
++// and a panel-width loan from that row while the field is edited. Encoding that
++// as separate booleans let the combinations drift: the row's height pin
++// outlived the edit it belonged to (an empty 34pt gap above the favorites), a
++// hook meant for the hidden mode gated on "the sidebar is collapsed" instead
++// and fired in the docked one, and a press that could never focus the omnibox
++// still moved the toolbar into the unclipped edit host, where it painted over
++// the page until the window closed (all three user-hit 2026-08-19).
++//
++// So the host is resolved here, as one total function over the inputs, and the
++// caller applies every consequence from the answer rather than patching the
++// deltas. A combination this file cannot produce is a combination the browser
++// cannot get into.
++namespace helium {
++
++enum class ArcToolbarHost {
++  // The address bar band above the page. The docked mode, and the fallback for
++  // every window that has no sidebar to offer.
++  kBand,
++  // The sidebar's address row (hidden address bar mode).
++  kSidebarRow,
++  // The row's loan to the edit panel: same origin, panel width, deliberately
++  // outside the row's clip so the field can be wider than the sidebar.
++  kEditHost,
++};
++
++// `sidebar_can_host` folds the structural conditions -- a vertical tab strip is
++// drawn, the window is a normal one, the row exists. `row_on_screen` is the
++// row's own IsDrawn(): the edit host borrows the row's geometry, so a row that
++// is not on screen (collapsed sidebar) has none to lend, and the loan must fall
++// back rather than strand the toolbar somewhere the sidebar cannot reclaim it.
++inline constexpr ArcToolbarHost ResolveArcToolbarHost(bool has_address_bar_band,
++                                                      bool sidebar_can_host,
++                                                      bool row_on_screen,
++                                                      bool edit_requested) {
++  if (has_address_bar_band || !sidebar_can_host) {
++    return ArcToolbarHost::kBand;
++  }
++  return (edit_requested && row_on_screen) ? ArcToolbarHost::kEditHost
++                                           : ArcToolbarHost::kSidebarRow;
++}
++
++// The row keeps its height only while its toolbar is away in the edit host --
++// otherwise the favorites below jump up the instant the panel opens. Every
++// other host releases the pin: an empty row that still declares a height is a
++// permanent gap, because an empty row is otherwise skipped by the layout
++// outright (zero preferred size).
++inline constexpr bool ArcRowHoldsItsHeight(ArcToolbarHost host) {
++  return host == ArcToolbarHost::kEditHost;
++}
++
++// Whether the toolbar is in the sidebar's world -- the row or the row's loan.
++//
++// This is the predicate for "the field is in the sidebar", and the one hooks
++// must use when they mean it. "The sidebar is collapsed" is NOT the same
++// question: it is true in the docked mode too, where the field is in the band
++// and the sidebar is empty.
++//
++// It also answers who owns the toolbar's visible flag. The tabbed layout sets
++// that flag only while the band hosts the toolbar (layout.AddChild takes a
++// visibility), so in the sidebar's hosts nobody manages it and the arriving
++// host has to reclaim it.
++inline constexpr bool ArcToolbarIsSidebarBound(ArcToolbarHost host) {
++  return host != ArcToolbarHost::kBand;
++}
++
++// Whether the sidebar row's extensions area is shown -- the pinned action
++// icons and the extensions menu button together, since the user reads them as
++// one group and Arc hides the whole group or none of it.
++//
++// `row_hovered` is the address row's own hover, re-derived from the actual
++// cursor position on every recompute rather than accumulated from events: on
++// macOS an exit that arrives while a bubble is opening is deferred and then
++// replayed at the *click* location, so a stored bit goes stale and the icons
++// never retract (user-hit 2026-08-19). ⚠ The row-only trigger is a deliberate
++// departure from Arc, not a copy of it: Arc reveals on the pointer entering
++// the sidebar *anywhere* -- measured 2026-08-19, the icons are up with the
++// pointer on a favorites card and on a tab row far below the address row.
++// The user tried that, found it too eager, and asked for the tighter rule
++// (2026-08-19). Do not "correct" this back to the sidebar-wide hover on the
++// grounds that Arc does it that way.
++//
++// `bubble_anchored` is "some transient UI is anchored in the extensions
++// area" -- the extensions menu, an extension popup, a pop-out, a context
++// menu. While one is open the area must stay up whether or not the pointer
++// is anywhere near the row (its anchor cannot vanish under it); the moment
++// it closes the answer falls back to the pointer.
++inline constexpr bool ShouldRevealSidebarExtensions(bool sidebar_hosted,
++                                                    bool auto_hide,
++                                                    bool row_hovered,
++                                                    bool bubble_anchored) {
++  // The band is upstream's business; nothing here applies to it.
++  if (!sidebar_hosted) {
++    return true;
++  }
++  return !auto_hide || row_hovered || bubble_anchored;
++}
++
++// Whether the extensions area occupies layout width. Distinct from the
++// opacity question above, and deliberately trailing it: while the area is
++// revealed -- or still fading out -- it keeps its width so the icons have
++// somewhere to fade; once the fade lands at zero the width goes too, and the
++// domain takes the whole row (the field's flex maximum is unbounded, so the
++// layout hands it the vacated space by itself).
++//
++// This is the r3 revision of r2's "the area keeps its width either way":
++// the user asked for the full domain at rest (2026-08-19), so the standing
++// invariant is now the narrower one -- the domain's *left edge* never moves,
++// and the tail is elided exactly while the icons are shown.
++inline constexpr bool ShouldReserveSidebarExtensionsSpace(
++    bool sidebar_hosted,
++    bool auto_hide,
++    bool revealed_or_fading) {
++  if (!sidebar_hosted) {
++    return true;
++  }
++  return !auto_hide || revealed_or_fading;
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_TOOLBAR_HOST_H_
+Index: src/chrome/browser/ui/helium/arc_toolbar_host_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_toolbar_host_unittest.cc
+@@ -0,0 +1,164 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_toolbar_host.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++TEST(ArcToolbarHostTest, TheBandKeepsTheToolbarWhenItExists) {
++  // The docked mode owns the toolbar no matter what the sidebar is doing --
++  // including mid-edit, which is how a mode switch reclaims it.
++  EXPECT_EQ(ArcToolbarHost::kBand,
++            ResolveArcToolbarHost(/*has_address_bar_band=*/true,
++                                  /*sidebar_can_host=*/true,
++                                  /*row_on_screen=*/true,
++                                  /*edit_requested=*/true));
++}
++
++TEST(ArcToolbarHostTest, NoSidebarToHostMeansTheBand) {
++  EXPECT_EQ(ArcToolbarHost::kBand,
++            ResolveArcToolbarHost(/*has_address_bar_band=*/false,
++                                  /*sidebar_can_host=*/false,
++                                  /*row_on_screen=*/true,
++                                  /*edit_requested=*/false));
++}
++
++TEST(ArcToolbarHostTest, TheRowHostsTheHiddenModeAtRest) {
++  EXPECT_EQ(ArcToolbarHost::kSidebarRow,
++            ResolveArcToolbarHost(/*has_address_bar_band=*/false,
++                                  /*sidebar_can_host=*/true,
++                                  /*row_on_screen=*/true,
++                                  /*edit_requested=*/false));
++}
++
++TEST(ArcToolbarHostTest, EditingBorrowsTheEditHost) {
++  EXPECT_EQ(ArcToolbarHost::kEditHost,
++            ResolveArcToolbarHost(/*has_address_bar_band=*/false,
++                                  /*sidebar_can_host=*/true,
++                                  /*row_on_screen=*/true,
++                                  /*edit_requested=*/true));
++}
++
++TEST(ArcToolbarHostTest, AnOffScreenRowHasNoGeometryToLend) {
++  // Collapsing the sidebar mid-edit: the loan falls back to the row rather
++  // than stranding the toolbar in a host the sidebar no longer covers, where
++  // it painted over the page and survived the collapse (user-hit 2026-08-19).
++  EXPECT_EQ(ArcToolbarHost::kSidebarRow,
++            ResolveArcToolbarHost(/*has_address_bar_band=*/false,
++                                  /*sidebar_can_host=*/true,
++                                  /*row_on_screen=*/false,
++                                  /*edit_requested=*/true));
++}
++
++TEST(ArcToolbarHostTest, EveryInputCombinationResolves) {
++  // Totality is the point of the function: 16 combinations, one host each, no
++  // pair of booleans left to contradict one another.
++  for (int bits = 0; bits < 16; ++bits) {
++    const bool band = bits & 1;
++    const bool can_host = bits & 2;
++    const bool on_screen = bits & 4;
++    const bool editing = bits & 8;
++    const ArcToolbarHost host =
++        ResolveArcToolbarHost(band, can_host, on_screen, editing);
++    if (band || !can_host) {
++      EXPECT_EQ(ArcToolbarHost::kBand, host) << "bits=" << bits;
++    } else if (editing && on_screen) {
++      EXPECT_EQ(ArcToolbarHost::kEditHost, host) << "bits=" << bits;
++    } else {
++      EXPECT_EQ(ArcToolbarHost::kSidebarRow, host) << "bits=" << bits;
++    }
++  }
++}
++
++TEST(ArcToolbarHostTest, OnlyTheEditHostPinsTheRowsHeight) {
++  // The pin is derived from the host, so no exit path can leave it behind --
++  // the empty 34pt gap above the favorites was a pin that outlived its edit.
++  EXPECT_TRUE(ArcRowHoldsItsHeight(ArcToolbarHost::kEditHost));
++  EXPECT_FALSE(ArcRowHoldsItsHeight(ArcToolbarHost::kSidebarRow));
++  EXPECT_FALSE(ArcRowHoldsItsHeight(ArcToolbarHost::kBand));
++}
++
++TEST(ArcToolbarHostTest, BothSidebarHostsAreSidebarBound) {
++  // The edit host is the row's loan, so anything asking "is the field in the
++  // sidebar" must answer yes for it too.
++  EXPECT_TRUE(ArcToolbarIsSidebarBound(ArcToolbarHost::kSidebarRow));
++  EXPECT_TRUE(ArcToolbarIsSidebarBound(ArcToolbarHost::kEditHost));
++  EXPECT_FALSE(ArcToolbarIsSidebarBound(ArcToolbarHost::kBand));
++}
++
++// Off by default, so the row the user approved keeps its icons. When on, the
++// area is gone at rest and back on the address row's own hover -- deliberately
++// tighter than Arc, which reveals on the whole sidebar.
++TEST(ArcToolbarHostTest, AutoHideOnlyAppliesInTheSidebar) {
++  for (const bool auto_hide : {false, true}) {
++    for (const bool hovered : {false, true}) {
++      for (const bool bubble : {false, true}) {
++        EXPECT_TRUE(ShouldRevealSidebarExtensions(/*sidebar_hosted=*/false,
++                                                auto_hide, hovered, bubble));
++      }
++    }
++  }
++}
++
++TEST(ArcToolbarHostTest, AutoHideOffKeepsTheIconsInTheRow) {
++  for (const bool hovered : {false, true}) {
++    for (const bool bubble : {false, true}) {
++      EXPECT_TRUE(ShouldRevealSidebarExtensions(/*sidebar_hosted=*/true,
++                                              /*auto_hide=*/false, hovered,
++                                              bubble));
++    }
++  }
++}
++
++TEST(ArcToolbarHostTest, AutoHideOnFollowsTheRowsHover) {
++  EXPECT_FALSE(ShouldRevealSidebarExtensions(/*sidebar_hosted=*/true,
++                                           /*auto_hide=*/true,
++                                           /*row_hovered=*/false,
++                                           /*bubble_anchored=*/false));
++  EXPECT_TRUE(ShouldRevealSidebarExtensions(/*sidebar_hosted=*/true,
++                                          /*auto_hide=*/true,
++                                          /*row_hovered=*/true,
++                                          /*bubble_anchored=*/false));
++}
++
++// A menu or popup anchored in the extensions area holds the icons up with the
++// pointer anywhere at all -- its anchor cannot vanish under it -- and the
++// moment it closes the answer falls back to the pointer. This is the fix for
++// the icons never retracting after an extensions-menu click (2026-08-19).
++TEST(ArcToolbarHostTest, AnAnchoredBubbleHoldsTheReveal) {
++  EXPECT_TRUE(ShouldRevealSidebarExtensions(/*sidebar_hosted=*/true,
++                                          /*auto_hide=*/true,
++                                          /*row_hovered=*/false,
++                                          /*bubble_anchored=*/true));
++  // Bubble gone, pointer elsewhere: retract.
++  EXPECT_FALSE(ShouldRevealSidebarExtensions(/*sidebar_hosted=*/true,
++                                           /*auto_hide=*/true,
++                                           /*row_hovered=*/false,
++                                           /*bubble_anchored=*/false));
++}
++
++// The width trails the reveal: reserved while shown or still fading, released
++// only once the fade lands, and never released at all outside the sidebar or
++// with auto-hide off. This is what lets the domain take the whole row at rest
++// (user 2026-08-19) without the tail ellipsis snapping mid-fade.
++TEST(ArcToolbarHostTest, TheAreasWidthTrailsItsFade) {
++  EXPECT_TRUE(ShouldReserveSidebarExtensionsSpace(/*sidebar_hosted=*/false,
++                                                /*auto_hide=*/true,
++                                                /*revealed_or_fading=*/false));
++  EXPECT_TRUE(ShouldReserveSidebarExtensionsSpace(/*sidebar_hosted=*/true,
++                                                /*auto_hide=*/false,
++                                                /*revealed_or_fading=*/false));
++  EXPECT_TRUE(ShouldReserveSidebarExtensionsSpace(/*sidebar_hosted=*/true,
++                                                /*auto_hide=*/true,
++                                                /*revealed_or_fading=*/true));
++  EXPECT_FALSE(ShouldReserveSidebarExtensionsSpace(/*sidebar_hosted=*/true,
++                                                 /*auto_hide=*/true,
++                                                 /*revealed_or_fading=*/false));
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc
++++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc
+@@ -40,6 +40,10 @@ void RegisterProfilePrefs(user_prefs::Pr
+   registry->RegisterIntegerPref(
+       prefs::kHeliumAddressBarMode,
+       std::to_underlying(HeliumAddressBarMode::kDocked));
++  // helium-fork: off means the sidebar row keeps its extension icons on
++  // screen. Arc hides them until the pointer enters the sidebar; both were
++  // wanted, so the Arc behavior is the opt-in.
++  registry->RegisterBooleanPref(prefs::kHeliumSidebarAutoHideExtensions, false);
+   registry->RegisterBooleanPref(prefs::kHeliumArcShellMigrated, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, false);
+   registry->RegisterBooleanPref(prefs::kHeliumZenModeTopChromePinned, false);
+Index: src/chrome/browser/ui/toolbar/toolbar_actions_model.cc
+===================================================================
+--- src.orig/chrome/browser/ui/toolbar/toolbar_actions_model.cc
++++ src/chrome/browser/ui/toolbar/toolbar_actions_model.cc
+@@ -601,6 +601,16 @@ void ToolbarActionsModel::SetActionVisib
+   DCHECK(!profile_->IsOffTheRecord())
+       << "Changing action pin state is disallowed in incognito.";
+ 
++  // helium-fork: the callers that offer pinning already gate on
++  // CanPinMoreActions(), so this is the backstop for the ones that do not (the
++  // side panel's pinning controller, and anything added later). Notifying on
++  // the way out matters: the pin control reflects the model, and returning
++  // without a notification would leave it drawn as though the pin had taken.
++  if (is_now_visible && !CanPinMoreActions()) {
++    NotifyPinnedActionIdsChanged();
++    return;
++  }
++
+   auto stored_pinned_action_ids = extension_prefs_->GetPinnedExtensions();
+   DCHECK_NE(is_now_visible,
+             std::ranges::contains(stored_pinned_action_ids, action_id));
+@@ -623,6 +633,18 @@ const extensions::Extension* ToolbarActi
+   return extension_registry_->enabled_extensions().GetByID(action_id);
+ }
+ 
++bool ToolbarActionsModel::CanPinMoreActions() const {
++  // helium-fork: only what the user chose counts. Force-pinned ids are
++  // appended by GetFilteredPinnedActionIds() whatever the prefs say, so
++  // counting them here would let policy fill the budget and leave the user
++  // unable to pin -- or, worse, unable to unpin, since the pin control is what
++  // this gates.
++  const size_t user_pinned = std::ranges::count_if(
++      pinned_action_ids_,
++      [this](const ActionId& id) { return !IsActionForcePinned(id); });
++  return user_pinned < kMaxPinnedExtensions;
++}
++
+ std::vector<ToolbarActionsModel::ActionId>
+ ToolbarActionsModel::GetFilteredPinnedActionIds() const {
+   // Force-pinned extensions should always be present in the output vector.
+Index: src/chrome/browser/ui/toolbar/toolbar_actions_model.h
+===================================================================
+--- src.orig/chrome/browser/ui/toolbar/toolbar_actions_model.h
++++ src/chrome/browser/ui/toolbar/toolbar_actions_model.h
+@@ -130,6 +130,18 @@ class ToolbarActionsModel
+   // Returns true if the action is force-pinned to the toolbar.
+   bool IsActionForcePinned(const ActionId& action_id) const;
+ 
++  // helium-fork: how many extensions the user may pin. The Arc shell's sidebar
++  // row is ~244pt wide and every pinned icon costs 30 of it, so an unbounded
++  // list just means icons the row silently drops. Capping the list is the only
++  // place that can say no with the user still looking at the pin control.
++  static constexpr size_t kMaxPinnedExtensions = 4;
++
++  // helium-fork: whether another extension can be pinned. Force-pinned ones do
++  // not count against the cap -- enterprise policy can require more than four,
++  // and a cap that policy can exhaust would lock the user out of unpinning
++  // their own.
++  bool CanPinMoreActions() const;
++
+   // Move the pinned action for |action_id| to |target_index|.
+   void MovePinnedAction(const ActionId& action_id, size_t target_index);
+ 
+Index: src/chrome/browser/ui/views/extensions/extensions_menu_item_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/extensions/extensions_menu_item_view.cc
++++ src/chrome/browser/ui/views/extensions/extensions_menu_item_view.cc
+@@ -210,8 +210,15 @@ void ExtensionMenuItemView::UpdatePinBut
+       is_force_pinned, is_pinned, view_model_->GetActionName()));
+   // Extension pinning is not available in Incognito as it leaves a trace of
+   // user activity.
+-  pin_button_->SetEnabled(!is_force_pinned &&
+-                          !browser_->GetProfile()->IsOffTheRecord());
++  //
++  // helium-fork: nor once the toolbar is full. Already-pinned extensions keep
++  // an enabled button -- that press unpins, which is how the user gets back
++  // under the cap.
++  const ToolbarActionsModel* const actions_model =
++      ToolbarActionsModel::Get(browser_->GetProfile());
++  pin_button_->SetEnabled(
++      !is_force_pinned && !browser_->GetProfile()->IsOffTheRecord() &&
++      (is_pinned || (actions_model && actions_model->CanPinMoreActions())));
+ 
+   // Update the icon based on whether the extension is pinned.
+   const gfx::VectorIcon& icon =
+Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
++++ src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
+@@ -60,6 +60,7 @@
+ #include "ui/base/models/image_model.h"
+ #include "ui/base/ui_base_features.h"
+ #include "ui/views/interaction/element_tracker_views.h"
++#include "ui/gfx/animation/tween.h"
+ #include "ui/views/layout/animating_layout_manager.h"
+ #include "ui/views/layout/flex_layout.h"
+ #include "ui/views/layout/flex_layout_types.h"
+@@ -227,6 +228,20 @@ ExtensionsToolbarDesktop::ExtensionsTool
+   GetTargetLayoutManager()->SetDefault(views::kMarginsKey,
+                                        gfx::Insets::VH(0, 2));
+ 
++  // helium-fork: everything in the Arc shell's sidebar row moves together at
++  // 200ms. The inherited defaults are 250ms/EASE_IN_OUT, which arrives late
++  // and lands hard; the same override PinnedToolbarActionsContainer already
++  // applies to itself.
++  //
++  // No opacity override here: this container's fade mode is
++  // kSlideFromTrailingEdge (set by ToolbarIconContainerView), and
++  // SetOpacityAnimationDuration is only read under
++  // kFadeAndSlideFromTrailingEdge -- setting it would be dead code. The Arc
++  // row's own reveal is a layer alpha on the whole container instead, driven
++  // from ToolbarView::UpdateArcExtensionsRevealOpacity().
++  GetAnimatingLayoutManager()->SetTweenType(gfx::Tween::Type::FAST_OUT_SLOW_IN_3);
++  GetAnimatingLayoutManager()->SetAnimationDuration(base::Milliseconds(200));
++
+   UpdateControlsVisibility();
+ 
+   toolbar_view_model_observation_.Observe(toolbar_view_model_.get());
+@@ -340,6 +355,7 @@ void ExtensionsToolbarDesktop::ShowWidge
+   anchored_widgets_.push_back({widget, extension_id});
+   widget->AddObserver(this);
+   UpdateIconVisibility(extension_id);
++  NotifyTransientUiChanged();
+   GetAnimatingLayoutManager()->PostOrQueueAction(
+       base::BindOnce(&ExtensionsToolbarDesktop::AnchorAndShowWidgetImmediately,
+                      weak_ptr_factory_.GetWeakPtr(),
+@@ -442,8 +458,7 @@ void ExtensionsToolbarDesktop::UpdateIco
+     action_view->ClearProperty(views::kFlexBehaviorKey);
+   }
+ 
+-  if (must_show || (!suppress_pinned_actions_ &&
+-                    ToolbarActionsModel::CanShowActionsInToolbar(*browser_) &&
++  if (must_show || (ToolbarActionsModel::CanShowActionsInToolbar(*browser_) &&
+                     model_->IsActionPinned(extension_id))) {
+     GetAnimatingLayoutManager()->FadeIn(action_view);
+   } else {
+@@ -451,17 +466,6 @@ void ExtensionsToolbarDesktop::UpdateIco
+   }
+ }
+ 
+-void ExtensionsToolbarDesktop::SetSuppressPinnedActions(bool suppress) {
+-  if (suppress_pinned_actions_ == suppress) {
+-    return;
+-  }
+-  suppress_pinned_actions_ = suppress;
+-  for (const auto& [action_id, icon] : icons_) {
+-    UpdateIconVisibility(action_id);
+-  }
+-  UpdateContainerVisibility();
+-}
+-
+ void ExtensionsToolbarDesktop::AnchorAndShowWidgetImmediately(
+     MayBeDangling<views::Widget> widget) {
+   auto iter =
+@@ -511,8 +515,7 @@ ExtensionsToolbarDesktop::GetPoppedOutAc
+ 
+ bool ExtensionsToolbarDesktop::IsActionVisibleOnToolbar(
+     const std::string& action_id) const {
+-  return (!suppress_pinned_actions_ && model_->IsActionPinned(action_id)) ||
+-         ShouldForceVisibility(action_id);
++  return model_->IsActionPinned(action_id) || ShouldForceVisibility(action_id);
+ }
+ 
+ void ExtensionsToolbarDesktop::UndoPopOut() {
+@@ -521,6 +524,7 @@ void ExtensionsToolbarDesktop::UndoPopOu
+   popped_out_action_ = std::nullopt;
+   UpdateIconVisibility(popped_out_action);
+   UpdateContainerVisibilityAfterAnimation();
++  NotifyTransientUiChanged();
+ }
+ 
+ void ExtensionsToolbarDesktop::SetPopupOwner(
+@@ -538,6 +542,7 @@ void ExtensionsToolbarDesktop::SetPopupO
+   } else {
+     UpdateContainerVisibilityAfterAnimation();
+   }
++  NotifyTransientUiChanged();
+ }
+ 
+ void ExtensionsToolbarDesktop::PopOutAction(
+@@ -549,6 +554,7 @@ void ExtensionsToolbarDesktop::PopOutAct
+   UpdateIconVisibility(action_id);
+   GetAnimatingLayoutManager()->PostOrQueueAction(std::move(closure));
+   UpdateContainerVisibility();
++  NotifyTransientUiChanged();
+ }
+ 
+ void ExtensionsToolbarDesktop::ReorderAllChildViews() {
+@@ -590,8 +596,7 @@ void ExtensionsToolbarDesktop::CreateAct
+   CHECK(icon);
+ 
+   // Set visibility before adding to prevent extraneous animation.
+-  icon->SetVisible(!suppress_pinned_actions_ &&
+-                   ToolbarActionsModel::CanShowActionsInToolbar(*browser_) &&
++  icon->SetVisible(ToolbarActionsModel::CanShowActionsInToolbar(*browser_) &&
+                    model_->IsActionPinned(action_id));
+   views::FocusRing::Get(icon.get())->SetOutsetFocusRingDisabled(true);
+   ObserveButton(icon.get());
+@@ -653,6 +658,7 @@ void ExtensionsToolbarDesktop::OnContext
+ 
+   extension_with_open_context_menu_id_ = action_id;
+   UpdateIconVisibility(extension_with_open_context_menu_id_.value());
++  NotifyTransientUiChanged();
+ }
+ 
+ void ExtensionsToolbarDesktop::OnContextMenuClosed(
+@@ -663,6 +669,7 @@ void ExtensionsToolbarDesktop::OnContext
+       extension_with_open_context_menu_id_.value();
+   extension_with_open_context_menu_id_.reset();
+   UpdateIconVisibility(extension_id);
++  NotifyTransientUiChanged();
+ }
+ 
+ void ExtensionsToolbarDesktop::WriteDragDataForView(View* sender,
+@@ -959,6 +966,7 @@ void ExtensionsToolbarDesktop::OnWidgetD
+   if (GetWidget() && !GetWidget()->IsClosed()) {
+     UpdateIconVisibility(extension_id);
+   }
++  NotifyTransientUiChanged();
+ }
+ 
+ size_t ExtensionsToolbarDesktop::WidthToIconCount(int x_offset) {
+@@ -1052,6 +1060,24 @@ bool ExtensionsToolbarDesktop::ShouldCon
+   return false;
+ }
+ 
++bool ExtensionsToolbarDesktop::HasOpenTransientUi() const {
++  return GetExtensionsButton()->GetExtensionsMenuShowing() ||
++         popped_out_action_.has_value() || popup_owner_ != nullptr ||
++         extension_with_open_context_menu_id_.has_value() ||
++         !anchored_widgets_.empty();
++}
++
++void ExtensionsToolbarDesktop::SetTransientUiChangedCallback(
++    base::RepeatingClosure callback) {
++  transient_ui_changed_callback_ = std::move(callback);
++}
++
++void ExtensionsToolbarDesktop::NotifyTransientUiChanged() {
++  if (transient_ui_changed_callback_) {
++    transient_ui_changed_callback_.Run();
++  }
++}
++
+ void ExtensionsToolbarDesktop::UpdateContainerVisibilityAfterAnimation() {
+   GetAnimatingLayoutManager()->PostOrQueueAction(
+       base::BindOnce(&ExtensionsToolbarDesktop::UpdateContainerVisibility,
+@@ -1079,10 +1105,12 @@ void ExtensionsToolbarDesktop::OnMenuOpe
+   }
+ 
+   UpdateContainerVisibility();
++  NotifyTransientUiChanged();
+ }
+ 
+ void ExtensionsToolbarDesktop::OnMenuClosed() {
+   UpdateContainerVisibility();
++  NotifyTransientUiChanged();
+ }
+ 
+ void ExtensionsToolbarDesktop::UpdateSidePanelState(bool is_active) {
+Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h
++++ src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h
+@@ -113,15 +113,21 @@ class ExtensionsToolbarDesktop : public
+   void UpdatePinnedActions();
+ 
+ 
+-  // helium-fork: collapse every pinned extension into the extensions-menu
+-  // button (the Zen treatment). Used while this toolbar is hosted inside the
+-  // Arc shell's sidebar, where a ~200pt row has no room for a strip of
+-  // per-extension icons; their popups anchor to the menu button instead.
+-  void SetSuppressPinnedActions(bool suppress);
+-
+   // Updates the container visibility and animation as needed.
+   void UpdateContainerVisibility();
+ 
++  // helium-fork: whether any transient UI is anchored in this container --
++  // the extensions menu, an extension popup, a popped-out action, a context
++  // menu, or an anchored bubble. The sidebar row keeps its extensions area
++  // revealed while this is true, since the open UI is anchored to it.
++  bool HasOpenTransientUi() const;
++
++  // helium-fork: invoked from every open/close transition of the transient UI
++  // above, so the sidebar row can re-derive its reveal state the moment an
++  // anchor appears or goes away (the close is the signal the pointer events
++  // cannot deliver -- see arc_toolbar_host.h).
++  void SetTransientUiChangedCallback(base::RepeatingClosure callback);
++
+   // Updates the controls visibility.
+   void UpdateControlsVisibility();
+ 
+@@ -379,9 +385,6 @@ class ExtensionsToolbarDesktop : public
+   // View for every action, does not imply pinned or currently shown.
+   ToolbarIcons icons_;
+ 
+-  // helium-fork: see SetSuppressPinnedActions().
+-  bool suppress_pinned_actions_ = false;
+-
+   // Popped-out extension, if any.
+   std::optional<extensions::ExtensionId> popped_out_action_;
+   // The action that triggered the current popup, if any.
+@@ -398,6 +401,10 @@ class ExtensionsToolbarDesktop : public
+   // associated with. See AnchoredWidget.
+   std::vector<AnchoredWidget> anchored_widgets_;
+ 
++  // helium-fork: see SetTransientUiChangedCallback().
++  void NotifyTransientUiChanged();
++  base::RepeatingClosure transient_ui_changed_callback_;
++
+   // The DropInfo for the current drag-and-drop operation, or a null pointer if
+   // there is none.
+   std::unique_ptr<DropInfo> drop_info_;
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -106,6 +106,7 @@
+ #include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ #include "chrome/browser/ui/helium/arc_caption_opacity.h"
+ #include "chrome/browser/ui/helium/arc_omnibox_panel.h"
++#include "chrome/browser/ui/helium/arc_toolbar_host.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+@@ -159,6 +160,7 @@
+ #include "chrome/browser/ui/views/frame/browser_frame_view.h"
+ #include "chrome/browser/ui/views/frame/browser_native_widget.h"
+ #include "chrome/browser/ui/views/frame/browser_widget.h"
++#include "chrome/browser/ui/views/frame/custom_corners_background.h"
+ #include "chrome/browser/ui/views/frame/contents_container_view.h"
+ #include "chrome/browser/ui/views/frame/contents_layout_manager.h"
+ #include "chrome/browser/ui/views/frame/contents_separator.h"
+@@ -2202,7 +2204,16 @@ void BrowserView::UpdateZenModeReveal(bo
+   // the docked band, but here a click on the page must release the card even
+   // with input pending -- the input survives invisibly and the panel returns
+   // with the next reveal.
+-  if (IsSidebarHiddenModeActive() && omnibox_focused) {
++  //
++  // The gate asks where the field is, not whether the sidebar is collapsed.
++  // IsSidebarHiddenModeActive() answers the latter and is true in the docked
++  // mode too, where the field sits in the band and the sidebar has nothing to
++  // do with it -- so focusing the address bar with the sidebar collapsed pinned
++  // the card open on every keystroke, a regression against behavior that had
++  // been working (user-hit 2026-08-19). Same predicate the press hook uses, so
++  // the two halves of this hand-off cannot disagree about where the field is.
++  if (omnibox_focused && toolbar_ &&
++      ToolbarView::IsArcSidebarHostedFor(toolbar_->location_bar_view())) {
+     reveal_side = true;
+   }
+ 
+@@ -2232,7 +2243,7 @@ void BrowserView::UpdateZenModeReveal(bo
+       if (!zen_top_chrome_animation_.IsShowing()) {
+         zen_top_chrome_animation_.Show();
+         if (toolbar_) {
+-          toolbar_->AbortToolbarContainerAnimationsForZenReveal();
++          toolbar_->AbortToolbarContainerAnimations();
+         }
+       }
+       // helium-fork: revealing only ever makes the contents shorter, and viz
+@@ -2541,8 +2552,7 @@ void BrowserView::UpdateArcSidebarContro
+ void BrowserView::MaybeEndArcFieldEditing() {
+   LocationBarView* const location_bar =
+       toolbar_ ? toolbar_->location_bar_view() : nullptr;
+-  if (!location_bar || !location_bar->GetArcOmniboxPanelMetrics().enabled ||
+-      !location_bar->IsArcFieldEditing()) {
++  if (!location_bar) {
+     return;
+   }
+   // A press inside the field is the field's own business -- moving the caret,
+@@ -2556,7 +2566,24 @@ void BrowserView::MaybeEndArcFieldEditin
+   if (location_bar->HitTestPoint(local)) {
+     return;
+   }
+-  location_bar->EndArcFieldEditing();
++  // helium-fork: fold the hand-off back unconditionally, and only then ask the
++  // field to leave its own edit state.
++  //
++  // This used to return early unless IsArcFieldEditing() -- caret visible or
++  // input pending -- which reads the field's state, not the hand-off's. A press
++  // on the row's blank stretch begins the hand-off (the press hook only asked
++  // whether the press landed on the field) but is a window-drag point, so the
++  // omnibox never took focus, never blurred, and this early return meant
++  // nothing ever ended it. The toolbar stayed in the edit host: panel-width,
++  // outside the row's clip, painting the address over the page and surviving
++  // the sidebar's own collapse, because that host is a child of BrowserView
++  // (user-hit 2026-08-19). Ending is idempotent, so the asymmetry bought
++  // nothing the funnel does not already give for free.
++  EndArcSidebarFieldEdit();
++  if (location_bar->GetArcOmniboxPanelMetrics().enabled &&
++      location_bar->IsArcFieldEditing()) {
++    location_bar->EndArcFieldEditing();
++  }
+   // helium-fork: ending the edit releases the floating sidebar's edit pin
+   // (UpdateZenModeReveal above), but nothing re-evaluates the cursor until the
+   // next mouse move -- and a click that lands and never moves again would
+@@ -2579,6 +2606,15 @@ void BrowserView::MaybeBeginArcFieldEdit
+   if (!location_bar->HitTestPoint(local)) {
+     return;
+   }
++  // helium-fork: only a press that can actually reach the field starts the
++  // hand-off. The row's blank stretch is a window-drag point (#337: not moving
++  // is a click, moving is a drag), so a press there never gives the omnibox
++  // focus -- and a hand-off begun without focus has nothing to end it. Asking
++  // the caption predicate itself means the two cannot disagree about which
++  // pixels are draggable.
++  if (location_bar->IsPositionInWindowCaption(local)) {
++    return;
++  }
+   BeginArcSidebarFieldEdit();
+ }
+ 
+@@ -2595,13 +2631,12 @@ void BrowserView::BeginArcSidebarFieldEd
+       !address_row->IsDrawn()) {
+     return;
+   }
+-  // The row must keep its height while its toolbar rides the edit host --
+-  // otherwise the sidebar's layout closes the gap and the favorites jump up
+-  // the instant the panel opens (user-hit 2026-08-19).
+-  address_row->SetPreferredSize(gfx::Size(0, address_row->height()));
++  // helium-fork: request the hand-off; the funnel applies it. The row's height
++  // pin, the host's visibility and this flag's final value are all derived
++  // from the host it resolves (helium/arc_toolbar_host.h), so an edit cannot
++  // begin half set up -- nor be left behind.
+   arc_field_edit_active_ = true;
+   UpdateArcAddressBarPlacement();
+-  LayoutArcFieldEditHost();
+   // The caller focuses the field right after this returns; the layout must be
+   // synchronous so the focus (and the panel reading the field's bounds off
+   // the edit-state notification) sees the widened geometry, not the row's.
+@@ -2642,16 +2677,11 @@ void BrowserView::EndArcSidebarFieldEdit
+       focus_manager->ClearFocus();
+     }
+   }
++  // helium-fork: everything the edit was holding -- the host's visibility, the
++  // row's height pin, the toolbar's parent -- is released by the funnel, from
++  // the host it now resolves. Undoing them here as well is how the two copies
++  // drifted apart the first time.
+   UpdateArcAddressBarPlacement();
+-  if (arc_field_edit_host_) {
+-    arc_field_edit_host_->SetVisible(false);
+-  }
+-  if (vertical_tab_strip_region_view_) {
+-    if (views::View* const address_row =
+-            vertical_tab_strip_region_view_->arc_address_row()) {
+-      address_row->SetPreferredSize(std::nullopt);
+-    }
+-  }
+ }
+ 
+ void BrowserView::OnLocationBarBoundsChanged() {
+@@ -2677,14 +2707,29 @@ void BrowserView::OnLocationBarEditState
+ }
+ 
+ void BrowserView::UpdateArcAddressBarPlacement() {
+-  // helium-fork: HeliumAddressBarMode::kHidden -- Arc's default shape. There is
+-  // no band above the page; the address bar moves into the sidebar, under the
+-  // top row.
++  // helium-fork: the one funnel every toolbar host change passes through.
++  //
++  // The toolbar lives in one of three places (helium/arc_toolbar_host.h) and
++  // each of them owes the same set of consequences: a parent, the row's height
++  // pin, the edit host's visibility, who owns the toolbar's visible flag, the
++  // tint of the surface it now stands on, the traffic lights. Resolving the
++  // host first and then applying all of them unconditionally is what keeps
++  // them from drifting apart.
++  //
++  // The shape before this derived each consequence from whatever had changed,
++  // and every escape route that skipped one cost a user-visible bug: a mode
++  // switch mid-edit cleared the edit flag without releasing the row's height
++  // pin, leaving an empty 34pt gap above the favorites for the rest of the
++  // session; a press that could never focus the omnibox moved the toolbar into
++  // the unclipped edit host with nothing able to move it back, so the address
++  // painted over the page and outlived the sidebar's own collapse (both
++  // user-hit 2026-08-19). Neither is expressible now: the pin and the flag are
++  // read off the resolved host rather than tracked alongside it.
+   //
+   // The whole ToolbarView moves, not just the omnibox. ToolbarView lays out its
+   // own children, so one reparent carries the omnibox and the extensions /
+   // profile / menu buttons along with it, right-aligned in the same row, and
+-  // its flex layout drops what a 200pt sidebar cannot fit -- no second layout
++  // its flex layout drops what a narrow sidebar cannot fit -- no second layout
+   // to write and no assumptions inside ToolbarView to break. Everything that
+   // skips the band when it is absent is already guarded by
+   // IsParentedTo(toolbar, top_container) in the layout, so the top container
+@@ -2699,65 +2744,117 @@ void BrowserView::UpdateArcAddressBarPla
+     return;
+   }
+   auto* const layout_controller = HeliumLayoutStateController::From(browser_);
+-  const bool wants_toolbar_in_sidebar =
+-      layout_controller && !layout_controller->HasAddressBarBand() &&
+-      ShouldDrawVerticalTabStrip() && GetIsNormalType();
+-
+-  // helium-fork: mode moved away mid-edit (kDocked switch, sidebar gone) --
+-  // drop the edit hand-off before placing; anything else strands the toolbar
+-  // in a host whose reason to exist just left. Focus, if the field still has
+-  // it, goes with the mode switch's own focus churn.
+-  if (arc_field_edit_active_ && !wants_toolbar_in_sidebar) {
+-    arc_field_edit_active_ = false;
+-    if (arc_field_edit_host_) {
+-      arc_field_edit_host_->SetVisible(false);
+-    }
++  const helium::ArcToolbarHost host = helium::ResolveArcToolbarHost(
++      /*has_address_bar_band=*/!layout_controller ||
++          layout_controller->HasAddressBarBand(),
++      /*sidebar_can_host=*/ShouldDrawVerticalTabStrip() && GetIsNormalType(),
++      /*row_on_screen=*/address_row->IsDrawn(),
++      /*edit_requested=*/arc_field_edit_active_ && arc_field_edit_host_);
++  const bool sidebar_bound = helium::ArcToolbarIsSidebarBound(host);
++
++  // The flag goes in as a request and comes out as a fact. Reconciling it here
++  // is what makes "the edit is over" impossible to half-apply: there is no
++  // longer a path that drops the edit without also releasing everything the
++  // edit was holding.
++  arc_field_edit_active_ = host == helium::ArcToolbarHost::kEditHost;
++
++  // Read before the reparent: an emptied row keeps its laid-out height until
++  // the next layout, and that height is what the pin below has to preserve.
++  const int row_height = address_row->height();
++
++  switch (host) {
++    case helium::ArcToolbarHost::kEditHost:
++      if (toolbar_->parent() != arc_field_edit_host_) {
++        arc_field_edit_host_->AddChildView(toolbar_.get());
++      }
++      break;
++    case helium::ArcToolbarHost::kSidebarRow:
++      if (toolbar_->parent() != address_row) {
++        address_row->AddChildView(toolbar_.get());
++      }
++      break;
++    case helium::ArcToolbarHost::kBand:
++      if (toolbar_->parent() != top_container_) {
++        top_container_->AddChildViewAt(toolbar_.get(), 0);
++      }
++      break;
+   }
+-  const bool wants_edit_host =
+-      wants_toolbar_in_sidebar && arc_field_edit_active_ && arc_field_edit_host_;
+-  if (wants_edit_host) {
+-    if (toolbar_->parent() != arc_field_edit_host_) {
+-      arc_field_edit_host_->AddChildView(toolbar_.get());
+-    }
+-  } else if (wants_toolbar_in_sidebar) {
+-    if (arc_field_edit_host_) {
+-      arc_field_edit_host_->SetVisible(false);
+-    }
+-    if (toolbar_->parent() != address_row) {
+-      address_row->AddChildView(toolbar_.get());
+-    }
++
++  // The row holds its height only while its toolbar is away in the edit host,
++  // so the favorites below do not jump the instant the panel opens. Every other
++  // host releases it -- an empty row is skipped by the sidebar's layout
++  // outright, but only while it declares no height of its own.
++  if (helium::ArcRowHoldsItsHeight(host)) {
++    address_row->SetPreferredSize(gfx::Size(0, row_height));
+   } else {
+-    if (toolbar_->parent() != top_container_) {
+-      top_container_->AddChildViewAt(toolbar_.get(), 0);
++    address_row->SetPreferredSize(std::nullopt);
++  }
++
++  // The edit host is visible exactly while it holds the toolbar. Placing it
++  // here rather than at the call sites is what closes the case where the
++  // toolbar left but the host stayed on screen, still painting over the page.
++  if (arc_field_edit_host_) {
++    if (host == helium::ArcToolbarHost::kEditHost) {
++      LayoutArcFieldEditHost();
++    } else {
++      arc_field_edit_host_->SetVisible(false);
+     }
+   }
+-  toolbar_->SetArcEditHosted(wants_edit_host);
+-  // helium-fork: the tabbed layout owns the toolbar's visible flag ONLY while
+-  // the toolbar is parented to the top container (layout.AddChild -> false in
+-  // the hidden mode). One transient frame there is enough to stamp false; the
+-  // sidebar hosts have no such manager, so reclaim the flag on every arrival
+-  // (user-hit 2026-08-19: toolbar frozen invisible inside the edit host).
+-  if (wants_toolbar_in_sidebar) {
++
++  toolbar_->SetArcEditHosted(host == helium::ArcToolbarHost::kEditHost);
++
++  // Visibility ownership. The tabbed layout stamps the toolbar's visible flag
++  // only while the band hosts it (layout.AddChild -> false in the hidden mode);
++  // the sidebar's hosts have no such manager, so the arriving host reclaims it.
++  // Both re-assertions happen here, before the layout runs -- the repair that
++  // used to sit at the tail of Layout() flipped visibility *after* the pass
++  // that had already placed everything for the other answer, which is a frame
++  // that disagrees with itself by construction.
++  if (sidebar_bound) {
+     toolbar_->SetVisible(true);
+   }
+-  // helium-fork: heal any FlexLayout drop. When the sidebar collapses with
+-  // the toolbar inside, the row lays out at zero width and FlexLayout drops
+-  // the location bar (SetVisible(false)); a reparent then carries that flag
+-  // into the new host, where FlexLayout reads a pre-existing false as an
+-  // external hide and never restores it -- the field stayed invisible on the
+-  // band and in the row alike (user-hit 2026-08-18, field frozen at the
+-  // collapsed row's stale bounds). Placement is the one funnel every host
+-  // change passes through, so re-assert the intent here; the next layout is
+-  // free to drop it again if space truly lacks.
++  // Heal any stale FlexLayout drop: a row that laid out at zero width drops the
++  // location bar (SetVisible(false)), and a reparent carries that flag into the
++  // next host, where FlexLayout reads a pre-existing false as an external hide
++  // and never restores it -- the field stayed invisible on the band and in the
++  // row alike (user-hit 2026-08-18). Host changes are the one place that has to
++  // re-state the intent; the next layout is free to drop it again if space
++  // truly lacks.
+   if (toolbar_->location_bar_view()) {
+     toolbar_->location_bar_view()->SetVisible(true);
+   }
++
+   // The toolbar keeps its CustomCornersBackground either way: the band's
+   // layout pass reaches for it by type to apply the page tint, and swapping it
+-  // out here would leave that with nothing to configure. In the sidebar it
+-  // paints kColorToolbar, which is the sidebar's own color, so it disappears.
+-  toolbar_->SetArcSidebarHosted(wants_toolbar_in_sidebar);
++  // out here would leave that with nothing to configure. Away from the band it
++  // is switched off instead.
++  //
++  // helium-fork: "in the sidebar it paints kColorToolbar so it disappears"
++  // used to be the whole story, and it was only ever true while nothing had
++  // overwritten the primary color. The band's layout pass does exactly that --
++  // it writes the page tint and a 14pt corner radius -- and it is guarded by
++  // IsParentedTo(toolbar, top_container), so once the toolbar leaves the band
++  // nothing ever puts it back. The stale tint then rode along into the
++  // sidebar, and in the edit host it painted a full-width slab 3pt taller than
++  // the panel floating over it: the grey lip along the panel's top edge the
++  // user caught 2026-08-19. Turning it off here is the missing half of that
++  // guard.
++  if (auto* const toolbar_background =
++          toolbar_->background()
++              ? toolbar_->background()->AsA<CustomCornersBackground>()
++              : nullptr) {
++    toolbar_background->SetVisible(host == helium::ArcToolbarHost::kBand);
++  }
++  toolbar_->SetArcSidebarHosted(sidebar_bound);
+   toolbar_->UpdateToolbarLayout();
++  // helium-fork: the toolbar just changed hosts, and with it the width its
++  // trailing containers lay out in -- the band's full width against the
++  // sidebar row's ~256pt. AnimatingLayoutManager animates its own bounds, so
++  // left alone it slides that whole distance every time the user switches
++  // modes, which reads as the icons flying across the screen rather than as a
++  // mode changing. The switch has to be one state to the next; only hover and
++  // pin/unpin get to animate.
++  toolbar_->AbortToolbarContainerAnimations();
+   // helium-fork: the page tint is published on the toolbar as a cascading
+   // property, and everything under it -- button icons, the omnibox's own
+   // opaque field fill -- derives a contrasting foreground from it. Moving the
+@@ -2834,6 +2931,15 @@ void BrowserView::OnSidebarCollapseState
+   // for one), and re-evaluating now would pop the card straight back out.
+   // The monitor re-evaluates on the next mouse move anyway.
+   UpdateZenModeEventMonitor();
++  // helium-fork: the row going off screen changes which host the toolbar can
++  // have -- the edit host borrows the row's geometry, and a row that is not on
++  // screen has none to lend. Nothing used to re-ask on collapse, so an edit
++  // begun while the sidebar was out kept the toolbar in a panel-width host the
++  // collapse could not reach, still painting over the page (user-hit
++  // 2026-08-19). Below the early return on purpose: the toggle choreography
++  // ends the edit itself and owns the slide, and re-parenting mid-slide is
++  // exactly what moves the URL to a third position for the length of it.
++  UpdateArcAddressBarPlacement();
+   // helium-fork: non-choreographed collapse flips snap the window controls
+   // with the ratio they just reset.
+   UpdateCaptionButtonsOpacityForChromeState();
+@@ -2913,6 +3019,12 @@ void BrowserView::RunSidebarDockFlip() {
+   // Symmetric with the hide path: hand the controls back inside the flip
+   // rather than a tick later, so the URL moves once.
+   UpdateArcSidebarControlPlacement();
++  // helium-fork: and re-resolve the toolbar's host in the same flip -- the row
++  // coming back on screen is a host change like any other, and this path used
++  // to skip the funnel entirely. That is how a height pin left behind by an
++  // earlier edit stayed invisible until an expand put it back on screen as an
++  // empty gap above the favorites (user-hit 2026-08-19).
++  UpdateArcAddressBarPlacement();
+   DeprecatedLayoutImmediately();
+   DisarmContentsResizeHold();
+   sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
+@@ -6398,24 +6510,14 @@ void BrowserView::Layout(PassKey) {
+   if (arc_field_edit_active_) {
+     LayoutArcFieldEditHost();
+   }
+-  // helium-fork: heal a stale FlexLayout drop. When the sidebar collapses
+-  // with the toolbar inside, the row lays out at zero width and FlexLayout
+-  // drops the location bar (SetVisible(false)); reparenting then carries the
+-  // flag into the next host, where FlexLayout reads a pre-existing false as
+-  // an external hide and never restores it (user-hit 2026-08-18: the field
+-  // frozen invisible on the band and in the row alike). Re-assert intent
+-  // only while the field's own host is drawn -- a legitimate drop happens
+-  // exactly when it is not, so this cannot fight the layout.
+-  if (toolbar_ && toolbar_->parent() && toolbar_->parent() != top_container_ &&
+-      toolbar_->parent()->IsDrawn()) {
+-    if (!toolbar_->GetVisible()) {
+-      toolbar_->SetVisible(true);
+-    }
+-    if (toolbar_->location_bar_view() &&
+-        !toolbar_->location_bar_view()->GetVisible()) {
+-      toolbar_->location_bar_view()->SetVisible(true);
+-    }
+-  }
++  // helium-fork: the stale-FlexLayout-drop repair that used to sit here has
++  // moved into UpdateArcAddressBarPlacement(), the one funnel every host change
++  // passes through. Here it ran at the tail of the layout, flipping visibility
++  // after the pass that had already placed everything for the other answer --
++  // a frame that disagrees with itself by construction, and the mechanism
++  // behind icons landing on top of one another after an edit (user-hit
++  // 2026-08-19). Re-asserting the intent before the layout instead costs
++  // nothing: a host change is the only thing that can carry a stale flag in.
+   if (arc_omnibox_panel_) {
+     arc_omnibox_panel_->UpdateFromField();
+   }
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -54,6 +54,8 @@
+ #include "chrome/browser/ui/global_error/global_error_service.h"
+ #include "chrome/browser/ui/global_error/global_error_service_factory.h"
+ #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "chrome/browser/ui/helium/arc_toolbar_host.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
+ #include "chrome/browser/ui/intent_picker_tab_helper.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -80,6 +82,7 @@
+ #include "chrome/browser/ui/views/glic/glic_button_interface.h"
+ #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_contextual_menu.h"
+ #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_view.h"
++#include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
+ #include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
+ #include "chrome/browser/ui/views/location_bar/star_view.h"
+ #include "chrome/browser/ui/views/location_bar/webui_location_bar.h"
+@@ -595,6 +598,11 @@ void ToolbarView::Init() {
+     extensions_toolbar_coordinator_ =
+         std::make_unique<ExtensionsToolbarCoordinator>(browser_,
+                                                        extensions_container_);
++    // helium-fork: a bubble closing is the one retract signal the pointer
++    // events cannot deliver (see UpdateArcExtensionsReveal). Unretained is
++    // safe: the container is this view's child and dies before it.
++    extensions_container_->SetTransientUiChangedCallback(base::BindRepeating(
++        &ToolbarView::UpdateArcExtensionsReveal, base::Unretained(this)));
+   }
+ 
+   if (!features::IsWebUIPinnedToolbarActionsEnabled()) {
+@@ -774,6 +782,22 @@ void ToolbarView::Init() {
+       base::BindRepeating(&ToolbarView::UpdateToolbarLayout,
+                           base::Unretained(this)));
+ 
++  // helium-fork: the row capsule and the field's own wash have to arrive
++  // together (they are one visual change), and the field's is 200ms. This was
++  // documented in the header but never set, so the capsule ran at
++  // SlideAnimation's 120ms default and beat the field to the end.
++  arc_row_hover_animation_.SetSlideDuration(base::Milliseconds(200));
++  // helium-fork: in the sidebar the row is one hover target -- capsule,
++  // domain and extensions area together -- so the toolbar has to see the
++  // pointer arrive over any of them. Without this the only hover source is the
++  // field's own pipe, which covers the left half of the row and leaves the
++  // extensions area dead.
++  SetNotifyEnterExitOnChild(true);
++  arc_sidebar_auto_hide_extensions_.Init(
++      prefs::kHeliumSidebarAutoHideExtensions, prefs,
++      base::BindRepeating(&ToolbarView::OnArcAutoHideExtensionsPrefChanged,
++                          base::Unretained(this)));
++
+   show_avatar_button_.Init(
+       prefs::kShowAvatarButton, prefs,
+       base::BindRepeating(&ToolbarView::OnShowAvatarButtonChanged,
+@@ -1306,6 +1330,11 @@ void ToolbarView::SetGlicPanelIsOpen(boo
+ 
+ void ToolbarView::MouseMovedOutOfHost() {
+   SetLockedExpansionMode(ExpansionMode::kNone, /*button=*/nullptr);
++  // helium-fork: the watcher is the exit signal that cannot be starved. A
++  // deferred-and-replayed OnMouseExited leaves the RootView with no move
++  // handler, after which no exit event ever reaches this view again -- the
++  // watcher observes the event stream instead and still fires.
++  UpdateArcExtensionsReveal();
+ }
+ 
+ void ToolbarView::SetLockedExpansionMode(ExpansionMode mode,
+@@ -1325,6 +1354,32 @@ void ToolbarView::SetLockedExpansionMode
+ }
+ 
+ void ToolbarView::AnimationEnded(const gfx::Animation* animation) {
++  // helium-fork: the row's hover tween is not the size animation.
++  //
++  // Upstream writes this callback for exactly one animation -- size_animation_,
++  // the custom tab bar's -- so reaching zero means "the toolbar has finished
++  // collapsing, hide it". The Arc row's hover capsule added a second animation
++  // to this same observer, and every time it faded out (pointer leaving the
++  // row, or the edit ending, which resets it) it arrived here at zero and hid
++  // the entire toolbar and the field with it. That is the "field frozen
++  // invisible" this fork chased twice with forced-visible repairs -- one in the
++  // host funnel, one at the tail of BrowserView::Layout() -- which is why the
++  // second one had to run after the layout to win, and why an icon could be
++  // placed for one answer and painted for the other. AnimationProgressed
++  // already separates the two; this is the same guard it has.
++  if (animation == &arc_row_hover_animation_) {
++    // Settle the extensions area on the endpoint the same way -- the tween's
++    // last frame and its end are two callbacks, and pinning both is what keeps
++    // the capsule and the icons from disagreeing about where they stopped.
++    UpdateArcExtensionsRevealOpacity();
++    // The fade landing at zero is also when the area gives its width back to
++    // the domain (and only then -- releasing it earlier would snap the tail
++    // ellipsis while the icons are still fading over it). The funnel
++    // re-derives everything, so an end-at-one is a no-op.
++    UpdateArcExtensionsReveal();
++    SchedulePaint();
++    return;
++  }
+   if (animation->GetCurrentValue() == 0) {
+     SetToolbarVisibility(false);
+   }
+@@ -1334,6 +1389,10 @@ void ToolbarView::AnimationEnded(const g
+ 
+ void ToolbarView::AnimationProgressed(const gfx::Animation* animation) {
+   if (animation == &arc_row_hover_animation_) {
++    // helium-fork: the tween carries the row capsule and the extensions area
++    // together -- one is painted, the other is a layer alpha, and they have to
++    // arrive on the same frame.
++    UpdateArcExtensionsRevealOpacity();
+     SchedulePaint();
+     return;
+   }
+@@ -2054,15 +2113,26 @@ void ToolbarView::UpdateToolbarLayout()
+       // and since it is also the only child allowed to scale to zero it then
+       // absorbs the entire deficit and elides the domain away to "...". This
+       // asks for a domain's worth and lets the trailing buttons keep theirs.
+-      constexpr int kArcSidebarLocationBarWidth = 130;
++      //
++      // 92 is what the pinned-extension cap costs, measured rather than
++      // guessed: the row is 240pt at the sidebar's 8pt margins, the extensions
++      // menu button 28 and each pinned icon 30, so kMaxPinnedExtensions of
++      // them need 148 and the field gets exactly the remaining 92. At the old
++      // 130 only two icons fitted and the rest were dropped by flex without a
++      // word -- a cap the user cannot reach is worse than a narrower field
++      // (user chose this trade 2026-08-19, knowing longer domains now elide
++      // sooner). One pt over and the fourth icon disappears again, so this
++      // number moves whenever the row's margins or the cap do.
++      //
++      // 92 is the *reserved-state* answer. At rest with auto-hide on the
++      // extensions area is out of the layout entirely
++      // (SetArcExtensionsSpaceReserved), and the unbounded flex maximum
++      // below hands this field the whole row -- the full domain at rest is
++      // that, not a different constant.
++      constexpr int kArcSidebarLocationBarWidth = 92;
+       location_bar_view_->SetPreferredSize(
+           gfx::Size(kArcSidebarLocationBarWidth, 0));
+       location_bar_view_->SetProperty(views::kMarginsKey, gfx::Insets());
+-      // The extensions button shares the capsule, so it gives up its own
+-      // margin too and sits flush at the row's right edge.
+-      if (extensions_container_) {
+-        extensions_container_->SetProperty(views::kMarginsKey, gfx::Insets());
+-      }
+     } else if (is_compact_layout) {
+       location_bar_view_->SetPreferredSize(gfx::Size(kPreferredCompactWidth, 0));
+       location_bar_view_->SetProperty(
+@@ -2078,6 +2148,19 @@ void ToolbarView::UpdateToolbarLayout()
+                                   location_bar_flex_rule);
+   }
+ 
++  // helium-fork: in the sidebar the extensions button shares the row's capsule,
++  // so it gives up its own margin and sits flush at the right edge -- and gets
++  // it back on the way out. Written from one condition in both directions:
++  // the zeroing used to live in the sidebar branch above with no counterpart,
++  // which only stayed invisible while the pinned icons were suppressed there.
++  if (extensions_container_) {
++    if (arc_sidebar_hosted_) {
++      extensions_container_->SetProperty(views::kMarginsKey, gfx::Insets());
++    } else {
++      extensions_container_->ClearProperty(views::kMarginsKey);
++    }
++  }
++
+   if (arc_trailing_spacer_) {
+     // helium-fork: parked since the full-width field took over the slack
+     // (2026-08-16). The View stays in the tree so the child order is stable
+@@ -2108,7 +2191,7 @@ void ToolbarView::UpdateToolbarLayout()
+   InvalidateLayout();
+ }
+ 
+-void ToolbarView::AbortToolbarContainerAnimationsForZenReveal() {
++void ToolbarView::AbortToolbarContainerAnimations() {
+   if (extensions_container_) {
+     extensions_container_->GetAnimatingLayoutManager()->ResetLayout();
+   }
+@@ -2202,39 +2285,137 @@ void ToolbarView::SetArcRowHovered(bool
+   if (!arc_sidebar_hosted_) {
+     return;
+   }
+-  if (hovered && !arc_edit_hosted_) {
++  // The parameter is only the wake-up. The old body trusted it -- with an
++  // IsMouseHovered() veto on the un-hover -- and one deferred macOS exit,
++  // replayed at the click location, was enough to strand the row hovered
++  // forever. The funnel re-derives the answer from the cursor itself, so a
++  // crossing from the field onto the extensions button (both inside this
++  // row) still reads as hovered, and a swallowed exit costs nothing.
++  UpdateArcExtensionsReveal();
++}
++
++void ToolbarView::UpdateArcExtensionsReveal() {
++  if (!arc_sidebar_hosted_) {
++    SetArcExtensionsSpaceReserved(true);
++    return;
++  }
++  const bool hovered = !arc_edit_hosted_ && IsMouseHovered();
++  const bool bubble_anchored =
++      extensions_container_ && extensions_container_->HasOpenTransientUi();
++  // The capsule stays lit while a bubble anchored in the row is open -- the
++  // open UI belongs to the row -- and fades with the icons when it closes:
++  // one operation, one tween, both halves on the same frames.
++  const bool engaged = !arc_edit_hosted_ && (hovered || bubble_anchored);
++  if (engaged) {
+     arc_row_hover_animation_.Show();
+-  } else if (!hovered && !IsMouseHovered()) {
+-    // Crossing from the field onto the extensions button (both inside this
+-    // row) is not a departure; only leaving the row collapses the capsule.
++    // Arm the starvation-proof exit signal (see MouseMovedOutOfHost). The
++    // watcher one-shots, so it is re-armed on every engage.
++    if (mouse_watcher_ && GetWidget() && GetWidget()->GetNativeWindow()) {
++      mouse_watcher_->Start(GetWidget()->GetNativeWindow());
++    }
++  } else {
+     arc_row_hover_animation_.Hide();
+   }
++  const bool revealed = helium::ShouldRevealSidebarExtensions(
++      arc_sidebar_hosted_, arc_sidebar_auto_hide_extensions_.GetValue(),
++      hovered, bubble_anchored);
++  const bool fading = arc_row_hover_animation_.is_animating() ||
++                      arc_row_hover_animation_.GetCurrentValue() > 0.0;
++  SetArcExtensionsSpaceReserved(helium::ShouldReserveSidebarExtensionsSpace(
++      arc_sidebar_hosted_, arc_sidebar_auto_hide_extensions_.GetValue(),
++      revealed || fading));
++  UpdateArcExtensionsRevealOpacity();
++  SchedulePaint();
++}
++
++void ToolbarView::SetArcExtensionsSpaceReserved(bool reserved) {
++  if (arc_extensions_space_reserved_ == reserved) {
++    return;
++  }
++  arc_extensions_space_reserved_ = reserved;
++  if (!extensions_container_) {
++    return;
++  }
++  // Released space = kViewIgnoredByLayoutKey, deliberately NOT SetVisible:
++  // visibility belongs to the container's own machinery (extension loads,
++  // menu opens, the edit host), which writes it from inside layout callbacks
++  // -- and LayoutManagerBase attributes a visibility flip made mid-layout to
++  // the layout manager itself, after which an equal-value SetVisible no-ops
++  // and the exclusion is never re-learned (probe: field stuck at 182 with
++  // the container invisible until the first hover). The ignore property has
++  // no such attribution semantics. The layer's alpha is already 0 at rest,
++  // and events are turned off because a 0-alpha layer still hit-tests.
++  extensions_container_->SetProperty(views::kViewIgnoredByLayoutKey,
++                                     !reserved);
++  extensions_container_->SetCanProcessEventsWithinSubtree(reserved);
++  InvalidateLayout();
++}
++
++void ToolbarView::OnArcAutoHideExtensionsPrefChanged() {
++  ApplyArcHostedChrome();
++  UpdateArcExtensionsReveal();
++}
++
++void ToolbarView::OnMouseEntered(const ui::MouseEvent& event) {
++  SetArcRowHovered(true);
++}
++
++void ToolbarView::OnMouseExited(const ui::MouseEvent& event) {
++  SetArcRowHovered(false);
++}
++
++void ToolbarView::UpdateArcExtensionsRevealOpacity() {
++  if (!extensions_container_) {
++    return;
++  }
++  // helium-fork: the extensions area comes and goes on the row's hover, and it
++  // does it by opacity. Hiding it by visibility instead would hand its width
++  // back to the domain and take it away again on every pointer entry -- the
++  // text jumping under the cursor is exactly the kind of motion this row is
++  // supposed to have none of.
++  //
++  // Its layer is not ours to create: ToolbarIconContainerView already paints to
++  // one, so this only ever writes the alpha and never tears a layer down.
++  ui::Layer* const layer = extensions_container_->layer();
++  if (!layer) {
++    return;
++  }
++  // Asked with no pointer in the row: if the area is up even then, nothing
++  // fades and the opacity is simply 1. Otherwise it rides the row's hover
++  // tween -- the same one the capsule underneath is drawn from, so one pointer
++  // move produces one visual change and both halves land on the same frame.
++  const bool up_at_rest = helium::ShouldRevealSidebarExtensions(
++      arc_sidebar_hosted_, arc_sidebar_auto_hide_extensions_.GetValue(),
++      /*row_hovered=*/false, /*bubble_anchored=*/false);
++  layer->SetOpacity(
++      up_at_rest
++          ? 1.0f
++          : static_cast<float>(arc_row_hover_animation_.GetCurrentValue()));
+ }
+ 
+ void ToolbarView::OnPaintBackground(gfx::Canvas* canvas) {
+   views::View::OnPaintBackground(canvas);
+-  // helium-fork: the sidebar row's hover capsule -- one pill under station
+-  // icon, domain and extensions button alike, the tab rows' hover color and
+-  // radius so the row reads as one of them. The field's own hover wash is
+-  // retired in this mode (RefreshBackground), so this is the only layer.
++  // helium-fork: the sidebar row's capsule -- one pill under station icon,
++  // domain and extensions button alike. The field's own wash is retired in
++  // this mode (RefreshBackground), so this is the only layer.
++  //
++  // It is painted at rest as well as hovered. Arc's address capsule carries a
++  // visible fill all the time and only lifts under the pointer (measured
++  // 2026-08-19: L129 on an L116 sidebar, L136 hovered), and the favorites
++  // cards below it carry the very same one -- so the two are derived from a
++  // single function rather than each picking its own tab-strip token.
+   if (!arc_sidebar_hosted_ || arc_edit_hosted_) {
+     return;
+   }
+-  const double value = arc_row_hover_animation_.GetCurrentValue();
+-  if (value <= 0.0) {
+-    return;
+-  }
+   const ui::ColorProvider* const provider = GetColorProvider();
+   if (!provider) {
+     return;
+   }
+-  const SkColor hovered = TabStyle::Get()->GetTabBackgroundColor(
+-      TabStyle::TabSelectionState::kInactive, /*hovered=*/true,
+-      GetWidget() && GetWidget()->ShouldPaintAsActive(), provider);
+   cc::PaintFlags flags;
+   flags.setAntiAlias(true);
+-  flags.setColor(SkColorSetA(hovered, base::ClampRound(
+-      SkColorGetA(hovered) * value)));
++  flags.setColor(helium::GetSidebarSurfaceColorAt(
++      provider->GetColor(kColorToolbar),
++      arc_row_hover_animation_.GetCurrentValue()));
+   canvas->DrawRoundRect(
+       gfx::RectF(GetLocalBounds()),
+       GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius), flags);
+@@ -2245,9 +2426,10 @@ void ToolbarView::SetArcEditHosted(bool
+     return;
+   }
+   arc_edit_hosted_ = edit_hosted;
+-  if (extensions_container_) {
+-    extensions_container_->SetVisible(!edit_hosted);
+-  }
++  ApplyArcHostedChrome();
++  // An edit that began mid-hover must not strand the tween where the edit
++  // found it -- re-derive from the cursor on the way in and out.
++  UpdateArcExtensionsReveal();
+ }
+ 
+ bool ToolbarView::IsArcSidebarHostedFor(const views::View* view) {
+@@ -2284,22 +2466,85 @@ void ToolbarView::SetArcSidebarHosted(bo
+   if (!hosted) {
+     arc_row_hover_animation_.Reset(0);
+   }
+-  // helium-fork: the Zen row treatment. Inside the sidebar the row is the
+-  // domain plus a single extensions-menu button: every pinned extension
+-  // collapses into that button's panel, and the avatar and the app menu go
+-  // away entirely -- Zen hides its three-dot menu on macOS too, because the
+-  // native menu bar already carries everything in it (profiles included).
+-  // Undone verbatim when the toolbar moves back to the band.
++  ApplyArcHostedChrome();
++  UpdateToolbarLayout();
++  UpdateArcExtensionsReveal();
++}
++
++void ToolbarView::ApplyArcHostedChrome() {
++  // helium-fork: both host flags feed this chrome, so both write it through
++  // here rather than each touching its own slice.
++  //
++  // They used to: SetArcEditHosted owned the extensions container's visibility
++  // and SetArcSidebarHosted its suppressed-pinned-actions state, each behind
++  // its own if-unchanged guard. The guards are per-flag, the container is
++  // shared, and the flags flip at different moments -- so an edit that began
++  // and ended while the sidebar flag never moved re-showed the container
++  // without anything re-deriving the rest, and the row came back with two
++  // icons in one place (user-hit 2026-08-19). Deriving the whole treatment
++  // from both flags at once removes the ordering from the question.
++  //
++  // The Zen row treatment: inside the sidebar the row is the domain plus a
++  // single extensions-menu button -- every pinned extension collapses into
++  // that button's panel, and the avatar and the app menu go away entirely
++  // (Zen hides its three-dot menu on macOS too, because the native menu bar
++  // already carries everything in it, profiles included). Undone verbatim
++  // when the toolbar moves back to the band.
+   if (extensions_container_) {
+-    extensions_container_->SetSuppressPinnedActions(hosted);
++    extensions_container_->SetVisible(!arc_edit_hosted_);
++    // helium-fork: the pinned icons stay in the sidebar row. Arc puts them
++    // there too, ahead of its own row buttons, which is the order
++    // ReorderAllChildViews already produces -- pinned first, the menu button
++    // last. Dropping them on the way in was also what made a mode switch play
++    // a 250ms slide of every icon collapsing into that button; with nothing to
++    // fade, the switch is one state to the next.
++    //
++    // With auto-hide on, the area's opacity rides the hover tween and its
++    // *width* is released once the fade lands at zero, so the domain takes
++    // the whole row at rest (user 2026-08-19; the r2 "keeps its width either
++    // way" rule is retired). Both are owned by UpdateArcExtensionsReveal().
++    UpdateArcExtensionsRevealOpacity();
+   }
+   if (avatar_) {
+-    avatar_->SetVisible(!hosted && show_avatar_button_.GetValue());
++    avatar_->SetVisible(!arc_sidebar_hosted_ &&
++                        show_avatar_button_.GetValue());
+   }
+   if (app_menu_button_) {
+-    app_menu_button_->SetVisible(!hosted);
++    app_menu_button_->SetVisible(!arc_sidebar_hosted_);
+   }
+-  UpdateToolbarLayout();
++  UpdateMediaButtonAvailability();
++  // helium-fork: the row shows the bare domain and the band shows "host /
++  // title", so the label's answer changes with the host and nothing else asks
++  // it to. Without this the title survives a mode switch until the next
++  // navigation happens to refresh it.
++  if (location_bar_view_) {
++    location_bar_view_->RefreshArcTitleLabel();
++  }
++}
++
++void ToolbarView::UpdateMediaButtonAvailability() {
++  // helium-fork: the media button belongs to the address bar band, so it
++  // shows exactly where the band does.
++  //
++  // r5 retired it in every sidebar window; the user overruled that on
++  // 2026-08-20: with the band docked there are two ways to reach the media
++  // (the band's button and the sidebar's bottom strip), and with the band
++  // hidden only the sidebar's. So the predicate is the *host*, not the
++  // layout type -- arc_sidebar_hosted_ is ArcToolbarIsSidebarBound(), true
++  // only in the hidden address bar mode. Deliberately not IsVerticalLayout()
++  // (that is the layout type, blind to the mode) and deliberately not
++  // IsSidebarHiddenModeActive() (that is sidebar *collapse*, true while
++  // docked too -- see arc_toolbar_host.h).
++  //
++  // SetCanShowToolbarButton rather than SetVisible: the button's controller
++  // re-shows it on every media item change otherwise. Windows without the
++  // sidebar (popups, web apps) are never sidebar-hosted and keep the stock
++  // behaviour.
++  if (!media_button_ || !media_button_->media_toolbar_button_controller()) {
++    return;
++  }
++  media_button_->media_toolbar_button_controller()->SetCanShowToolbarButton(
++      show_media_button_.GetValue() && !arc_sidebar_hosted_);
+ }
+ 
+ void ToolbarView::UpdateVerticalTabsCollapseButton() {
+@@ -2617,8 +2862,7 @@ void ToolbarView::OnShowMenuButtonChange
+ }
+ 
+ void ToolbarView::OnShowMediaButtonChanged() {
+-  media_button_->media_toolbar_button_controller()->
+-      SetCanShowToolbarButton(show_media_button_.GetValue());
++  UpdateMediaButtonAvailability();
+   InvalidateLayout();
+ }
+ 
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -175,9 +175,13 @@ class ToolbarView : public views::Access
+   // Attaches the tab strip region view when compact layout is enabled.
+   void AttachTabStripRegionView(HorizontalTabStripRegionView* view);
+ 
+-  // Resets extension-related toolbar container animations so they don't animate
+-  // while zen mode is revealing the toolbar.
+-  void AbortToolbarContainerAnimationsForZenReveal();
++  // Resets extension-related toolbar container animations so nothing animates
++  // across a change the user did not aim at the icons: zen mode revealing the
++  // toolbar, and the Arc shell moving the whole toolbar between the band and
++  // the sidebar row. The row is ~256pt against the band's full width, so
++  // without this the container slides that whole distance on every mode
++  // switch.
++  void AbortToolbarContainerAnimations();
+ 
+   // Updates the vertical tabs collapse button visibility and icon.
+   void UpdateVerticalTabsCollapseButton();
+@@ -214,6 +218,31 @@ class ToolbarView : public views::Access
+   // sidebar instead of being the top chrome band, which is far narrower than
+   // the location bar's minimum width. See LayoutCommon().
+   void SetArcSidebarHosted(bool hosted);
++
++  // helium-fork: drives the sidebar row's extensions area in and out on the
++  // row's hover tween, under the auto-hide preference. Opacity rather than
++  // visibility, so the area keeps its width and the domain beside it never
++  // moves; same treatment (and same reason) as
++  // LocationBarView::UpdateArcRevealOpacity(), which fades the bookmark star's
++  // container in the band.
++  void UpdateArcExtensionsRevealOpacity();
++
++  // helium-fork: whether the extensions area occupies layout width (see
++  // helium::ShouldReserveSidebarExtensionsSpace). Applied as the container's
++  // visibility; the field's unbounded flex maximum then hands the vacated
++  // width to the domain by itself.
++  void SetArcExtensionsSpaceReserved(bool reserved);
++  void OnArcAutoHideExtensionsPrefChanged();
++
++  // helium-fork: applies the row treatment derived from both host flags at
++  // once. Called by both setters -- the chrome they share cannot be kept
++  // consistent by two per-flag guards.
++  void ApplyArcHostedChrome();
++  // helium-fork: the one place that decides whether the stock media button
++  // may show. Two writers used to race through the controller's flag (the
++  // kShowMediaButton pref and the sidebar gate), last one winning; this
++  // folds both into a single expression that every writer calls.
++  void UpdateMediaButtonAvailability();
+   // helium-fork: true while this toolbar *is* the Arc shell's band, i.e. the
+   // top strip of the contents card.
+   bool IsArcBandHosted() const;
+@@ -238,6 +267,15 @@ class ToolbarView : public views::Access
+   // events, and notify-enter-exit-on-child proved a no-show in probing.
+   void SetArcRowHovered(bool hovered);
+ 
++  // helium-fork: the single funnel that re-derives the sidebar row's
++  // extensions reveal from ground truth -- the actual cursor position and
++  // whether any transient UI (menu, popup, context menu) is anchored in the
++  // extensions area. Every signal (enter/exit, the mouse watcher, a bubble
++  // opening or closing, a host or pref flip) lands here; nothing accumulates
++  // hover state, so nothing can go stale when macOS defers or replays an
++  // exit event (the "icons never retract after the menu" bug, 2026-08-19).
++  void UpdateArcExtensionsReveal();
++
+   ToolbarButton* vertical_tabs_collapse_button() const {
+     return vertical_tabs_collapse_button_;
+   }
+@@ -295,6 +333,11 @@ class ToolbarView : public views::Access
+   gfx::Size GetMinimumSize() const override;
+   void Layout(PassKey) override;
+   void OnThemeChanged() override;
++  // helium-fork: the sidebar row's hover source. The field pipes its own
++  // enter/exit through SetArcRowHovered() too, but it only covers the left
++  // ~half of the row -- entering over the extensions area went unnoticed.
++  void OnMouseEntered(const ui::MouseEvent& event) override;
++  void OnMouseExited(const ui::MouseEvent& event) override;
+   bool AcceleratorPressed(const ui::Accelerator& acc) override;
+   void ChildPreferredSizeChanged(views::View* child) override;
+   void ChildVisibilityChanged(View* child) override;
+@@ -471,6 +514,9 @@ class ToolbarView : public views::Access
+   // helium-fork: see SetArcSidebarHosted().
+   bool arc_sidebar_hosted_ = false;
+   bool arc_edit_hosted_ = false;
++  // helium-fork: see SetArcExtensionsSpaceReserved(). True outside the
++  // sidebar and whenever the area is revealed or still fading out.
++  bool arc_extensions_space_reserved_ = true;
+   // helium-fork: drives the sidebar row's hover capsule, 200ms to match the
+   // field-side tween it replaces there.
+   gfx::SlideAnimation arc_row_hover_animation_{this};
+@@ -560,6 +606,9 @@ class ToolbarView : public views::Access
+   BooleanPrefMember show_dynamic_new_tab_button_;
+ 
+   BooleanPrefMember show_avatar_button_;
++  // helium-fork: hide the sidebar row's extensions area until the pointer
++  // enters the sidebar (Arc's behavior; off by default).
++  BooleanPrefMember arc_sidebar_auto_hide_extensions_;
+ 
+   BooleanPrefMember show_extensions_button_;
+ 
+Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+===================================================================
+--- src.orig/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -588,6 +588,10 @@ void AddAppearanceStrings(content::WebUI
+       {"centeredLocationBar", IDS_SETTINGS_CENTERED_LOCATION_BAR},
+       {"verticalCollapseShortcut", IDS_SETTINGS_VERTICAL_COLLAPSE_SHORTCUT},
+       {"minimalLocationBar", IDS_SETTINGS_MINIMAL_LOCATION_BAR},
++      {"sidebarAutoHideExtensions",
++       IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS},
++      {"sidebarAutoHideExtensionsDescription",
++       IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS_DESCRIPTION},
+       {"shiftRightClickContextMenu",
+        IDS_SETTINGS_SHIFT_RIGHT_CLICK_CONTEXT_MENU},
+       {"showZoomIndicator", IDS_SETTINGS_SHOW_ZOOM_INDICATOR},
+Index: src/chrome/common/pref_names.h
+===================================================================
+--- src.orig/chrome/common/pref_names.h
++++ src/chrome/common/pref_names.h
+@@ -648,6 +648,13 @@ inline constexpr char kHeliumZenMode[] =
+ inline constexpr char kHeliumAddressBarMode[] =
+     "helium.browser.address_bar_mode";
+ 
++// helium-fork: in the hidden address bar mode, whether the sidebar row's
++// extensions area (pinned action icons plus the extensions menu button) stays
++// out of sight until the pointer enters the sidebar. Arc does this; false --
++// the icons are always there -- is the default.
++inline constexpr char kHeliumSidebarAutoHideExtensions[] =
++    "helium.browser.sidebar_auto_hide_extensions";
++
+ // helium-fork: set once the profile has been converted to the Arc shell
+ // (address bar mode seeded from the old zen-mode boolean).
+ inline constexpr char kHeliumArcShellMigrated[] =

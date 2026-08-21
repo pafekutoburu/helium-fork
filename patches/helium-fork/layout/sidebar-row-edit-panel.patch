@@ -1,0 +1,1028 @@
+Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_omnibox_panel.h
++++ src/chrome/browser/ui/helium/arc_omnibox_panel.h
+@@ -81,6 +81,14 @@ struct ArcOmniboxPanelMetrics {
+   // bottom is where the suggestions are, so it is never inset.
+   int outset = 0;
+ 
++  // Extra growth on the right only, past `outset` -- zero on the band. The
++  // sidebar-hosted row (hidden address bar mode) is where it is non-zero: Arc's
++  // panel there shares the row's left and top edges and grows rightwards out
++  // over the page (measured 2026-08-18: panel 349.5pt wide off a 281pt
++  // sidebar, 81.5pt of overhang), because a ~200pt row cannot host a readable
++  // suggestion list and the only direction with room is right.
++  int right_extension = 0;
++
+   // How far the panel reaches past the field's bottom edge while there is
+   // nothing to suggest -- see kEmptyPanelBottomOutset. It belongs to PanelFor()
+   // alone: alignment_insets() is what the suggestion list aligns itself to the
+@@ -114,7 +122,7 @@ struct ArcOmniboxPanelMetrics {
+   // taller -- the first suggestion row is worth more than the 18pt apron it
+   // replaces, so the bottom edge never travels back up.
+   gfx::Insets alignment_insets() const {
+-    return gfx::Insets::TLBR(outset, outset, 0, outset);
++    return gfx::Insets::TLBR(outset, outset, 0, outset + right_extension);
+   }
+ 
+   // The panel rect for a given field rect, before the suggestions add height.
+@@ -127,11 +135,21 @@ struct ArcOmniboxPanelMetrics {
+       return gfx::Rect();
+     }
+     gfx::Rect panel(field);
+-    panel.Inset(-gfx::Insets::TLBR(outset, outset, bottom_outset, outset));
++    panel.Inset(-gfx::Insets::TLBR(outset, outset, bottom_outset,
++                                   outset + right_extension));
+     return panel;
+   }
+ };
+ 
++// The sidebar-row panel's fixed width. Arc's measures 349.5pt regardless of
++// where its (user-resizable) sidebar edge falls under it, which reads as "wide
++// enough for a suggestion row", not as a proportion of anything -- so it is a
++// constant here, and the overhang past the sidebar is whatever is left after
++// the field's own width. One sample (a 281pt sidebar) cannot distinguish
++// "fixed width" from "fixed overhang"; if a second measurement ever does,
++// this is the line to revisit.
++inline constexpr int kArcSidebarPanelWidth = 350;
++
+ // `card_radius` is the content card's corner radius and `field_radius` the
+ // address field's; both must come from the callers' existing concentric chain
+ // (system window radius -> card -> field), never be written down a second time
+@@ -180,6 +198,50 @@ inline ArcOmniboxPanelMetrics ComputeArc
+   metrics.shadow_elevation = 35;
+   metrics.shadow_light_key = 0.07;
+   metrics.shadow_light_ambient = 0.04;
++  metrics.shadow_dark_key = 0.14;
++  metrics.shadow_dark_ambient = 0.09;
++  return metrics;
++}
++
++// Where the toolbar goes while the sidebar row's field is being edited: a
++// host sharing the row's top-left corner, widened to the panel's own width so
++// the field IS as wide as the panel it stands on ("what you see is what you
++// get" -- the user's words, 2026-08-18). The row cannot host this itself: its
++// layer clips at the sidebar's width, and a field painted wider than its
++// clipped ancestors simply is not there. Height stays the row's own, so the
++// hand-off moves no pixels the eye can anchor to.
++inline gfx::Rect ArcSidebarEditHostBounds(const gfx::Rect& row) {
++  if (row.IsEmpty()) {
++    return gfx::Rect();
++  }
++  return gfx::Rect(row.origin(),
++                   gfx::Size(kArcSidebarPanelWidth, row.height()));
++}
++
++// The sidebar-hosted row's panel (hidden address bar mode) -- Arc's shape,
++// measured 2026-08-18: the panel shares the row's left and top edges exactly
++// (no outset -- there is no band margin to grow into and Arc grows none), runs
++// kArcSidebarPanelWidth wide out over the page, and overhangs the bottom the
++// same way the band's panel does. Sharing the field's top-left corner means
++// sharing its arc: the panel radius IS the field radius, the same
++// one-corner-one-arc rule that pinned the band panel's radius to the card's.
++// The shadow is the band panel's -- one panel, two hosts.
++inline ArcOmniboxPanelMetrics ComputeArcSidebarRowPanel(bool enabled,
++                                                        int field_width,
++                                                        int field_radius) {
++  ArcOmniboxPanelMetrics metrics;
++  if (!enabled) {
++    return metrics;
++  }
++  metrics.enabled = true;
++  metrics.outset = 0;
++  metrics.right_extension = std::max(0, kArcSidebarPanelWidth - field_width);
++  metrics.bottom_outset = kEmptyPanelBottomOutset;
++  metrics.field_radius = std::max(0, field_radius);
++  metrics.panel_radius = metrics.field_radius;
++  metrics.shadow_elevation = 35;
++  metrics.shadow_light_key = 0.07;
++  metrics.shadow_light_ambient = 0.04;
+   metrics.shadow_dark_key = 0.14;
+   metrics.shadow_dark_ambient = 0.09;
+   return metrics;
+Index: src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
++++ src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/helium/arc_omnibox_panel.h"
+ 
++#include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
++
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "ui/gfx/geometry/rect.h"
+ 
+@@ -147,5 +149,119 @@ TEST(ArcOmniboxPanelTest, ShadowIsFullyS
+   EXPECT_GT(metrics.shadow_dark_ambient, metrics.shadow_light_ambient);
+ }
+ 
++// --- The sidebar-hosted row's panel (M3.9b, Arc-measured 2026-08-18) ---
++
++// The row as M3.9a leaves it in a 200pt sidebar: 12,44 origin, 142 wide,
++// 28 tall, radius the padded frame's 14.
++constexpr gfx::Rect kRowField(12, 44, 142, 28);
++constexpr int kRowFieldRadius = 14;
++
++ArcOmniboxPanelMetrics RowMetrics() {
++  return ComputeArcSidebarRowPanel(/*enabled=*/true, kRowField.width(),
++                                   kRowFieldRadius);
++}
++
++// Arc's sidebar panel shares the row's left and top edges exactly and grows
++// only rightwards and down. Any outset on those two edges would push the
++// panel off the sidebar's own margins.
++TEST(ArcOmniboxPanelTest, SidebarPanelSharesTheRowTopLeft) {
++  const gfx::Rect panel = RowMetrics().PanelFor(kRowField);
++  EXPECT_EQ(kRowField.x(), panel.x());
++  EXPECT_EQ(kRowField.y(), panel.y());
++  EXPECT_EQ(kRowField.bottom() + kEmptyPanelBottomOutset, panel.bottom());
++}
++
++// The panel is kArcSidebarPanelWidth wide regardless of the field's width --
++// "wide enough for a suggestion row" is a property of the content, not of
++// where the sidebar's edge happens to be.
++TEST(ArcOmniboxPanelTest, SidebarPanelHasTheFixedWidth) {
++  EXPECT_EQ(kArcSidebarPanelWidth, RowMetrics().PanelFor(kRowField).width());
++  // A field already wider than the panel keeps its own width rather than
++  // getting a negative extension.
++  const ArcOmniboxPanelMetrics wide = ComputeArcSidebarRowPanel(
++      /*enabled=*/true, kArcSidebarPanelWidth + 50, kRowFieldRadius);
++  EXPECT_EQ(0, wide.right_extension);
++}
++
++// Sharing the top-left corner means sharing its arc: one corner, one radius.
++TEST(ArcOmniboxPanelTest, SidebarPanelRadiusIsTheFieldRadius) {
++  const ArcOmniboxPanelMetrics metrics = RowMetrics();
++  EXPECT_EQ(kRowFieldRadius, metrics.field_radius);
++  EXPECT_EQ(metrics.field_radius, metrics.panel_radius);
++}
++
++// The popup aligns itself through the same insets the panel grows by, so the
++// suggestion list and the empty panel agree on every edge (the band panel's
++// own invariant, restated for the asymmetric shape).
++TEST(ArcOmniboxPanelTest, SidebarAlignmentMatchesPanelSides) {
++  const ArcOmniboxPanelMetrics metrics = RowMetrics();
++  const gfx::Insets insets = metrics.alignment_insets();
++  EXPECT_EQ(0, insets.left());
++  EXPECT_EQ(0, insets.top());
++  EXPECT_EQ(0, insets.bottom());
++  EXPECT_EQ(kArcSidebarPanelWidth - kRowField.width(), insets.right());
++  gfx::Rect aligned(kRowField);
++  aligned.Inset(-insets);
++  const gfx::Rect panel = metrics.PanelFor(kRowField);
++  EXPECT_EQ(panel.x(), aligned.x());
++  EXPECT_EQ(panel.y(), aligned.y());
++  EXPECT_EQ(panel.width(), aligned.width());
++}
++
++// The band's own factory must stay exactly where M3.5 pinned it: the new
++// right_extension is the sidebar's alone.
++TEST(ArcOmniboxPanelTest, BandPanelHasNoRightExtension) {
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  EXPECT_EQ(0, metrics.right_extension);
++  const gfx::Rect panel = metrics.PanelFor(kField);
++  EXPECT_EQ(kField.CenterPoint().x(), panel.CenterPoint().x());
++}
++
++// Disabled sidebar metrics are as loudly unusable as the band's.
++TEST(ArcOmniboxPanelTest, SidebarDisabledYieldsNothing) {
++  const ArcOmniboxPanelMetrics metrics = ComputeArcSidebarRowPanel(
++      /*enabled=*/false, kRowField.width(), kRowFieldRadius);
++  EXPECT_FALSE(metrics.enabled);
++  EXPECT_EQ(0, metrics.right_extension);
++  EXPECT_TRUE(metrics.PanelFor(kRowField).IsEmpty());
++}
++
++// The edit host shares the row's origin exactly and takes the panel's width:
++// the field standing in it IS the panel's top row, so any offset or width
++// delta is a visible seam.
++TEST(ArcOmniboxPanelTest, EditHostSharesOriginAtPanelWidth) {
++  const gfx::Rect host = ArcSidebarEditHostBounds(kRowField);
++  EXPECT_EQ(kRowField.origin(), host.origin());
++  EXPECT_EQ(kArcSidebarPanelWidth, host.width());
++  EXPECT_EQ(kRowField.height(), host.height());
++  EXPECT_TRUE(ArcSidebarEditHostBounds(gfx::Rect()).IsEmpty());
++}
++
++// With the field widened to the panel's width the sidebar metrics collapse to
++// "the panel IS the field plus its apron": zero extension, aligned popup.
++// This is the geometric statement of what-you-see-is-what-you-get.
++TEST(ArcOmniboxPanelTest, PanelEqualsFieldOnceFieldIsPanelWide) {
++  const ArcOmniboxPanelMetrics metrics = ComputeArcSidebarRowPanel(
++      /*enabled=*/true, kArcSidebarPanelWidth, kRowFieldRadius);
++  EXPECT_EQ(0, metrics.right_extension);
++  EXPECT_TRUE(metrics.alignment_insets().IsEmpty());
++  const gfx::Rect wide_field(kRowField.origin(),
++                             gfx::Size(kArcSidebarPanelWidth, kRowField.height()));
++  const gfx::Rect panel = metrics.PanelFor(wide_field);
++  EXPECT_EQ(wide_field.x(), panel.x());
++  EXPECT_EQ(wide_field.y(), panel.y());
++  EXPECT_EQ(wide_field.width(), panel.width());
++  EXPECT_EQ(wide_field.bottom() + kEmptyPanelBottomOutset, panel.bottom());
++}
++
++// The sidebar's default width, pinned with its derivation: 2x6 side padding
++// + ~76 caption exclusion + 6 buttons' worth (collapse + two of air + three
++// navigation) at 28 each. Bounded by the resize clamp [160, 400].
++TEST(ArcOmniboxPanelTest, SidebarDefaultWidthLeavesTopRowAir) {
++  EXPECT_EQ(256, tabs::kVerticalTabStripDefaultUncollapsedWidth);
++  EXPECT_GE(tabs::kVerticalTabStripDefaultUncollapsedWidth, 160);
++  EXPECT_LE(tabs::kVerticalTabStripDefaultUncollapsedWidth, 400);
++}
++
+ }  // namespace
+ }  // namespace helium
+Index: src/chrome/browser/ui/tabs/vertical_tab_strip_state.h
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/vertical_tab_strip_state.h
++++ src/chrome/browser/ui/tabs/vertical_tab_strip_state.h
+@@ -7,7 +7,12 @@
+ 
+ namespace tabs {
+ 
+-inline constexpr int kVerticalTabStripDefaultUncollapsedWidth = 200;
++// helium-fork: 256, from the top row's own arithmetic (user's ask 2026-08-18:
++// at least two buttons' worth of air between the collapse button and the
++// navigation cluster): 2*6 row side padding + ~76 traffic-light exclusion +
++// 28 collapse + 2*28 air + 3*28 back/forward/reload = 256. Only the default
++// -- a stored pref keeps whatever width the user dragged.
++inline constexpr int kVerticalTabStripDefaultUncollapsedWidth = 256;
+ 
+ // Per-window state for the vertical tab strip.
+ struct VerticalTabStripState {
+Index: src/chrome/browser/ui/views/frame/arc_omnibox_panel_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/arc_omnibox_panel_view.cc
++++ src/chrome/browser/ui/views/frame/arc_omnibox_panel_view.cc
+@@ -8,6 +8,7 @@
+ #include "chrome/browser/ui/omnibox/omnibox_controller.h"
+ #include "chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/compositor/layer.h"
+@@ -62,8 +63,23 @@ void ArcOmniboxPanelView::UpdateFromFiel
+   // Editing, and nothing to suggest yet. Once the popup is up it draws the very
+   // same panel around the very same field, and two of them would double the
+   // shadow.
+-  if (!metrics.enabled || !location_bar_->GetVisible() ||
+-      !location_bar_->IsArcFieldEditing() ||
++  // IsDrawn(), not GetVisible(): in the hidden address bar mode the field
++  // rides inside the floating sidebar, and when the card slides away the
++  // field's own flag stays true while an ancestor's goes false. The panel is
++  // anchored to the field, so with the field off screen it must go too --
++  // pending input survives in the omnibox model and brings the panel back
++  // with the next reveal.
++  //
++  // Sidebar row: focus is the panel's lifetime, not IsArcFieldEditing().
++  // On the band the blurred-with-pending-input tail keeps the panel (Dia's
++  // shape); in the sidebar a click on the page folds everything back -- the
++  // row returns to rest showing icon+host, the input survives invisibly, and
++  // the next click reopens the panel with it. One rule for the revealed card
++  // and the docked sidebar alike.
++  const bool editing = ToolbarView::IsArcSidebarHostedFor(location_bar_)
++                           ? location_bar_->HasFocus()
++                           : location_bar_->IsArcFieldEditing();
++  if (!metrics.enabled || !location_bar_->IsDrawn() || !editing ||
+       location_bar_->GetOmniboxController()->IsPopupOpen()) {
+     hide();
+     return;
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -105,6 +105,7 @@
+ #include "chrome/browser/ui/helium/arc_band_colors.h"
+ #include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ #include "chrome/browser/ui/helium/arc_caption_opacity.h"
++#include "chrome/browser/ui/helium/arc_omnibox_panel.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/navigator/browser_navigator.h"
+ #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+@@ -713,6 +714,13 @@ class ArcOmniboxDismissHandler : public
+ 
+   // ui::EventObserver:
+   void OnEvent(const ui::Event& event) override {
++    // helium-fork: the begin half first -- a press on the sidebar row's field
++    // reaches this monitor BEFORE dispatch, i.e. before the field takes
++    // focus, which is exactly when the toolbar can move into the panel-wide
++    // edit host without carrying focus through a reparent (that dispatches
++    // Blur mid-move). The press then dispatches into the very same field at
++    // the very same origin, one layout later, and focuses it there.
++    browser_view_->MaybeBeginArcFieldEditFromPress();
+     browser_view_->MaybeEndArcFieldEditing();
+   }
+ 
+@@ -1167,15 +1175,8 @@ BrowserView::BrowserView(Browser* browse
+   // colors, and there is no color provider until this view is in a widget.
+   arc_card_shadow_->SetVisible(false);
+ 
+-  // helium-fork: the field's edit-state panel, after the card's shadow so its
+-  // layer composites above the band, the page and that shadow. It places
+-  // itself off the field rather than being laid out here -- see the class
+-  // comment; the field's width is not settled until the toolbar's FlexLayout
+-  // has run, long after BrowserViewTabbedLayoutImpl.
+-  arc_omnibox_panel_ = AddChildView(std::make_unique<ArcOmniboxPanelView>());
+-
+-  // helium-fork: the loading bar, a later child than the contents for the same
+-  // reason as the panel above -- its layer must composite over the page's.
++  // helium-fork: the loading bar, a later child than the contents so its
++  // layer composites over the page's.
+   // Bounds come from the tail of Layout(), the loading state from the active
+   // tab (OnActiveTabChanged).
+   arc_loading_bar_ = AddChildView(std::make_unique<ArcLoadingBarView>());
+@@ -1236,6 +1237,34 @@ BrowserView::BrowserView(Browser* browse
+   // bar widget.
+   find_bar_host_view_ = AddChildView(std::make_unique<View>());
+ 
++  // helium-fork: while the sidebar row's field is being edited the whole
++  // toolbar rides in this host -- same origin as the row, the panel's width,
++  // so the field can be as wide as the panel standing on it (the row's own
++  // layer clips at the sidebar's width). Above the sidebar in z, below the
++  // panel, whose hole lets the field show through. Bounds and visibility come
++  // from BeginArcSidebarFieldEdit()/Layout().
++  {
++    auto host = std::make_unique<views::View>();
++    host->SetLayoutManager(std::make_unique<views::FillLayout>());
++    host->SetPaintToLayer();
++    host->layer()->SetFillsBoundsOpaquely(false);
++    host->SetVisible(false);
++    arc_field_edit_host_ = AddChildView(std::move(host));
++  }
++
++  // helium-fork: the field's edit-state panel. A child this late so its layer
++  // composites above everything the panel can overhang: the band, the page,
++  // the card's shadow -- and, in the hidden address bar mode, the floating
++  // sidebar itself, which the row's panel grows rightwards out of (the panel
++  // used to sit right after the card shadow, where the sidebar covered it).
++  // It stays under the window scrim: the scrim means window-modal, and the
++  // panel is dismissed by then (focus loss ends the edit state). The view is
++  // input-transparent, so riding this high steals no events. It places itself
++  // off the field rather than being laid out here -- see the class comment;
++  // the field's width is not settled until the toolbar's FlexLayout has run,
++  // long after BrowserViewTabbedLayoutImpl.
++  arc_omnibox_panel_ = AddChildView(std::make_unique<ArcOmniboxPanelView>());
++
+   window_scrim_view_ = AddChildView(std::make_unique<ScrimView>());
+   window_scrim_view_->layer()->SetName("WindowScrimView");
+ 
+@@ -2164,6 +2193,19 @@ void BrowserView::UpdateZenModeReveal(bo
+     reveal_top = true;
+   }
+ 
++  // helium-fork: in the hidden address bar mode the field lives inside the
++  // floating sidebar, and its edit panel grows out of the revealed card --
++  // so while the field holds focus the card is pinned open, cursor position
++  // notwithstanding (Arc, user-verified 2026-08-18: the overlay stays while
++  // the edit is live; finishing it or clicking the page releases it). Focus,
++  // not IsArcFieldEditing(): the blurred-with-input tail keeps the panel on
++  // the docked band, but here a click on the page must release the card even
++  // with input pending -- the input survives invisibly and the panel returns
++  // with the next reveal.
++  if (IsSidebarHiddenModeActive() && omnibox_focused) {
++    reveal_side = true;
++  }
++
+   // Keep the top chrome visible while a bubble/popup anchored inside the top
+   // container or a side panel is open.
+   if (!reveal_top && HasOpenBubbleFromTopContainer()) {
+@@ -2515,6 +2557,123 @@ void BrowserView::MaybeEndArcFieldEditin
+     return;
+   }
+   location_bar->EndArcFieldEditing();
++  // helium-fork: ending the edit releases the floating sidebar's edit pin
++  // (UpdateZenModeReveal above), but nothing re-evaluates the cursor until the
++  // next mouse move -- and a click that lands and never moves again would
++  // leave the card hanging revealed. Ask once, now.
++  UpdateZenModeRevealFromCursor();
++}
++
++void BrowserView::MaybeBeginArcFieldEditFromPress() {
++  if (arc_field_edit_active_ || !toolbar_) {
++    return;
++  }
++  LocationBarView* const location_bar = toolbar_->location_bar_view();
++  if (!location_bar || !ToolbarView::IsArcSidebarHostedFor(location_bar)) {
++    return;
++  }
++  // Same cursor-over-event-coordinates trick as MaybeEndArcFieldEditing: the
++  // monitor fires pre-dispatch, so the pointer is exactly where it pressed.
++  gfx::Point local(display::Screen::Get()->GetCursorScreenPoint());
++  views::View::ConvertPointFromScreen(location_bar, &local);
++  if (!location_bar->HitTestPoint(local)) {
++    return;
++  }
++  BeginArcSidebarFieldEdit();
++}
++
++void BrowserView::BeginArcSidebarFieldEdit() {
++  if (arc_field_edit_active_ || !arc_field_edit_host_ || !toolbar_ ||
++      !vertical_tab_strip_region_view_) {
++    return;
++  }
++  views::View* const address_row =
++      vertical_tab_strip_region_view_->arc_address_row();
++  // Only when the sidebar row hosts the toolbar and the row is actually on
++  // screen -- a collapsed, unrevealed sidebar keeps the current behavior.
++  if (!address_row || toolbar_->parent() != address_row ||
++      !address_row->IsDrawn()) {
++    return;
++  }
++  // The row must keep its height while its toolbar rides the edit host --
++  // otherwise the sidebar's layout closes the gap and the favorites jump up
++  // the instant the panel opens (user-hit 2026-08-19).
++  address_row->SetPreferredSize(gfx::Size(0, address_row->height()));
++  arc_field_edit_active_ = true;
++  UpdateArcAddressBarPlacement();
++  LayoutArcFieldEditHost();
++  // The caller focuses the field right after this returns; the layout must be
++  // synchronous so the focus (and the panel reading the field's bounds off
++  // the edit-state notification) sees the widened geometry, not the row's.
++  arc_field_edit_host_->DeprecatedLayoutImmediately();
++}
++
++void BrowserView::LayoutArcFieldEditHost() {
++  if (!arc_field_edit_active_ || !arc_field_edit_host_ ||
++      !vertical_tab_strip_region_view_) {
++    return;
++  }
++  views::View* const address_row =
++      vertical_tab_strip_region_view_->arc_address_row();
++  if (!address_row) {
++    return;
++  }
++  gfx::RectF row_f((gfx::SizeF(address_row->size())));
++  views::View::ConvertRectToTarget(address_row, this, &row_f);
++  arc_field_edit_host_->SetBoundsRect(
++      helium::ArcSidebarEditHostBounds(gfx::ToEnclosingRect(row_f)));
++  arc_field_edit_host_->SetVisible(true);
++}
++
++void BrowserView::EndArcSidebarFieldEdit() {
++  if (!arc_field_edit_active_) {
++    return;
++  }
++  // Order matters twice here: the flag drops first so the blur this may cause
++  // re-enters harmlessly, and focus leaves before the toolbar moves so the
++  // reparent never carries a focused subtree (which would dispatch Blur
++  // mid-move -- the reparent-then-focus rule, in reverse).
++  arc_field_edit_active_ = false;
++  if (LocationBarView* const location_bar =
++          toolbar_ ? toolbar_->location_bar_view() : nullptr) {
++    views::FocusManager* const focus_manager = location_bar->GetFocusManager();
++    if (focus_manager && focus_manager->GetFocusedView() &&
++        location_bar->Contains(focus_manager->GetFocusedView())) {
++      focus_manager->ClearFocus();
++    }
++  }
++  UpdateArcAddressBarPlacement();
++  if (arc_field_edit_host_) {
++    arc_field_edit_host_->SetVisible(false);
++  }
++  if (vertical_tab_strip_region_view_) {
++    if (views::View* const address_row =
++            vertical_tab_strip_region_view_->arc_address_row()) {
++      address_row->SetPreferredSize(std::nullopt);
++    }
++  }
++}
++
++void BrowserView::OnLocationBarBoundsChanged() {
++  // The edit host is placed from Layout()'s tail, which sees every ancestor
++  // move; nothing to do per-field-relayout.
++}
++
++void BrowserView::OnLocationBarEditStateChanged() {
++  if (!arc_field_edit_active_ || !toolbar_ || !toolbar_->location_bar_view()) {
++    return;
++  }
++  // Focus is the edit hand-off's lifetime, deliberately NOT
++  // IsArcFieldEditing(): blurred-with-pending-input keeps the panel on the
++  // docked band, but in the sidebar a click on the page must fold everything
++  // back -- the input survives in the omnibox model and the row (still
++  // showing it) travels home to the sidebar, where the floating card's own
++  // retraction hides it.
++  if (toolbar_->location_bar_view()->HasFocus() &&
++      toolbar_->location_bar_view()->IsDrawn()) {
++    return;
++  }
++  EndArcSidebarFieldEdit();
+ }
+ 
+ void BrowserView::UpdateArcAddressBarPlacement() {
+@@ -2544,16 +2703,54 @@ void BrowserView::UpdateArcAddressBarPla
+       layout_controller && !layout_controller->HasAddressBarBand() &&
+       ShouldDrawVerticalTabStrip() && GetIsNormalType();
+ 
+-  if (wants_toolbar_in_sidebar) {
+-    if (toolbar_->parent() == address_row) {
+-      return;
++  // helium-fork: mode moved away mid-edit (kDocked switch, sidebar gone) --
++  // drop the edit hand-off before placing; anything else strands the toolbar
++  // in a host whose reason to exist just left. Focus, if the field still has
++  // it, goes with the mode switch's own focus churn.
++  if (arc_field_edit_active_ && !wants_toolbar_in_sidebar) {
++    arc_field_edit_active_ = false;
++    if (arc_field_edit_host_) {
++      arc_field_edit_host_->SetVisible(false);
++    }
++  }
++  const bool wants_edit_host =
++      wants_toolbar_in_sidebar && arc_field_edit_active_ && arc_field_edit_host_;
++  if (wants_edit_host) {
++    if (toolbar_->parent() != arc_field_edit_host_) {
++      arc_field_edit_host_->AddChildView(toolbar_.get());
++    }
++  } else if (wants_toolbar_in_sidebar) {
++    if (arc_field_edit_host_) {
++      arc_field_edit_host_->SetVisible(false);
++    }
++    if (toolbar_->parent() != address_row) {
++      address_row->AddChildView(toolbar_.get());
+     }
+-    address_row->AddChildView(toolbar_.get());
+   } else {
+-    if (toolbar_->parent() == top_container_) {
+-      return;
++    if (toolbar_->parent() != top_container_) {
++      top_container_->AddChildViewAt(toolbar_.get(), 0);
+     }
+-    top_container_->AddChildViewAt(toolbar_.get(), 0);
++  }
++  toolbar_->SetArcEditHosted(wants_edit_host);
++  // helium-fork: the tabbed layout owns the toolbar's visible flag ONLY while
++  // the toolbar is parented to the top container (layout.AddChild -> false in
++  // the hidden mode). One transient frame there is enough to stamp false; the
++  // sidebar hosts have no such manager, so reclaim the flag on every arrival
++  // (user-hit 2026-08-19: toolbar frozen invisible inside the edit host).
++  if (wants_toolbar_in_sidebar) {
++    toolbar_->SetVisible(true);
++  }
++  // helium-fork: heal any FlexLayout drop. When the sidebar collapses with
++  // the toolbar inside, the row lays out at zero width and FlexLayout drops
++  // the location bar (SetVisible(false)); a reparent then carries that flag
++  // into the new host, where FlexLayout reads a pre-existing false as an
++  // external hide and never restores it -- the field stayed invisible on the
++  // band and in the row alike (user-hit 2026-08-18, field frozen at the
++  // collapsed row's stale bounds). Placement is the one funnel every host
++  // change passes through, so re-assert the intent here; the next layout is
++  // free to drop it again if space truly lacks.
++  if (toolbar_->location_bar_view()) {
++    toolbar_->location_bar_view()->SetVisible(true);
+   }
+   // The toolbar keeps its CustomCornersBackground either way: the band's
+   // layout pass reaches for it by type to apply the page tint, and swapping it
+@@ -2666,6 +2863,16 @@ bool BrowserView::MaybeHandleSidebarColl
+   // and drive the slide it no longer owns.
+   zen_cursor_exit_timer_.Stop();
+   if (collapse) {
++    // helium-fork: a focused field pins the floating card open (the edit-pin
++    // in UpdateZenModeReveal), and Cmd+S is the user overruling that pin --
++    // without this the card slides out and is immediately pinned back. Ending
++    // the edit first also folds the panel away with the same keystroke.
++    if (LocationBarView* const location_bar =
++            toolbar_ ? toolbar_->location_bar_view() : nullptr) {
++      if (location_bar->IsArcFieldEditing()) {
++        location_bar->EndArcFieldEditing();
++      }
++    }
+     // HIDE: flip the layout to floating-over-full-width contents under a viz
+     // hold -- the previous frame stays on glass until the renderer delivers
+     // the full-width frame, then chrome and contents swap in one activation
+@@ -6188,6 +6395,27 @@ void BrowserView::Layout(PassKey) {
+   // the sidebar's width. The observer still earns its keep for relayouts that
+   // stay inside the toolbar (an extension icon arriving), where the ancestors
+   // do not move and this pass does not run.
++  if (arc_field_edit_active_) {
++    LayoutArcFieldEditHost();
++  }
++  // helium-fork: heal a stale FlexLayout drop. When the sidebar collapses
++  // with the toolbar inside, the row lays out at zero width and FlexLayout
++  // drops the location bar (SetVisible(false)); reparenting then carries the
++  // flag into the next host, where FlexLayout reads a pre-existing false as
++  // an external hide and never restores it (user-hit 2026-08-18: the field
++  // frozen invisible on the band and in the row alike). Re-assert intent
++  // only while the field's own host is drawn -- a legitimate drop happens
++  // exactly when it is not, so this cannot fight the layout.
++  if (toolbar_ && toolbar_->parent() && toolbar_->parent() != top_container_ &&
++      toolbar_->parent()->IsDrawn()) {
++    if (!toolbar_->GetVisible()) {
++      toolbar_->SetVisible(true);
++    }
++    if (toolbar_->location_bar_view() &&
++        !toolbar_->location_bar_view()->GetVisible()) {
++      toolbar_->location_bar_view()->SetVisible(true);
++    }
++  }
+   if (arc_omnibox_panel_) {
+     arc_omnibox_panel_->UpdateFromField();
+   }
+@@ -6361,6 +6589,12 @@ void BrowserView::AddedToWidget() {
+   if (arc_omnibox_panel_) {
+     arc_omnibox_panel_->SetLocationBar(toolbar_->location_bar_view());
+   }
++  // helium-fork: the sidebar row's edit hand-off listens for the edit state
++  // ending (blur is only observable from the field's own notifications).
++  if (toolbar_->location_bar_view() &&
++      !arc_location_bar_observation_.IsObserving()) {
++    arc_location_bar_observation_.Observe(toolbar_->location_bar_view());
++  }
+ 
+   // helium-fork: and the native window exists now, so the "click anywhere else
+   // ends the edit state" monitor can attach to it.
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -25,6 +25,7 @@
+ #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_service.h"
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
++#include "chrome/browser/ui/location_bar/location_bar.h"
+ #include "chrome/browser/ui/tabs/projects/projects_panel_state_controller.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+@@ -161,7 +162,8 @@ class BrowserView : public BrowserWindow
+                     public BookmarkBarController::Delegate,
+                     public ui::EventObserver,
+                     public gfx::AnimationDelegate,
+-                    public AppMenuButtonObserver {
++                    public AppMenuButtonObserver,
++                    public LocationBar::Observer {
+   METADATA_HEADER(BrowserView, views::ClientView)
+ 
+  public:
+@@ -476,6 +478,13 @@ class BrowserView : public BrowserWindow
+   // Returns false when it does not apply and the plain instant motion should
+   // run instead (zen mode, non-vertical layout, uninitialized strip).
+   bool MaybeHandleSidebarCollapseRequest(bool collapse);
++
++  // helium-fork: the entry half of the sidebar row's edit hand-off -- called
++  // by LocationBarView BEFORE it takes focus (reparenting a focused subtree
++  // clears its focus, so the order is reparent-then-focus). Moves the toolbar
++  // into arc_field_edit_host_ and shows it at the panel's width. No-op unless
++  // the hidden mode's sidebar row is on screen.
++  void BeginArcSidebarFieldEdit();
+   void ToggleZenModeTopChrome();
+ 
+   // Returns the widget for anchoring bubbles and dialogs.
+@@ -837,6 +846,13 @@ class BrowserView : public BrowserWindow
+   void AnimationEnded(const gfx::Animation* animation) override;
+   void AnimationCanceled(const gfx::Animation* animation) override;
+ 
++  // LocationBar::Observer:
++  // helium-fork: the exit half of the sidebar row's edit hand-off. Entry is
++  // BeginArcSidebarFieldEdit() below; the field's edit state ending (blur,
++  // Enter, deactivation) is only observable from here.
++  void OnLocationBarBoundsChanged() override;
++  void OnLocationBarEditStateChanged() override;
++
+   // AppMenuButtonObserver:
+   void AppMenuShown() override;
+   void AppMenuClosed() override;
+@@ -1023,6 +1039,17 @@ class BrowserView : public BrowserWindow
+   // inside the field. Called for every mouse press in the window, and on
+   // deactivation.
+   void MaybeEndArcFieldEditing();
++  // helium-fork: the begin half, from the same pre-dispatch press monitor --
++  // a press landing on the sidebar row's field starts the edit hand-off
++  // before the field takes focus. See BeginArcSidebarFieldEdit().
++  void MaybeBeginArcFieldEditFromPress();
++
++  // Places the edit host over the sidebar row (called from Layout() while
++  // active, before the panel reads the field's bounds).
++  void LayoutArcFieldEditHost();
++  // The exit half: puts the toolbar back into the sidebar row. Clears focus
++  // first if the field still holds it (the Enter-submit path).
++  void EndArcSidebarFieldEdit();
+   // helium-fork toggle choreography (see MaybeHandleSidebarCollapseRequest).
+   enum class SidebarTogglePhase { kIdle, kSliding, kFlipping };
+   void RunSidebarDockFlip();
+@@ -1302,6 +1329,17 @@ class BrowserView : public BrowserWindow
+   // here because the band clips its own contents. See ArcOmniboxPanelView.
+   raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
+ 
++  // helium-fork: while the sidebar row's field is being edited the whole
++  // toolbar moves here -- a BrowserView child sharing the row's origin at the
++  // panel's width, so the field can be as wide as the panel standing on it
++  // (the sidebar row's own layer clips at the sidebar's width). Sits above
++  // the sidebar and below arc_omnibox_panel_ in z, so the panel's hole shows
++  // the field through. See BeginArcSidebarFieldEdit().
++  raw_ptr<views::View> arc_field_edit_host_ = nullptr;
++  bool arc_field_edit_active_ = false;
++  base::ScopedObservation<LocationBar, LocationBar::Observer>
++      arc_location_bar_observation_{this};
++
+   // helium-fork: the shell's page-loading indicator, a thin line on the
+   // contents' top edge. Placed from the tail of Layout(), fed from
+   // OnActiveTabChanged().
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -725,6 +725,16 @@ void LocationBarView::SelectAll() {
+ 
+ void LocationBarView::FocusLocation(bool is_user_initiated,
+                                     bool clear_focus_if_failed) {
++  // helium-fork: reparent before focus. In the hidden mode the sidebar row's
++  // edit hand-off moves this whole toolbar into a panel-wide host, and moving
++  // a focused subtree dispatches Blur mid-move -- so the move happens while
++  // focus is still elsewhere. No-op outside the sidebar row.
++  if (ToolbarView::IsArcSidebarHostedFor(this)) {
++    if (BrowserView* const browser_view =
++            BrowserView::GetBrowserViewForBrowser(browser_)) {
++      browser_view->BeginArcSidebarFieldEdit();
++    }
++  }
+   omnibox_view_->SetFocus(is_user_initiated);
+   if (clear_focus_if_failed && !omnibox_view_->HasFocus()) {
+     // If none of location bar got focus, then clear focus.
+@@ -1067,9 +1077,14 @@ void LocationBarView::Layout(PassKey) {
+           ? 4
+           : trailing_decorations_edge_padding;
+   // helium-fork: see arc_minimal_rest above -- both page action containers
+-  // sit out the rest state and fade back with the hover/focus reveal.
+-  page_action_icon_container_->SetVisible(!arc_minimal_rest);
+-  page_action_container_->SetVisible(!arc_minimal_rest);
++  // sit out the rest state and fade back with the hover/focus reveal. In the
++  // sidebar-hosted row they sit out entirely: the row's width belongs to the
++  // domain, and the two actions that lived here (install-PWA, bookmark) moved
++  // into the page info bubble's header (user's ask, 2026-08-18).
++  const bool sidebar_hosted_row = ToolbarView::IsArcSidebarHostedFor(this);
++  page_action_icon_container_->SetVisible(!arc_minimal_rest &&
++                                          !sidebar_hosted_row);
++  page_action_container_->SetVisible(!arc_minimal_rest && !sidebar_hosted_row);
+   add_trailing_decoration(page_action_icon_container_,
+                           /*intra_item_padding=*/0,
+                           /*edge_padding=*/
+@@ -1945,6 +1960,13 @@ void LocationBarView::RefreshBackground(
+   // hover tween brings the weak wash in ("默认状态下地址栏只显示网址").
+   if (ShouldMinimizeArcChrome() && !is_caret_visible && !input_in_progress) {
+     normal = SkColorSetA(normal, 0);
++    // Sidebar row: the hover wash too. The whole-row capsule painted by the
++    // toolbar (station icon + domain + extensions in one pill) is the hover
++    // treatment there; a second wash on the field alone would read as a pill
++    // inside a pill.
++    if (ToolbarView::IsArcSidebarHostedFor(this)) {
++      hovered = SkColorSetA(hovered, 0);
++    }
+   }
+ 
+   background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
+@@ -2738,6 +2760,12 @@ void LocationBarView::OnOmniboxHovered(b
+   // 2026-08-16), so the swap does not animate.
+   if (is_hovering != arc_hovered_) {
+     arc_hovered_ = is_hovering;
++    // helium-fork: the sidebar row's whole-row capsule rides the same edge --
++    // the field's hover pipe is the only reliable hover source here (plain
++    // enter/exit never reaches the toolbar).
++    if (auto* const toolbar = views::AsViewClass<ToolbarView>(parent())) {
++      toolbar->SetArcRowHovered(is_hovering);
++    }
+     if (ShouldMinimizeArcChrome() && omnibox_view_ &&
+         !omnibox_view_->HasFocus() &&
+         !GetOmniboxController()->edit_model()->user_input_in_progress()) {
+@@ -2756,9 +2784,16 @@ bool LocationBarView::IsArcHoverUrlPrevi
+ 
+ helium::ArcOmniboxPanelMetrics LocationBarView::GetArcOmniboxPanelMetrics()
+     const {
+-  // The band only. In the hidden address bar mode this row lives inside the
+-  // sidebar, which has neither the room for a panel nor the margins the
+-  // geometry below is derived from.
++  // Two hosts, two shapes, one panel. On the band the panel grows
++  // symmetrically inside the band's margins; in the sidebar-hosted row
++  // (hidden address bar mode) it shares the row's top-left corner and grows
++  // rightwards out over the page -- Arc's shape, measured 2026-08-18. The
++  // sidebar shape derives from the field's width at call time, which is why
++  // it cannot be a set of constants like the band's.
++  if (ToolbarView::IsArcSidebarHostedFor(this)) {
++    return helium::ComputeArcSidebarRowPanel(/*enabled=*/true, width(),
++                                             GetBorderRadius());
++  }
+   const bool enabled = ToolbarView::IsArcBandHostedFor(this);
+   return helium::ComputeArcOmniboxPanel(
+       enabled, GetLayoutConstant(LayoutConstant::kHeliumBasePadding),
+Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
++++ src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h"
+ 
+ #include <memory>
++#include <optional>
+ #include <utility>
+ 
+ #include "base/feature_list.h"
+@@ -515,16 +516,33 @@ void RoundedOmniboxResultsFrame::OnPaint
+   // helium-fork: the Arc panel's fill and Dia's shadow. This lands in the
+   // widget's own layer, underneath `contents_host_`'s -- which paints the same
+   // rounded rect in the same color on top of it, so the only thing that
+-  // survives here is the shadow outside the panel.
++  // survives here is the shadow outside the panel -- and the hole.
++  //
++  // The hole matters here too, not just in `top_background_`'s kSrc clear:
++  // that clear only punches through `contents_host_`'s layer, and what showed
++  // through was THIS fill -- an opaque white sheet in the widget's root layer
++  // over the browser window's real field. White on white: the field's text
++  // vanished the moment the popup opened, on the band and in the sidebar row
++  // alike (measured 2026-08-18; the "visible" field everyone saw in earlier
++  // rounds was the default-match suggestion row impersonating it one row
++  // down). The hole is the laid-out `top_background_` rect verbatim -- the
++  // one geometry the kSrc clear already trusts -- so the two cutouts cannot
++  // drift apart.
+   const helium::ArcOmniboxPanelMetrics metrics = GetArcPanelMetrics();
+   if (!metrics.enabled) {
+     return;
+   }
++  std::optional<gfx::Rect> hole;
++  if (top_background_->GetVisible() && !top_background_->bounds().IsEmpty()) {
++    gfx::Rect field = top_background_->bounds();
++    field.Offset(contents_host_->bounds().OffsetFromOrigin());
++    hole = field;
++  }
+   const auto* const color_provider = GetColorProvider();
+   helium::PaintArcOmniboxPanel(
+       canvas, metrics, GetContentsBounds(),
+       color_provider->GetColor(kColorOmniboxResultsBackground),
+-      color_utils::IsDark(color_provider->GetColor(kColorToolbar)));
++      color_utils::IsDark(color_provider->GetColor(kColorToolbar)), hole);
+ }
+ 
+ BEGIN_METADATA(RoundedOmniboxResultsFrame)
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -1333,6 +1333,10 @@ void ToolbarView::AnimationEnded(const g
+ }
+ 
+ void ToolbarView::AnimationProgressed(const gfx::Animation* animation) {
++  if (animation == &arc_row_hover_animation_) {
++    SchedulePaint();
++    return;
++  }
+   BrowserWindow::FromBrowser(browser())->ToolbarSizeChanged(
+       /*is_animating=*/true);
+ }
+@@ -1865,6 +1869,15 @@ void ToolbarView::LayoutCommon() {
+   if (IsArcBandHosted()) {
+     interior_margin =
+         gfx::Insets(GetLayoutConstant(LayoutConstant::kHeliumBasePadding));
++  } else if (arc_sidebar_hosted_) {
++    // helium-fork: the sidebar row. Horizontal zero so the row's contents --
++    // and the hover capsule painted on this view -- span exactly the
++    // address row's [6, W-6], the same band the tab rows' grey fills (the
++    // user's "等宽" ask, 2026-08-18). Vertical keeps the band's 3, so the row
++    // stays 34 tall.
++    interior_margin = gfx::Insets::TLBR(
++        GetLayoutConstant(LayoutConstant::kHeliumBasePadding), 0,
++        GetLayoutConstant(LayoutConstant::kHeliumBasePadding), 0);
+   }
+ 
+   auto* vts_controller = tabs::VerticalTabStripStateController::From(browser_);
+@@ -2044,8 +2057,12 @@ void ToolbarView::UpdateToolbarLayout()
+       constexpr int kArcSidebarLocationBarWidth = 130;
+       location_bar_view_->SetPreferredSize(
+           gfx::Size(kArcSidebarLocationBarWidth, 0));
+-      location_bar_view_->SetProperty(views::kMarginsKey,
+-                                      gfx::Insets::VH(0, location_bar_margin));
++      location_bar_view_->SetProperty(views::kMarginsKey, gfx::Insets());
++      // The extensions button shares the capsule, so it gives up its own
++      // margin too and sits flush at the row's right edge.
++      if (extensions_container_) {
++        extensions_container_->SetProperty(views::kMarginsKey, gfx::Insets());
++      }
+     } else if (is_compact_layout) {
+       location_bar_view_->SetPreferredSize(gfx::Size(kPreferredCompactWidth, 0));
+       location_bar_view_->SetProperty(
+@@ -2181,6 +2198,70 @@ bool ToolbarView::IsArcBandHostedFor(con
+   return false;
+ }
+ 
++void ToolbarView::SetArcRowHovered(bool hovered) {
++  if (!arc_sidebar_hosted_) {
++    return;
++  }
++  if (hovered && !arc_edit_hosted_) {
++    arc_row_hover_animation_.Show();
++  } else if (!hovered && !IsMouseHovered()) {
++    // Crossing from the field onto the extensions button (both inside this
++    // row) is not a departure; only leaving the row collapses the capsule.
++    arc_row_hover_animation_.Hide();
++  }
++}
++
++void ToolbarView::OnPaintBackground(gfx::Canvas* canvas) {
++  views::View::OnPaintBackground(canvas);
++  // helium-fork: the sidebar row's hover capsule -- one pill under station
++  // icon, domain and extensions button alike, the tab rows' hover color and
++  // radius so the row reads as one of them. The field's own hover wash is
++  // retired in this mode (RefreshBackground), so this is the only layer.
++  if (!arc_sidebar_hosted_ || arc_edit_hosted_) {
++    return;
++  }
++  const double value = arc_row_hover_animation_.GetCurrentValue();
++  if (value <= 0.0) {
++    return;
++  }
++  const ui::ColorProvider* const provider = GetColorProvider();
++  if (!provider) {
++    return;
++  }
++  const SkColor hovered = TabStyle::Get()->GetTabBackgroundColor(
++      TabStyle::TabSelectionState::kInactive, /*hovered=*/true,
++      GetWidget() && GetWidget()->ShouldPaintAsActive(), provider);
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setColor(SkColorSetA(hovered, base::ClampRound(
++      SkColorGetA(hovered) * value)));
++  canvas->DrawRoundRect(
++      gfx::RectF(GetLocalBounds()),
++      GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius), flags);
++}
++
++void ToolbarView::SetArcEditHosted(bool edit_hosted) {
++  if (arc_edit_hosted_ == edit_hosted) {
++    return;
++  }
++  arc_edit_hosted_ = edit_hosted;
++  if (extensions_container_) {
++    extensions_container_->SetVisible(!edit_hosted);
++  }
++}
++
++bool ToolbarView::IsArcSidebarHostedFor(const views::View* view) {
++  for (const views::View* ancestor = view; ancestor;
++       ancestor = ancestor->parent()) {
++    if (const auto* const toolbar = views::AsViewClass<ToolbarView>(ancestor)) {
++      return toolbar->arc_sidebar_hosted_ &&
++             toolbar->location_bar_view() &&
++             toolbar->location_bar_view()->ShouldMinimizeArcChrome();
++    }
++  }
++  return false;
++}
++
+ // static
+ std::optional<SkColor> ToolbarView::GetArcBandTintFor(const views::View* view) {
+   for (const views::View* ancestor = view; ancestor;
+@@ -2200,6 +2281,9 @@ void ToolbarView::SetArcSidebarHosted(bo
+     return;
+   }
+   arc_sidebar_hosted_ = hosted;
++  if (!hosted) {
++    arc_row_hover_animation_.Reset(0);
++  }
+   // helium-fork: the Zen row treatment. Inside the sidebar the row is the
+   // domain plus a single extensions-menu button: every pinned extension
+   // collapses into that button's panel, and the avatar and the app menu go
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -221,6 +221,22 @@ class ToolbarView : public views::Access
+   // callers that hold a child rather than the toolbar. Same ancestor walk as
+   // GetArcBandTintFor(); false for anything reparented out of the toolbar.
+   static bool IsArcBandHostedFor(const views::View* view);
++  // helium-fork: the sidebar-hosted counterpart (hidden address bar mode) --
++  // true when the ancestor toolbar lives inside the sidebar's address row.
++  // The row's edit panel keys off this the way the band's keys off
++  // IsArcBandHostedFor.
++  static bool IsArcSidebarHostedFor(const views::View* view);
++  // helium-fork: the sidebar row's field is being edited and the toolbar
++  // rides in BrowserView's edit host at the panel's width. Sidebar-hosted
++  // stays true throughout; this narrows the row to its edit shape (the
++  // extensions button steps aside so the panel holds only the field).
++  void SetArcEditHosted(bool edit_hosted);
++  // helium-fork: the sidebar row's whole-row hover capsule (station icon +
++  // domain + extensions button in one pill, matching the tab rows' hover).
++  // Driven by the omnibox's own hover pipe (OnOmniboxHovered -> here): plain
++  // views enter/exit never reaches this view -- the field's children eat the
++  // events, and notify-enter-exit-on-child proved a no-show in probing.
++  void SetArcRowHovered(bool hovered);
+ 
+   ToolbarButton* vertical_tabs_collapse_button() const {
+     return vertical_tabs_collapse_button_;
+@@ -324,6 +340,8 @@ class ToolbarView : public views::Access
+   void AnimationEnded(const gfx::Animation* animation) override;
+   void AnimationProgressed(const gfx::Animation* animation) override;
+ 
++  void OnPaintBackground(gfx::Canvas* canvas) override;
++
+   // Declarative layout for child controls.
+   void InitLayout();
+ 
+@@ -452,6 +470,10 @@ class ToolbarView : public views::Access
+   raw_ptr<ToolbarButton> vertical_tabs_collapse_button_ = nullptr;
+   // helium-fork: see SetArcSidebarHosted().
+   bool arc_sidebar_hosted_ = false;
++  bool arc_edit_hosted_ = false;
++  // helium-fork: drives the sidebar row's hover capsule, 200ms to match the
++  // field-side tween it replaces there.
++  gfx::SlideAnimation arc_row_hover_animation_{this};
+   raw_ptr<ToolbarButton> back_ = nullptr;
+   raw_ptr<ToolbarButton> forward_ = nullptr;
+   raw_ptr<ReloadButton> reload_ = nullptr;

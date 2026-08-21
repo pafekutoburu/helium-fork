@@ -1,0 +1,211 @@
+Index: src/chrome/browser/ui/page_info/chrome_page_info_ui_delegate.cc
+===================================================================
+--- src.orig/chrome/browser/ui/page_info/chrome_page_info_ui_delegate.cc
++++ src/chrome/browser/ui/page_info/chrome_page_info_ui_delegate.cc
+@@ -4,6 +4,14 @@
+ 
+ #include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
+ 
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "base/task/sequenced_task_runner.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/bookmarks/bookmark_model_factory.h"
++#include "chrome/browser/ui/browser_commands.h"
++#include "components/bookmarks/browser/bookmark_model.h"
++
+ #include "base/feature_list.h"
+ #include "base/notreached.h"
+ #include "build/build_config.h"
+@@ -370,3 +378,62 @@ void ChromePageInfoUiDelegate::RecordMer
+ Profile* ChromePageInfoUiDelegate::GetProfile() const {
+   return Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+ }
++
++// helium-fork: header quick actions. The doers post free functions bound to a
++// WebContents WeakPtr: the caller closes the bubble immediately after, which
++// destroys this delegate, so nothing here may run the command synchronously
++// or bind `this`.
++namespace {
++
++void RunBookmarkPage(base::WeakPtr<content::WebContents> web_contents) {
++  if (!web_contents) {
++    return;
++  }
++  if (BrowserWindowInterface* const browser =
++          GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++              web_contents.get())) {
++    chrome::BookmarkCurrentTab(browser);
++  }
++}
++
++void RunInstallPwa(base::WeakPtr<content::WebContents> web_contents) {
++  if (!web_contents) {
++    return;
++  }
++  if (BrowserWindowInterface* const browser =
++          GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
++              web_contents.get())) {
++    chrome::ExecuteCommand(browser, IDC_INSTALL_PWA);
++  }
++}
++
++}  // namespace
++
++bool ChromePageInfoUiDelegate::CanBookmarkPage() {
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents_);
++  return browser && chrome::CanBookmarkCurrentTab(browser);
++}
++
++bool ChromePageInfoUiDelegate::IsPageBookmarked() {
++  bookmarks::BookmarkModel* const model =
++      BookmarkModelFactory::GetForBrowserContext(
++          web_contents_->GetBrowserContext());
++  return model && model->IsBookmarked(site_url_);
++}
++
++void ChromePageInfoUiDelegate::BookmarkPage() {
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&RunBookmarkPage, web_contents_->GetWeakPtr()));
++}
++
++bool ChromePageInfoUiDelegate::CanInstallPwa() {
++  BrowserWindowInterface* const browser =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents_);
++  return browser && chrome::IsCommandEnabled(browser, IDC_INSTALL_PWA);
++}
++
++void ChromePageInfoUiDelegate::InstallPwa() {
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&RunInstallPwa, web_contents_->GetWeakPtr()));
++}
+Index: src/chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h
+===================================================================
+--- src.orig/chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h
++++ src/chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h
+@@ -73,6 +73,17 @@ class ChromePageInfoUiDelegate : public
+   // clicked.
+   void SettingsLinkClicked(ContentSettingsType type);
+ 
++  // helium-fork: the bubble header's quick actions (hidden address bar mode
++  // moves the install-PWA and bookmark page actions off the sidebar row and
++  // in here, next to the domain title). Can* answer availability for this
++  // page; the doers post the real command to run after the bubble closes --
++  // the caller closes the bubble right after, and this object dies with it.
++  bool CanBookmarkPage();
++  bool IsPageBookmarked();
++  void BookmarkPage();
++  bool CanInstallPwa();
++  void InstallPwa();
++
+   // Opens Privacy Sandbox settings page.
+   void ShowPrivacySandboxSettings();
+ 
+Index: src/chrome/browser/ui/views/page_info/page_info_main_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/page_info/page_info_main_view.cc
++++ src/chrome/browser/ui/views/page_info/page_info_main_view.cc
+@@ -4,6 +4,13 @@
+ 
+ #include "chrome/browser/ui/views/page_info/page_info_main_view.h"
+ 
++#include "chrome/app/vector_icons/vector_icons.h"
++#include "chrome/browser/ui/ui_features.h"
++#include "components/omnibox/browser/vector_icons.h"
++#include "chrome/grit/generated_resources.h"
++#include "ui/views/controls/button/image_button_factory.h"
++#include "ui/views/controls/highlight_path_generator.h"
++
+ #include <memory>
+ #include <optional>
+ 
+@@ -668,7 +675,23 @@ void PageInfoMainView::ChildPreferredSiz
+ }
+ 
+ std::unique_ptr<views::View> PageInfoMainView::CreateBubbleHeaderView() {
+-  return views::Builder<views::FlexLayoutView>()
++  // helium-fork: the header's quick actions -- install-PWA and bookmark moved
++  // here from the address field (the hidden mode's sidebar row has no width
++  // to spare, so its two page actions live next to the domain instead).
++  // Availability is evaluated once per bubble open; the bubble is short-lived
++  // and the actions close it anyway.
++  auto make_quick_action = [&](const gfx::VectorIcon& icon, int tooltip_id,
++                               base::RepeatingClosure callback) {
++    auto button = views::CreateVectorImageButtonWithNativeTheme(
++        std::move(callback), icon, 16);
++    button->SetTooltipText(l10n_util::GetStringUTF16(tooltip_id));
++    views::InstallCircleHighlightPathGenerator(button.get());
++    button->SetProperty(views::kCrossAxisAlignmentKey,
++                        views::LayoutAlignment::kCenter);
++    button->SetProperty(views::kMarginsKey, gfx::Insets::VH(0, 4));
++    return button;
++  };
++  std::unique_ptr<views::View> header = views::Builder<views::FlexLayoutView>()
+       .SetInteriorMargin(gfx::Insets::VH(0, 20))
+       .AddChildren(
+           views::Builder<views::Label>(
+@@ -701,6 +724,48 @@ std::unique_ptr<views::View> PageInfoMai
+                                     button->GetInsets());
+               })))
+       .Build();
++  // Insert between the title (index 0) and the close button, in the order the
++  // field used to show them: install-PWA, then the star.
++  size_t index = 1;
++  if (ui_delegate_->CanInstallPwa()) {
++    header->AddChildViewAt(
++        make_quick_action(
++            features::IsRoundedIconsEnabled()
++                ? kInstallDesktopIcon
++                : kInstallDesktopChromeRefreshOldIcon,
++            IDS_OMNIBOX_PWA_INSTALL_ICON_LABEL,
++            base::BindRepeating(&PageInfoMainView::QuickInstallPwa,
++                                base::Unretained(this))),
++        index++);
++  }
++  if (ui_delegate_->CanBookmarkPage()) {
++    const bool starred = ui_delegate_->IsPageBookmarked();
++    header->AddChildViewAt(
++        make_quick_action(
++            starred ? (features::IsRoundedIconsEnabled()
++                           ? omnibox::kStarFilledIcon
++                           : omnibox::kStarActiveChromeRefreshOldIcon)
++                    : (features::IsRoundedIconsEnabled()
++                           ? omnibox::kStarIcon
++                           : omnibox::kStarChromeRefreshOldIcon),
++            starred ? IDS_TOOLTIP_STARRED : IDS_TOOLTIP_STAR,
++            base::BindRepeating(&PageInfoMainView::QuickBookmarkPage,
++                                base::Unretained(this))),
++        index++);
++  }
++  return header;
++}
++
++void PageInfoMainView::QuickBookmarkPage() {
++  // Post first, close second: the action outlives the bubble, `this` and the
++  // delegate do not.
++  ui_delegate_->BookmarkPage();
++  navigation_handler_->CloseBubble();
++}
++
++void PageInfoMainView::QuickInstallPwa() {
++  ui_delegate_->InstallPwa();
++  navigation_handler_->CloseBubble();
+ }
+ 
+ std::unique_ptr<views::View> PageInfoMainView::CreateAboutThisSiteButton(
+Index: src/chrome/browser/ui/views/page_info/page_info_main_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/page_info/page_info_main_view.h
++++ src/chrome/browser/ui/views/page_info/page_info_main_view.h
+@@ -116,6 +116,10 @@ class PageInfoMainView : public views::V
+   // button.
+   [[nodiscard]] std::unique_ptr<views::View> CreateBubbleHeaderView();
+ 
++  // helium-fork: the header quick actions (see CreateBubbleHeaderView).
++  void QuickBookmarkPage();
++  void QuickInstallPwa();
++
+   // Posts a task to HandleMoreInfoRequestAsync() below.
+   void HandleMoreInfoRequest(views::View* source);
+ 
