@@ -373,3 +373,4 @@ helium-fork/layout/sidebar-extension-reveal.patch
 helium-fork/layout/sidebar-media-strip.patch
 helium-fork/layout/sidebar-active-card-shadow.patch
 helium-fork/color/arc-app-surface-light.patch
+helium-fork/layout/arc-frame-materials.patch

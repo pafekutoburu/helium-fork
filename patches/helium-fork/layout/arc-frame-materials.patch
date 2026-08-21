@@ -1,0 +1,307 @@
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -132,7 +132,7 @@ void RegisterBrowserUserPrefs(user_prefs
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumRoundedFrame, true);
+ 
+-  registry->RegisterBooleanPref(prefs::kHeliumNativeFrameMaterials, false);
++  registry->RegisterBooleanPref(prefs::kHeliumNativeFrameMaterials, true);
+ 
+   // helium-fork: the Arc shell's address bar shows a domain-only label, and
+   // it is LEFT aligned -- centering was a misread of the design and the user
+--- a/chrome/browser/ui/ui_features.cc
++++ b/chrome/browser/ui/ui_features.cc
+@@ -39,7 +39,7 @@ bool HeliumUseCompactLocationWidth() {
+   return base::FeatureList::IsEnabled(kHeliumCompactLocationWidth);
+ }
+ 
+-BASE_FEATURE(kHeliumNativeFrameMaterials, base::FEATURE_DISABLED_BY_DEFAULT);
++BASE_FEATURE(kHeliumNativeFrameMaterials, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ bool HeliumNativeFrameAvailable() {
+ #if BUILDFLAG(IS_MAC)
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -177,6 +177,7 @@
+ #include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+ #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
+ #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+@@ -2844,6 +2845,12 @@ void BrowserView::UpdateArcAddressBarPla
+               ? toolbar_->background()->AsA<CustomCornersBackground>()
+               : nullptr) {
+     toolbar_background->SetVisible(host == helium::ArcToolbarHost::kBand);
++    // helium-fork: and with it the content-panel opt-out from the native frame
++    // material's window-wide paint suppression -- the band is the page's
++    // surface, the sidebar's row is the app's. One condition, both flags, so
++    // the two cannot drift apart between here and the layout pass.
++    toolbar_background->SetPaintWithNativeFrameMaterials(
++        host == helium::ArcToolbarHost::kBand);
+   }
+   toolbar_->SetArcSidebarHosted(sidebar_bound);
+   toolbar_->UpdateToolbarLayout();
+@@ -7933,7 +7940,15 @@ void BrowserView::FrameColorsChanged() {
+     web_app_window_title_->SetBackgroundColor(frame_color);
+     web_app_window_title_->SetEnabledColor(caption_color);
+   }
+-  GetWidget()->SetBackgroundColor(kColorToolbar);
++  // helium-fork: under native frame materials the window is non-opaque and the
++  // NSVisualEffectView behind it supplies the surface. The compositor's clear
++  // colour is painted above that view, so a solid one hides the material
++  // entirely -- measured 2026-08-21: with the guard the sidebar transmits
++  // 0.058 of its backdrop (r=0.77), without it 0.010 (r=0.09), i.e. the glass
++  // is gone while every other symptom looks identical.
++  GetWidget()->SetBackgroundColor(helium::ShouldUseNativeFrameMaterials(this)
++                                      ? SK_ColorTRANSPARENT
++                                      : kColorToolbar);
+ }
+ 
+ void BrowserView::UpdateAccessibleNameForAllTabs() {
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -1918,6 +1918,10 @@ void BrowserViewTabbedLayoutImpl::Config
+   } else {
+     background->SetVisible(true);
+   }
++  // helium-fork: outside the Arc band this container is app-shell chrome, so
++  // under native frame materials it stays out of the way. The band branch
++  // below opts back in -- see there for why.
++  background->SetPaintWithNativeFrameMaterials(false);
+ 
+   // helium-fork: in the Arc shell the band is the top strip of the contents
+   // card, not a separate bar above it -- rounded where it meets the window,
+@@ -1955,6 +1959,15 @@ void BrowserViewTabbedLayoutImpl::Config
+     background->SetVisible(true);
+     background->SetCorners(corners);
+     background->SetPrimaryColor(color);
++    // helium-fork: the band is content panel, not app shell, so the native
++    // frame material must not reach it. CustomCornersBackground::Paint()
++    // suppresses itself window-wide whenever the material is on -- the page
++    // tint above is still computed and written every layout, it simply was
++    // not painted, and the glass showed through in its place ("连带把顶部地址栏
++    // 的背景也调了", 2026-08-21). Opting in here is what keeps the band and the
++    // page one surface. The sidebar uses the same setter for the mirror-image
++    // reason (vertical_tab_strip_region_view.cc).
++    background->SetPaintWithNativeFrameMaterials(true);
+     // The toolbar carries its own CustomCornersBackground and covers the top
+     // container completely, so tinting only the container underneath paints
+     // nothing visible. Give the toolbar the same treatment -- it is the view
+@@ -1970,6 +1983,7 @@ void BrowserViewTabbedLayoutImpl::Config
+         toolbar_background->SetVisible(true);
+         toolbar_background->SetCorners(corners);
+         toolbar_background->SetPrimaryColor(color);
++        toolbar_background->SetPaintWithNativeFrameMaterials(true);
+       }
+     }
+     return;
+--- a/chrome/browser/ui/views/frame/multi_contents_background_view.cc
++++ b/chrome/browser/ui/views/frame/multi_contents_background_view.cc
+@@ -10,11 +10,25 @@
+ #include "ui/compositor/layer.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+ 
++namespace {
++
++// helium-fork: the material belongs to the app shell. This backdrop is the
++// floor of the Arc content card -- what shows in a split view's gutter and
++// before a page has painted -- so inside the card it keeps painting itself
++// rather than letting the desktop through. See
++// helium::IsInsideArcContentPanel().
++bool ShouldShowFrameMaterialThrough(const BrowserView* browser_view) {
++  return helium::ShouldUseNativeFrameMaterials(browser_view) &&
++         !helium::IsInsideArcContentPanel(browser_view);
++}
++
++}  // namespace
++
+ MultiContentsBackgroundView::MultiContentsBackgroundView(
+     BrowserView* browser_view)
+     : browser_view_(browser_view) {
+   const bool use_native_materials =
+-      helium::ShouldUseNativeFrameMaterials(browser_view_);
++      ShouldShowFrameMaterialThrough(browser_view_);
+   SetPaintToLayer(use_native_materials ? ui::LAYER_TEXTURED
+                                        : ui::LAYER_SOLID_COLOR);
+   if (use_native_materials) {
+@@ -49,7 +63,7 @@ void MultiContentsBackgroundView::OnThem
+ 
+ void MultiContentsBackgroundView::OnPaint(gfx::Canvas* canvas) {
+   CHECK_EQ(layer()->type(), ui::LAYER_TEXTURED);
+-  if (helium::ShouldUseNativeFrameMaterials(browser_view_)) {
++  if (ShouldShowFrameMaterialThrough(browser_view_)) {
+     return;
+   }
+   ThemedBackground::PaintBackground(canvas, this, browser_view_);
+@@ -57,7 +71,7 @@ void MultiContentsBackgroundView::OnPain
+ 
+ ui::LayerType MultiContentsBackgroundView::CalculateLayerType() const {
+   const bool use_native_materials =
+-      helium::ShouldUseNativeFrameMaterials(browser_view_);
++      ShouldShowFrameMaterialThrough(browser_view_);
+   const bool has_custom_image =
+       !ThemedBackground::GetBackgroundColor(this, browser_view_).has_value();
+ 
+--- a/chrome/browser/ui/views/helium/native_frame_materials.cc
++++ b/chrome/browser/ui/views/helium/native_frame_materials.cc
+@@ -16,6 +16,17 @@
+ 
+ namespace helium {
+ 
++namespace {
++
++const BrowserView* BrowserViewFor(const views::View* view) {
++  const views::Widget* const widget = view ? view->GetWidget() : nullptr;
++  return widget ? BrowserView::GetBrowserViewForNativeWindow(
++                      widget->GetNativeWindow())
++                : nullptr;
++}
++
++}  // namespace
++
+ bool ShouldUseNativeFrameMaterials(const BrowserView* browser_view) {
+ #if BUILDFLAG(IS_MAC)
+   if (!features::HeliumNativeFrameAvailable() || !browser_view) {
+@@ -41,11 +52,19 @@ bool ShouldUseNativeFrameMaterials(const
+ }
+ 
+ bool ShouldUseNativeFrameMaterials(const views::View* view) {
+-  const views::Widget* widget = view ? view->GetWidget() : nullptr;
+-  return ShouldUseNativeFrameMaterials(
+-      widget ? BrowserView::GetBrowserViewForNativeWindow(
+-                   widget->GetNativeWindow())
+-             : nullptr);
++  return ShouldUseNativeFrameMaterials(BrowserViewFor(view));
++}
++
++bool IsInsideArcContentPanel(const BrowserView* browser_view) {
++  // ShouldUseContentCardInsets() is exactly "the contents lay out as an inset
++  // rounded card", which is the panel's own definition. Popups and web app
++  // windows have no card, so nothing in them is inside one and they keep
++  // upstream's behaviour.
++  return browser_view && browser_view->ShouldUseContentCardInsets();
++}
++
++bool IsInsideArcContentPanel(const views::View* view) {
++  return IsInsideArcContentPanel(BrowserViewFor(view));
+ }
+ 
+ }  // namespace helium
+--- a/chrome/browser/ui/views/helium/native_frame_materials.h
++++ b/chrome/browser/ui/views/helium/native_frame_materials.h
+@@ -18,6 +18,23 @@ bool ShouldUseNativeFrameMaterials(const
+ bool ShouldUseNativeFrameMaterials(const BrowserWindowInterface* browser);
+ bool ShouldUseNativeFrameMaterials(const views::View* view);
+ 
++// helium-fork: the Arc shell splits the window into exactly two panels, and
++// they are independent surfaces -- a change to one may never reach the other.
++//
++//   * the app shell: the sidebar and the window edge around the card. It wears
++//     the browser theme, and it is what the native frame material is *for*.
++//   * the content panel: the inset rounded card -- the page, the address bar
++//     band above it, and anything else laid out inside it. It wears the page's
++//     own color so the band and the page read as one surface.
++//
++// The material is a property of the window, so every surface-suppressing guard
++// written for it fires window-wide unless it is told otherwise: turning the
++// glass on repainted the band in the app's color, which is the one thing the
++// band must never be. Surfaces inside the card ask this before honouring such
++// a guard, and keep painting themselves.
++bool IsInsideArcContentPanel(const BrowserView* browser_view);
++bool IsInsideArcContentPanel(const views::View* view);
++
+ }  // namespace helium
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_NATIVE_FRAME_MATERIALS_H_
+--- a/chrome/browser/ui/views/helium/native_frame_materials_mac.mm
++++ b/chrome/browser/ui/views/helium/native_frame_materials_mac.mm
+@@ -7,8 +7,30 @@
+ namespace helium {
+ namespace {
+ 
+-// Low-alpha black or white overlay applied before the browser theme tint.
+-constexpr CGFloat kFrameMaterialNeutralOverlayAlpha = 0.2;
++
++// Black or white overlay applied before the browser theme tint.
++//
++// helium-fork: the two overlay alphas are not taste -- they are solved, per
++// appearance, from two measurements of this exact stack (2026-08-21, probe
++// `glasscal`, window over a strongly varying backdrop, transmission read as
++// the slope of row-mean surface luminance against the blurred backdrop):
++//
++//   light (Menu):     bare material transmits 0.252 and sits at L174.4
++//   dark  (Sidebar):  bare material transmits 0.199 and sits at L 35.2
++//
++// Two targets pin the pair. (1) Transmission 0.07, which is what Dia's
++// sidebar shows (measured the same day, same instrument: 0.066 at a 40px
++// blur, its best-fitting scale). (2) Over a mid-grey backdrop the surface
++// must land back on the theme colour itself, so the window keeps reading as
++// its theme and the desktop only modulates it. Solving
++//     (1-tint)(1-neutral) * K = 0.07
++//     tint*theme + (1-tint)(1-neutral)*(C0 + K*128) = theme
++// gives light 0.44/0.50 and dark 0.50/0.30. Change one and re-solve the
++// other; changing either alone moves both the show-through and the colour.
++constexpr CGFloat kFrameMaterialNeutralOverlayAlphaLight = 0.44;
++constexpr CGFloat kFrameMaterialNeutralOverlayAlphaDark = 0.50;
++constexpr CGFloat kFrameMaterialThemeTintAlphaLight = 0.50;
++constexpr CGFloat kFrameMaterialThemeTintAlphaDark = 0.30;
+ 
+ // Menu material is slightly brighter and more translucent in light mode,
+ // so we use it for the light theme instead of Sidebar.
+@@ -17,10 +39,9 @@ NSVisualEffectMaterial GetFrameMaterial(
+                  : NSVisualEffectMaterialMenu;
+ }
+ 
+-// Light material needs a stronger theme tint than dark material to avoid
+-// looking washed out.
+ CGFloat GetFrameMaterialThemeTintOverlayAlpha(bool is_dark) {
+-  return is_dark ? 0.55 : 0.8;
++  return is_dark ? kFrameMaterialThemeTintAlphaDark
++                 : kFrameMaterialThemeTintAlphaLight;
+ }
+ 
+ NSColor* GetFrameMaterialNeutralOverlayColor(bool is_dark) {
+@@ -28,7 +49,9 @@ NSColor* GetFrameMaterialNeutralOverlayC
+   return [NSColor colorWithSRGBRed:component
+                              green:component
+                               blue:component
+-                             alpha:kFrameMaterialNeutralOverlayAlpha];
++                             alpha:is_dark
++                                       ? kFrameMaterialNeutralOverlayAlphaDark
++                                       : kFrameMaterialNeutralOverlayAlphaLight];
+ }
+ 
+ // Applies the browser theme color over the black/white neutral overlay while
+--- a/chrome/browser/ui/views/infobars/infobar_container_view.cc
++++ b/chrome/browser/ui/views/infobars/infobar_container_view.cc
+@@ -258,7 +258,12 @@ void InfoBarContainerView::PlatformSpeci
+ void InfoBarContainerView::UpdateBackground() {
+   const ui::ColorId color_id =
+       rounded_frame_enabled_ ? kColorToolbar : kColorInfoBarContentAreaSeparator;
+-  if (helium::ShouldUseNativeFrameMaterials(this)) {
++  // helium-fork: `rounded_frame_enabled_` is "this container is inside the Arc
++  // content card" (the layout writes it via SetRoundedFrameState). Inside the
++  // card the infobar is content panel, not app shell, so it keeps its own
++  // surface -- letting the material through would show the desktop across a
++  // bar sitting between the band and the page.
++  if (helium::ShouldUseNativeFrameMaterials(this) && !rounded_frame_enabled_) {
+     SetBackground(nullptr);
+     return;
+   }
+--- a/chrome/browser/ui/views/infobars/infobar_view.cc
++++ b/chrome/browser/ui/views/infobars/infobar_view.cc
+@@ -292,8 +292,11 @@ gfx::Size InfoBarView::CalculatePreferre
+ void InfoBarView::OnThemeChanged() {
+   views::View::OnThemeChanged();
+   const auto* cp = GetColorProvider();
++  // helium-fork: an infobar inside the Arc content card belongs to the page's
++  // panel, not to the glass shell -- see helium::IsInsideArcContentPanel().
+   const bool should_use_native_frame_materials =
+-      helium::ShouldUseNativeFrameMaterials(this);
++      helium::ShouldUseNativeFrameMaterials(this) &&
++      !helium::IsInsideArcContentPanel(this);
+   const SkColor background_theme_color =
+       should_use_native_frame_materials ? SK_ColorTRANSPARENT
+                                         : cp->GetColor(kColorInfoBarBackground);
