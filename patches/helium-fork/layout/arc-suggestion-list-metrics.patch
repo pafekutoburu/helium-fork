@@ -1,0 +1,358 @@
+Index: src/chrome/browser/ui/color/chrome_color_id.h
+===================================================================
+--- src.orig/chrome/browser/ui/color/chrome_color_id.h
++++ src/chrome/browser/ui/color/chrome_color_id.h
+@@ -428,6 +428,14 @@
+   /* Omnibox colors. */ \
+   E_CPONLY(kColorOmniboxActionIcon) \
+   E_CPONLY(kColorOmniboxActionIconHover) \
++  /* helium-fork r8.6: the Arc composer's hint grey -- `Dia:` (152,153,153) */ \
++  /* on its (254,255,255) card, measured 2026-08-22. Placeholder text and */ \
++  /* the magnifier beside it are the same colour there. Dark is */ \
++  /* UNMEASURED and falls back to upstream's dimmed id. */ \
++  E_CPONLY(kColorOmniboxArcComposerHint) \
++  /* helium-fork r8.6: the row action hint ("Hold Cmd to switch") -- */ \
++  /* `Dia:` (187,188,188), one step lighter again. */ \
++  E_CPONLY(kColorOmniboxArcRowActionHint) \
+   E_CPONLY(kColorOmniboxAnswerIconGM3Background) \
+   E_CPONLY(kColorOmniboxAnswerIconGM3Foreground) \
+   E_CPONLY(kColorOmniboxBubbleOutline) \
+Index: src/chrome/browser/ui/color/omnibox_color_mixer.cc
+===================================================================
+--- src.orig/chrome/browser/ui/color/omnibox_color_mixer.cc
++++ src/chrome/browser/ui/color/omnibox_color_mixer.cc
+@@ -8,6 +8,7 @@
+ #include "base/strings/string_number_conversions.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/color/chrome_color_provider_utils.h"
++#include "chrome/browser/ui/helium/arc_composer.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "ui/base/ui_base_features.h"
+ #include "ui/color/color_id.h"
+@@ -505,6 +506,25 @@ void AddOmniboxColorMixer(ui::ColorProvi
+   mixer[kColorOmniboxComposeboxFaviconBackground] = {
+       kColorOmniboxComposeboxChipBackground};
+   mixer[kColorOmniboxForegroundDisabled] = {kColorOmniboxTextDimmed};
++
++  // helium-fork r8.6: the Arc shell's two measured greys. `Dia:` puts its
++  // resting placeholder AND the magnifier beside it at (152,153,153) on a
++  // (254,255,255) card, and its "Hold ⌘ to switch" row hint one step lighter
++  // again at (187,188,188) (both measured 2026-08-22 off the live window).
++  // r8.5 used kColorOmniboxTextDimmed here, which measures L71 on our card --
++  // the reference then was `Arc:` at L125, and the user has since pointed at
++  // Dia ("示意文字的灰度也参考Dia", 2026-08-22).
++  //
++  // ⚠ Dark is UNMEASURED -- `Dia:` has only ever been captured light -- so it
++  // keeps upstream's dimmed id rather than an invented number.
++  mixer[kColorOmniboxArcComposerHint] = ui::SelectBasedOnDarkInput(
++      kColorOmniboxResultsBackground,
++      /*output_for_dark_input=*/kColorOmniboxTextDimmed,
++      /*output_for_light_input=*/helium::kArcComposerHintColor);
++  mixer[kColorOmniboxArcRowActionHint] = ui::SelectBasedOnDarkInput(
++      kColorOmniboxResultsBackground,
++      /*output_for_dark_input=*/kColorOmniboxTextDimmed,
++      /*output_for_light_input=*/helium::kArcComposerRowActionHintColor);
+   mixer[kColorOmniboxComposeboxPrimaryAction] = ui::SelectBasedOnDarkInput(
+       kColorOmniboxResultsBackground, gfx::kGoogleBlue200, gfx::kGoogleBlue600);
+   mixer[kColorOmniboxComposeboxSubmitButtonBackground] = {
+@@ -518,4 +538,40 @@ void AddOmniboxColorMixer(ui::ColorProvi
+ 
+   // Apply specific baseline colors for the composebox submit button.
+   ApplyComposeboxBaselineColors(mixer, key);
++
++  // helium-fork r8.6: and last, the two list colours the Arc shell reads off
++  // `Dia:` rather than off GM3 -- the user asked for the composer's list to be
++  // Dia's, item for item ("基本上，中央框的所有UI和交互可以一比一复刻dia",
++  // 2026-08-22). Both measured 2026-08-22 on a (254,255,255) card:
++  //
++  //   selected/hovered row   `Dia:` (225,226,227)  ours was L242 -- Dia's
++  //                          selection is twice the contrast of GM3's
++  //                          hover-on-subtle wash, and at a 40pt row pitch the
++  //                          weaker one stops reading as a selection at all.
++  //   suggestion URL         `Dia:` (100,105,116)  ours was kColorSysPrimary,
++  //                          i.e. blue. Dia writes the URL half of a row in
++  //                          grey and lets the title carry the row.
++  //
++  // Placed after every upstream pass on purpose: ApplyGM3OmniboxTextColor and
++  // ApplyOmniboxCR2023Colors both assign these, so anything earlier would be
++  // silently overwritten (this file assigns kColorOmniboxResultsUrl three times
++  // already).
++  //
++  // ⚠ Light only, again: `Dia:` has never been captured dark. In dark mode the
++  // recipes above stand, which is why this is a SelectBasedOnDarkInput rather
++  // than a flat assignment.
++  // ⚠ `+=`, not `=`: a recipe that names its own id would recurse. Chaining
++  // hands the previous result in as the transform's input, and
++  // ui::FromTransformInput() is how the dark branch says "keep it".
++  mixer[kColorOmniboxResultsBackgroundHovered] += ui::SelectBasedOnDarkInput(
++      kColorOmniboxResultsBackground,
++      /*output_for_dark_input=*/ui::FromTransformInput(),
++      /*output_for_light_input=*/helium::kArcListRowSelectedColor);
++  mixer[kColorOmniboxResultsBackgroundSelected] = {
++      kColorOmniboxResultsBackgroundHovered};
++  mixer[kColorOmniboxResultsUrl] += ui::SelectBasedOnDarkInput(
++      kColorOmniboxResultsBackground,
++      /*output_for_dark_input=*/ui::FromTransformInput(),
++      /*output_for_light_input=*/helium::kArcListUrlColor);
++  mixer[kColorOmniboxResultsUrlSelected] = {kColorOmniboxResultsUrl};
+ }
+Index: src/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/metrics/field_trial_params.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_composer.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/omnibox/omnibox_theme.h"
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+@@ -598,7 +599,24 @@ int OmniboxMatchCellView::GetImageIndent
+   // b) Entities, answers, and icons continue to be center-aligned.
+   // c) Regardless of the state of those other features and their widths.
+   // This applies to both touch-UI and non-touch-UI.
+-  int indent = 3 + kUniformRowHeightIconSize / 2 - kImageBoundsWidth / 2;
++  // helium-fork r8.6: `Dia:`'s column instead of upstream's. This value is a
++  // coordinate in the CELL's own space and is deliberately NOT offset by
++  // GetInsets() (see the comment above), so the glyph lands at
++  //
++  //     row inset + indent + (image box - glyph) / 2
++  //
++  // from the panel's left edge. Upstream's `3 + kUniformRowHeightIconSize / 2 -
++  // kImageBoundsWidth / 2` = -3 puts that at 4 - 3 + 12 = 13; `Dia:` measured
++  // 2026-08-22 stands at 21.5, and that column is also where the composer's own
++  // leading icon has to be for the box's height to solve
++  // (helium/arc_composer.h). Solving the line above for `indent` gives 2.
++  //
++  // ⚠ Do NOT fold kMarginLeft into this -- the image ignores the cell's insets,
++  // and including it lands the column 7pt short (measured on out/Default, first
++  // attempt at this line).
++  int indent = helium::kArcComposerListIconInset -
++               helium::kArcComposerListRowInset -
++               (kImageBoundsWidth - helium::kArcComposerIconSize) / 2;
+ 
+   indent += omnibox_feature_configs::AdjustOmniboxIndent()
+                 .Get()
+@@ -608,7 +626,11 @@ int OmniboxMatchCellView::GetImageIndent
+ }
+ 
+ int OmniboxMatchCellView::GetTextIndent() const {
+-  return 30;
++  // helium-fork r8.6: `Dia:`'s text column, measured 2026-08-22 at 50.5pt from
++  // the card's left edge (upstream's 30 lands ours at 38). Measured from the
++  // cell's contents box, which starts kMarginLeft inside the row.
++  return helium::kArcComposerListTextInset - helium::kArcComposerListRowInset -
++         kMarginLeft;
+ }
+ 
+ void OmniboxMatchCellView::SetTailSuggestCommonPrefixWidth(
+Index: src/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.h
++++ src/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_OMNIBOX_OMNIBOX_MATCH_CELL_VIEW_H_
+ 
+ #include "base/memory/raw_ptr.h"
++#include "chrome/browser/ui/helium/arc_composer.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/views/view.h"
+ 
+@@ -34,7 +35,12 @@ class OmniboxMatchCellView : public view
+ 
+   // The height of the standard 1-line match row. Multiline & IPH matches have
+   // larger heights.
+-  static constexpr int kRowHeight = 28;
++  // helium-fork r8.6: `Dia:`'s selected band, measured 2026-08-22 at 36pt
++  // inside a 40pt pitch (the 2pt above and below come from
++  // OmniboxRowView::GetInsets()). Upstream is 28 in a 30pt pitch, which against
++  // the composer's 60pt box read as "搜索列表每个搜索结果的高度又这么矮，很不
++  // 协调" (user 2026-08-21). See helium/arc_composer.h for the whole set.
++  static constexpr int kRowHeight = helium::kArcComposerListRowHeight;
+ 
+   // The width of icon, answer, and entity image bounds. These images are
+   // smaller than this bounds; they'll be centered within the bounds.
+Index: src/chrome/browser/ui/views/omnibox/omnibox_result_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_result_view.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_result_view.cc
+@@ -367,13 +367,27 @@ void OmniboxResultView::SetMatch(const A
+   // that looks better when there's not room for both. But in the normal case,
+   // we want to scale the suggestion text to zero since an elided suggestion
+   // still provides useful information.
++  //
++  // helium-fork r8.6: and `kUnbounded` rather than `kPreferred` as the maximum,
++  // which is what pushes the action row to the RIGHT edge of the panel. `Dia:`
++  // writes "Hold ⌘ to switch →" hard against its right edge (measured
++  // 2026-08-22: the hint ends 19.5pt inside a card whose text column starts at
++  // 50), where upstream parks the chip immediately after the suggestion's own
++  // text. The button row still takes its width first (order 1 above), so this
++  // only hands the leftovers to the text instead of leaving them in the middle.
++  // ⚠ And the orientation has to be spelled out, exactly as the sibling
++  // comment 200 lines up says: the two-argument FlexSpecification applies to
++  // BOTH axes, so an unbounded maximum without it stretches the row's height
++  // as well as its width. Measured on out/Default before this line was fixed:
++  // a single suggestion filled a ~200pt band.
+   suggestion_view_->SetProperty(
+       views::kFlexBehaviorKey,
+       views::FlexSpecification(
++          views::LayoutOrientation::kHorizontal,
+           match_.IsToolbelt()
+               ? views::MinimumFlexSizeRule::kPreferredSnapToMinimum
+               : views::MinimumFlexSizeRule::kScaleToMinimum,
+-          views::MaximumFlexSizeRule::kPreferred)
++          views::MaximumFlexSizeRule::kUnbounded)
+           .WithOrder(2));
+ 
+   suggestion_view_->OnMatchUpdate(this, match_);
+Index: src/chrome/browser/ui/views/omnibox/omnibox_row_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_row_view.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_row_view.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/strings/string_number_conversions.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_composer.h"
+ #include "chrome/browser/ui/omnibox/omnibox_controller.h"
+ #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
+ #include "chrome/browser/ui/omnibox/omnibox_theme.h"
+@@ -106,7 +107,20 @@ views::View* OmniboxRowView::GetActiveAu
+ }
+ 
+ gfx::Insets OmniboxRowView::GetInsets() const {
+-  return gfx::Insets::TLBR(2, 4, 0, 4);
++  // helium-fork r8.6: the Arc shell's list is `Dia:`'s, measured 2026-08-22 --
++  // a 36pt selected band inset 7.5 a side inside a 40pt pitch (upstream: 28 in
++  // a 30pt pitch, inset 4). The numbers live in helium/arc_composer.h because
++  // they are one measurement with the composer box's height: its icon column
++  // and this row's icon column have to be the same column, and that is what
++  // fixes the box's height (see the static_assert there).
++  //
++  // Unconditional, not composer-only: this shell has exactly one popup and it
++  // wears the same panel in all three hosts (band, sidebar row, composer), so a
++  // list that changed shape between them would be the thing that looks wrong.
++  return gfx::Insets::TLBR(helium::kArcComposerListRowGap,
++                           helium::kArcComposerListRowInset,
++                           helium::kArcComposerListRowGap,
++                           helium::kArcComposerListRowInset);
+ }
+ 
+ BEGIN_METADATA(OmniboxRowView)
+Index: src/chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.cc
+@@ -195,7 +195,18 @@ class OmniboxSuggestionButtonRowLayout :
+     // allowed to expand.
+     int total_width_used = GetMinimumSize(host).width();
+ 
+-    const int y = row_insets_.top() + button_insets_.top();
++    // helium-fork r8.6b: centred, not pinned to the top. Upstream's host is
++    // its own row underneath the suggestion and is sized to exactly this
++    // content, so `slack` is 0 there and this is the same line it always was.
++    // In the Arc shell the row action shares the suggestion's band (r8.6 gave
++    // suggestion_view_ an unbounded horizontal maximum so the action lands on
++    // the right edge, `Dia:`-style), which stretches this host to the band's
++    // full 36pt while the button stays 21 -- and top-pinning then reads as
++    // "the text is not vertically centred", measured 4pt high off the user's
++    // capture (band 160..231, pill 167..208 device px, 2026-08-22).
++    const int slack =
++        std::max(0, host_size.height() - GetPreferredSize(host).height());
++    const int y = row_insets_.top() + button_insets_.top() + slack / 2;
+     int current_x = row_insets_.left();
+     bool allow_expansion = true;
+     // This loop positions the visible children one by one, checking to see if
+@@ -358,16 +369,20 @@ class OmniboxSuggestionRowButton : publi
+       SetImageModel(views::Button::STATE_NORMAL,
+                     ui::ImageModel::FromImage(image_));
+     } else {
+-      SetImageModel(
+-          views::Button::STATE_NORMAL,
+-          ui::ImageModel::FromVectorIcon(
+-              *icon_,
+-              selected ? kColorOmniboxResultsButtonIconSelected
+-                       : kColorOmniboxResultsButtonIcon,
+-              GetLayoutConstant(LayoutConstant::kLocationBarIconSize)));
++      // helium-fork r8.6b: no icon at all. `Dia:` writes its row action as a
++      // bare right-aligned phrase ("Hold ⌘ to switch", measured 2026-08-22:
++      // grey (187,188,188), no glyph, no outline), and the user asked for the
++      // same by name -- "这段文字前的图标不需要" (2026-08-22). r8.6 had already
++      // taken the outline off and tinted the glyph down to the hint grey; the
++      // glyph itself is what is left.
++      //
++      // ⚠ Empty, not "some transparent icon": LabelButton only reserves the
++      // image column and SetImageLabelSpacing()'s 6pt when there is an image,
++      // so this is also what closes the gap ahead of the text.
++      SetImageModel(views::Button::STATE_NORMAL, ui::ImageModel());
+     }
+-    SetEnabledTextColors(color_provider->GetColor(
+-        selected ? kColorOmniboxResultsTextSelected : kColorOmniboxText));
++    SetEnabledTextColors(
++        color_provider->GetColor(kColorOmniboxArcRowActionHint));
+     ConfigureInkDropForRefresh2023(
+         this,
+         /*hover_color_id=*/
+@@ -376,21 +391,52 @@ class OmniboxSuggestionRowButton : publi
+         /*ripple_color_id=*/
+         selected ? kColorOmniboxResultsButtonInkDropSelectedRowSelected
+                  : kColorOmniboxResultsButtonInkDropSelectedRowHovered);
++    // helium-fork r8.6b: the hover highlight goes UP, not down -- the ink
++    // drop's is a wash of the row's own foreground and it can only darken.
++    // UpdateBackgroundColor() owns the hover look instead; the ripple is left
++    // alone, because a press is supposed to read as a press.
++    //
++    // ⚠ SetShowHighlightOnHover(false), not SetHighlightOpacity(0):
++    // ConfigureInkDropForRefresh2023() installs its own
++    // SetCreateHighlightCallback that derives the opacity from the colour's
++    // alpha and never reads highlight_opacity_. Measured with the opacity
++    // version in: the pill hovered to (242,242,242), i.e. white with the ink
++    // drop's 5% still on top of it. OmniboxSuggestionRowChip in this same file
++    // turns it off exactly this way.
++    views::InkDrop::Get(this)->GetInkDrop()->SetShowHighlightOnHover(false);
+ 
+     views::FocusRing::Get(this)->SchedulePaint();
+   }
+ 
+   void UpdateBackgroundColor() override {
++    // helium-fork r8.6: no outline. `Dia:` writes its row action as plain
++    // right-aligned grey text -- "'Switch to this tab' 也要像[Dia]一样放在右侧，
++    // 且没有外边框" (user 2026-08-22). The ink drop stays, so hover and press
++    // still answer; it is only the resting outline that goes.
++    //
++    // ⚠ The FILL stays, and it is not decoration: it is the row's own colour,
++    // so it is invisible, and views::Label DCHECKs that subpixel-rendered text
++    // has an opaque background somewhere up its ancestry. The first version of
++    // this dropped the background entirely, the walk reached
++    // OmniboxSuggestionButtonRowView's LAYER_NOT_DRAWN layer, and out/Default
++    // aborted the moment a switch-to-tab row appeared (crash 2026-08-22
++    // 01:34:47, Label::PaintText).
++    //
++    // helium-fork r8.6b: and on hover the capsule LIGHTENS to the card's own
++    // white instead of darkening -- "鼠标移到这段文字时，背景胶囊做成高亮的，而
++    // 不是暗下去" (user 2026-08-22). Reaching the button means the pointer is
++    // already inside the row, so the row is at least HOVERED and its band is
++    // never white: the pill always has something to lift off. The ink drop's
++    // highlight is switched off in OnThemeChanged() so the two do not fight.
+     const auto* const color_provider = GetColorProvider();
+-    const SkColor stroke_color =
+-        color_provider->GetColor(kColorOmniboxResultsButtonBorder);
+-    const SkColor fill_color =
+-        color_provider->GetColor(GetOmniboxBackgroundColorId(theme_state_));
+-    SetBackground(CreateBackgroundFromPainter(
+-        views::Painter::CreateRoundRectWith1PxBorderPainter(
+-            fill_color, stroke_color, GetCornerRadii(), SkBlendMode::kSrcOver,
+-            /*antialias=*/true,
+-            /*should_border_scale=*/true)));
++    const bool lifted = GetVisualState() == views::Button::STATE_HOVERED ||
++                        GetVisualState() == views::Button::STATE_PRESSED;
++    SetBackground(views::CreateRoundedRectBackground(
++        color_provider->GetColor(lifted
++                                     ? kColorOmniboxResultsBackground
++                                     : GetOmniboxBackgroundColorId(
++                                           theme_state_)),
++        GetCornerRadii()));
+   }
+ 
+   void SetIcon(const gfx::VectorIcon& icon) {

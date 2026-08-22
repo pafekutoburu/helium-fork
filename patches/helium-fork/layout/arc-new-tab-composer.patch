@@ -1,0 +1,3902 @@
+Index: src/chrome/app/vector_icons/BUILD.gn
+===================================================================
+--- src.orig/chrome/app/vector_icons/BUILD.gn
++++ src/chrome/app/vector_icons/BUILD.gn
+@@ -83,6 +83,7 @@ aggregate_vector_icons("chrome_vector_ic
+     "chevron_right_old.icon",
+     "chrome_minimize.icon",
+     "chrome_product.icon",
++    "chrome_product_hollow.icon",
+     "chromium_minimize_old.icon",
+     "circle_circle_filled.icon",
+     "circle_filled.icon",
+Index: src/chrome/app/vector_icons/chrome_product_hollow.icon
+===================================================================
+--- /dev/null
++++ src/chrome/app/vector_icons/chrome_product_hollow.icon
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++// helium-fork r8.5: the product mark as a filled rounded square with the
++// snowflake KNOCKED OUT of it -- "logo要改成圆角矩形，镂空的雪花，就是现在这个
++// 雪花形式的反相" (user 2026-08-21).
++//
++// ⚠ The hole is made by winding, not by a fill rule: the .icon format only
++// speaks FILL_RULE_NONZERO (ui/gfx/vector_icon_types.h), and Skia's addRRect
++// runs clockwise, so the snowflake below is the chrome_product.icon path
++// scaled to 0.755 about the centre and listed in REVERSE order. Same-direction
++// winding would fill it in solid instead.
++
++CANVAS_DIMENSIONS, 56,
++FILL_RULE_NONZERO,
++ROUND_RECT, 0, 0, 56, 56, 14.7f,
++MOVE_TO, 30.14f, 31.7f,
++LINE_TO, 41.21f, 40.14f,
++LINE_TO, 45.67f, 38.19f,
++LINE_TO, 45.13f, 33.35f,
++LINE_TO, 32.28f, 28,
++LINE_TO, 45.13f, 22.65f,
++LINE_TO, 45.67f, 17.81f,
++LINE_TO, 41.21f, 15.86f,
++LINE_TO, 30.14f, 24.3f,
++LINE_TO, 31.92f, 10.51f,
++LINE_TO, 28, 7.61f,
++LINE_TO, 24.08f, 10.51f,
++LINE_TO, 25.86f, 24.3f,
++LINE_TO, 14.79f, 15.86f,
++LINE_TO, 10.33f, 17.81f,
++LINE_TO, 10.87f, 22.65f,
++LINE_TO, 23.72f, 28,
++LINE_TO, 10.87f, 33.35f,
++LINE_TO, 10.33f, 38.19f,
++LINE_TO, 14.79f, 40.14f,
++LINE_TO, 25.86f, 31.7f,
++LINE_TO, 24.08f, 45.49f,
++LINE_TO, 28, 48.39f,
++LINE_TO, 31.92f, 45.49f,
++CLOSE
+Index: src/chrome/browser/resources/new_tab_page/app.css
+===================================================================
+--- src.orig/chrome/browser/resources/new_tab_page/app.css
++++ src/chrome/browser/resources/new_tab_page/app.css
+@@ -299,6 +299,12 @@ ntp-middle-slot-promo:not([hidden]) ~ #m
+ #customizeButtons {
+   bottom: 16px;
+   position: fixed;
++  /* helium-fork r8.1: gone with the shortcuts. It is the entry point to
++     customising a page that no longer has anything to customise -- the new tab
++     page is the centred search box and nothing else (user 2026-08-21). Hidden
++     in CSS rather than gated in app.html so an upstream sync of the template
++     cannot silently bring it back without conflicting here first. */
++  display: none;
+ }
+ 
+ :host-context([dir='ltr']) #customizeButtons {
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -378,6 +378,7 @@ static_library("ui") {
+     "helium/arc_band_tint_store.h",
+     "helium/arc_caption_opacity.h",
+     "helium/arc_card_layout.h",
++    "helium/arc_composer.h",
+     "helium/arc_favorite_accent.h",
+     "helium/arc_loading_bar.h",
+     "helium/arc_media_strip.h",
+@@ -4028,6 +4029,8 @@ static_library("ui") {
+       # helium-fork: the Arc card's outline.
+       "views/frame/arc_card_outline_view.cc",
+       "views/frame/arc_card_outline_view.h",
++      "views/frame/arc_composer_host_view.cc",
++      "views/frame/arc_composer_host_view.h",
+       "views/frame/arc_loading_bar_view.cc",
+       "views/frame/arc_loading_bar_view.h",
+       "views/frame/arc_omnibox_panel_view.cc",
+@@ -6037,6 +6040,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_caption_opacity_unittest.cc",
+     "helium/arc_card_layout.h",
+     "helium/arc_card_layout_unittest.cc",
++    "helium/arc_composer.h",
++    "helium/arc_composer_unittest.cc",
+     "helium/arc_favorite_accent.h",
+     "helium/arc_favorite_accent_unittest.cc",
+     "helium/arc_loading_bar.h",
+Index: src/chrome/browser/ui/helium/arc_composer.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_composer.h
+@@ -0,0 +1,311 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_COMPOSER_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_COMPOSER_H_
++
++#include <algorithm>
++
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/geometry/rect.h"
++
++// helium-fork: the geometry of the Arc shell's new tab composer -- the search
++// box that sits in the middle of a blank new tab and is the only place that
++// page has for typing.
++//
++// Why it exists at all, in the user's words (2026-08-21), because it is the
++// whole argument for the module and not a detail:
++//
++//   "我对 new tab 这个界面，把搜索框放到页面中央的理解，就是为了削弱顶部地址栏
++//    的存在。有了这个中央面板的存在之后，用户基本上百分之九十的时间都是在这个
++//    输入框去操作的……我实际在使用 arc/dia 中也是这个感受，几乎没有点击过顶部的
++//    地址栏。而且从实际使用中来讲，把搜索框放到页面的中央，当然是比每次把鼠标
++//    移到窗口最上部更方便。"
++//
++// So this is not a second address bar. It is THE address bar for that page:
++// the band's capsule is not merely hidden there, the field itself has moved
++// (see ShouldHostFieldInComposer in arc_toolbar_host.h), which is why Cmd+L
++// lands here and the band never flashes a capsule.
++//
++// `Dia:` measured 2026-08-21 (window 1728x1084pt, burst captures, screencapture
++// only): card 651x111 at radius ~20, horizontally centred on the CONTENT area
++// (not the window -- its centre landed 2.3pt off the content area's and 134.5pt
++// off the window's), card top at 33.5% of the window's height, white
++// (254,255,255). Typing does not move it: the box stays put and grows
++// downwards, 111 -> 379 at six suggestions.
++//
++// Three deliberate departures, all the user's (the first two restated at
++// r8.4 acceptance, 2026-08-21):
++//
++//   * `Dia:` has two rows -- the input, and an AI attachment bar ("+ Add tabs
++//     or files / ... / mic / Go"). We copy ONE (M3.5, restated 2026-08-21):
++//     every control on that row is a feature we do not have, so building it
++//     means a row of dead buttons.
++//   * And therefore NOT Dia's height. r8.3 kept Dia's 111/651 proportion even
++//     with one row, which at a wide window made a 114pt card with a 44pt row
++//     floating in the middle of it: "搜索胶囊在这个悬浮面板的中间很奇怪,它应该
++//     是在靠上第一行的位置。" The box is now the row plus its padding, full
++//     stop. When a second row does arrive, the height grows by that row -- the
++//     user's own framing: "以后需要做两行的时候再动高度吧".
++//   * The width is a CONSTANT, not a fraction of the content area (r8.4
++//     reversal of r8.3's ratio; the r8.3 acceptance list had flagged the
++//     narrow-window shrink as the price of the ratio and it was the first
++//     thing the user cut): "搜索框的宽度做成固定长度。当网页的窗口缩小到搜索框
++//     固定宽度之后继续缩小的时候,搜索框的宽度才开始变小。"
++//
++// Header-only and free of //ui/views so it can be linked into the lightweight
++// test target (see PROGRESS.md on why anything reaching TestingProfile cannot
++// be built in this tree).
++namespace helium {
++
++// The box's width. `Dia:` measured 651 at a 1728pt window and we take that
++// literally now -- it does not follow the content area. Only when the content
++// area can no longer hold it (plus a margin a side so the card never touches
++// the page's edges) does it give way.
++inline constexpr int kArcComposerWidth = 651;
++inline constexpr int kArcComposerMinSideMargin = 16;
++
++// Below this the box has stopped being a place to type. Nothing in the shell
++// gets this narrow in practice; the floor exists so a transient one-pixel
++// content area cannot produce a negative width.
++inline constexpr int kArcComposerMinWidth = 240;
++
++// ⚠ r8.6b: the anchor is the box's BOTTOM EDGE, and it sits HALF A BOX-HEIGHT
++// above the content area's half-way line -- "中央框和logo这个整体UI，这两个元素
++// 整体再往上走，差不多输入框高度的一半" (user 2026-08-22), applied on top of
++// r8.6a's rule, which had put that same edge exactly on the line:
++//
++//   "我觉得视觉上居中，你试试面板最下沿刚好在垂直高度的百分之五十处。也就是
++//    logo+搜索面板，这两个元素整体都在页面的上半部分。" (2026-08-22)
++//
++// So the whole group lives in the top half and then some. This is the fourth
++// rule in four rounds -- r8.5 centred the box, r8.6 centred the group (logo top
++// to box bottom), r8.6a put the box's bottom on the line -- and every step has
++// been upwards, which is the usual outcome of centring something the eye reads
++// as a heading.
++//
++// ⚠ `Dia:` is a fourth answer again (group centre at 35.4% of the window, i.e.
++// its card's bottom edge at 43.7%), and it is not copied here: Dia's new tab
++// page carries a headline, two connect cards and a full-width image below the
++// composer, and ours carries nothing.
++
++// The box's corner radius. `Dia:` fits R=40 device px, the same arc as the
++// band's edit panel -- one shell, one radius for "a white surface you type
++// into".
++inline constexpr int kArcComposerRadius = 20;
++
++// ⚠ The box's height is SOLVED, not chosen, and these are the constraints that
++// solve it -- the user's, stated at r8.5 and unchanged:
++//
++//   "搜索框中的icon要和搜索列表的icon对齐……要注意左边的icon距离搜索框上/左/下的
++//    边距,尽量保持同样的边距,这样视觉上会很舒服" (2026-08-21)
++//
++// Two constraints: (a) the leading icon sits in the same column as the
++// suggestion list's icons, (b) its clear margin is the same on the left, the
++// top and the bottom. Together they leave exactly one height:
++//
++//     box height = icon + 2 * icon margin
++//
++// r8.5 read the margin off Chromium's stock suggestion row (13) and got a 42pt
++// box, which the user rejected as too flat ("高度又过矮了一些"). r8.6 reads it
++// off `Dia:` instead and moves the LIST to match -- which is the only way all
++// three of the user's asks can hold at once, since Dia's own list is indented
++// exactly this far.
++//
++// `Dia:` measured 2026-08-22 off the live window (1728x1084pt, resting new tab
++// and the same tab with six suggestions, screencapture only):
++//
++//   card               673.0..1323.5 x 363.5..474.5  = 650.5 x 111 (two rows)
++//   magnifier glyph    696.0..709.5 x 386.5..400.5   -> centre (702.75, 393.5)
++//   centre from left   702.75 - 673.0 = 29.75
++//   centre from top    393.5  - 363.5 = 30.0        <- the same number
++//   first suggestion   row band starts 423 -> 59.5 below the card's top
++//
++// So Dia's own "non-result section" is 59.5 tall, i.e. what its card would
++// measure with the second row removed -- 2 * 29.75 = 59.5, the same solve. We
++// take 22 (=(60-16)/2) and 60. `Arc:` satisfies the identical rule at its own
++// scale (icons at 25.0 from the card edge, non-result section 66 = 16 + 2*25,
++// measured 2026-08-21), which is the check that this is a rule and not a
++// coincidence in one browser.
++//
++// Ratio check, the r8.5 complaint ("搜索框的高度这么高，搜索列表每个搜索结果的
++// 高度又这么矮，很不协调"): box/row is 60/40 = 1.50 here, `Dia:` 59.5/40 = 1.49,
++// `Arc:` 66/50 = 1.32. r8.4's 68/30 = 2.27 was the disproportion he reported.
++inline constexpr int kArcComposerIconSize = 16;
++inline constexpr int kArcComposerIconInset = 22;
++
++// ⚠ Chromium's, not ours: LocationBarView lays its leading decoration out at
++// x+2, and LocationIconView centres a 16pt image in a 24pt bubble, so the
++// glyph lands 6pt inside the field. The field's own inset has to give that
++// back for the icon to reach kArcComposerIconInset.
++inline constexpr int kArcComposerFieldLeadingIconOffset = 6;
++inline constexpr int kArcComposerFieldInset =
++    kArcComposerIconInset - kArcComposerFieldLeadingIconOffset;
++
++// The row fills the box, and the icon centres itself in the row.
++//
++// ⚠ r8.6b: the solve above (16 + 2*22 = 60) is now the STARTING point, not the
++// answer -- the user took five per cent off it by hand: "输入框的高度在现在的
++// 基础上矮百分之五" (2026-08-22). 60 * 0.95 = 57.
++//
++// The cost, stated rather than buried: the icon's clear margin is 22 to the
++// left (the column the list stands in, `Dia:` 21.5) but (57 - 16) / 2 = 20.5
++// above and below, so the "same margin on three sides" that solved the height
++// is off by 1.5pt where `Dia:` holds it to 0.25 (29.75 / 30.0, measured
++// 2026-08-22). The HORIZONTAL column is the one the static_assert below
++// protects and it has not moved, so the list still stands in the box's column
++// -- which was the user's first constraint and is the one that shows.
++inline constexpr int kArcComposerFieldHeight = 57;
++static_assert(kArcComposerFieldHeight <
++                  kArcComposerIconSize + 2 * kArcComposerIconInset,
++              "r8.6b trims the solved height; if this ever inverts, the box is "
++              "taller than its own solve and the comment above is stale");
++
++// == The suggestion list's own metrics, which are the same measurement ==
++//
++// The box's height only solves if the list's icons stand in the box's icon
++// column, and Chromium's stock row puts them at 13 (row inset 4 + cell margin
++// 4 + image indent -3 + 12 to centre a 16pt image in a 40pt image box). r8.5
++// took that as given and shrank the box to fit it; the user's answer was that
++// the box is too flat and that the list should be Dia's, so from r8.6 the list
++// moves instead. Every number below is `Dia:`, measured 2026-08-22 off the same
++// two captures as the box:
++//
++//   selected row band  680.5..1316.5 x 425..461   -> inset 7.5 a side, 36 tall
++//   row pitch          40.0 (five gaps between six favicon centres)
++//   row favicon        694.5..710.5                -> 21.5 from the card edge,
++//                                                     the SAME column as the
++//                                                     input row's magnifier
++//   row text           starts 723.5                -> 50.5 from the card edge
++//
++// These live here rather than in the omnibox views because they are one
++// measurement with the box's: kArcComposerListIconInset MUST equal
++// kArcComposerIconInset or the box's height stops being a solution. The
++// static_assert below is that invariant, not a style preference.
++inline constexpr int kArcComposerListRowHeight = 36;
++inline constexpr int kArcComposerListRowGap = 2;  // above and below, so pitch 40
++inline constexpr int kArcComposerListRowInset = 8;
++inline constexpr int kArcComposerListIconInset = 22;
++inline constexpr int kArcComposerListTextInset = 50;
++
++static_assert(kArcComposerListIconInset == kArcComposerIconInset,
++              "the list's icon column IS the box's icon column -- that is what "
++              "solves the box's height (see above)");
++static_assert(kArcComposerListRowInset < kArcComposerListIconInset,
++              "the icon sits inside the row band, not on its edge");
++
++// The pitch the eye reads: `Dia:` 40.0.
++inline constexpr int kArcComposerListRowPitch =
++    kArcComposerListRowHeight + 2 * kArcComposerListRowGap;
++
++// `Dia:`'s hint grey, measured 2026-08-22: the resting placeholder ("Ask
++// anything...") and the magnifier beside it are the SAME (152,153,153) on a
++// (254,255,255) card. r8.5 used kColorOmniboxTextDimmed (L71 measured on our
++// card) because the reference then was `Arc:` at L125; the user has since
++// pointed at Dia for this ("示意文字的灰度也参考Dia", 2026-08-22).
++//
++// ⚠ Light only. `Dia:` has never been captured dark, so the mixer falls back
++// to upstream's dimmed id there rather than inventing a number.
++inline constexpr SkColor kArcComposerHintColor =
++    SkColorSetRGB(0x98, 0x99, 0x99);
++
++// And the row action hint ("Hold ⌘ to switch") one step lighter again:
++// `Dia:` (187,188,188), measured 2026-08-22, right-aligned in the row with no
++// outline at all -- which is the part the user asked for by name ("'Switch to
++// this tab' 也要像[Dia]一样放在右侧，且没有外边框").
++inline constexpr SkColor kArcComposerRowActionHintColor =
++    SkColorSetRGB(0xBB, 0xBC, 0xBC);
++
++// The list's own two colours, same capture: the selected/hovered row band at
++// `Dia:` (225,226,227) -- twice GM3's wash on our card -- and the grey Dia
++// writes the URL half of a row in, `Dia:` (100,105,116), where Chromium uses
++// its primary blue.
++inline constexpr SkColor kArcListRowSelectedColor =
++    SkColorSetRGB(0xE1, 0xE2, 0xE3);
++inline constexpr SkColor kArcListUrlColor = SkColorSetRGB(0x64, 0x69, 0x74);
++
++// The product mark above the box. `Dia:` measured 2026-08-21 off the user's
++// own capture: a 50.0 x 41.0pt flat mark in neutral (219,219,219) on a
++// (248,247,247) page, centred on the card to within 0.05pt, its baseline
++// 29.5pt above the card's top edge.
++//
++// Ours is square where Dia's is wide, so 44 rather than 50 keeps a comparable
++// amount of ink. The user picked Dia's treatment over Helium's own blue app
++// icon: the mark is meant to be the quietest thing on the page.
++// ⚠ r8.6a: +20% on the user's ask ("logo的大小再放大百分之二十，我看看效果",
++// 2026-08-22). 44 * 1.2 = 52.8 -> 53.
++// ⚠ r8.6b: +10% again, same day ("logo再大百分之十"). 53 * 1.1 = 58.3 -> 58,
++// which now overshoots `Dia:`'s own 50.0 x 41.0 mark -- knowingly: ours is
++// square where Dia's is wide, so 58 square carries about the ink of a 50x41
++// wide mark plus a fifth.
++inline constexpr int kArcComposerLogoSize = 58;
++// ⚠ r8.5: doubled. 30 read as crowded once the box shrank -- "Logo和搜索框的
++// 位置现在有些近，再增加一倍的距离" (user 2026-08-21).
++inline constexpr int kArcComposerLogoGap = 60;
++
++// `Dia:`'s mark reads (219,219,219) against a (248,247,247) page. We take the
++// literal grey rather than a theme colour id: this is one mark on one page,
++// and every id near enough (disabled foreground, subtle icon) is defined
++// against a chrome surface, not against the web contents' own background.
++// ⚠ Dark themes are UNMEASURED -- `Dia:` was only ever captured light. Same
++// grey for now, flagged for the acceptance pass.
++inline constexpr SkColor kArcComposerLogoColor = SkColorSetRGB(0xDB, 0xDB, 0xDB);
++
++// Where the composer goes. `content_area` is the web contents' rect (the card
++// below the band) and `window_height` the browser window's own -- both in the
++// same space the caller will place the host in.
++//
++// Empty for an empty content area, which is the state during teardown and
++// before the first layout; a box derived from it would be a stripe at the
++// origin.
++// ⚠ `window_height` is no longer read (r8.5 centres on the content area);
++// kept so the one caller keeps failing loudly on a zero-height window rather
++// than placing a box in a window that has not been sized yet.
++inline gfx::Rect ArcComposerBounds(const gfx::Rect& content_area,
++                                   int window_height) {
++  if (content_area.IsEmpty() || window_height <= 0) {
++    return gfx::Rect();
++  }
++  int width = std::min(kArcComposerWidth,
++                       content_area.width() - 2 * kArcComposerMinSideMargin);
++  width = std::max(width, std::min(kArcComposerMinWidth, content_area.width()));
++  const int height = kArcComposerFieldHeight;
++  const int x = content_area.x() + (content_area.width() - width) / 2;
++  // The bottom edge half a box-height above the half-way line (see above), so
++  // the box's own top is one and a half boxes higher and the mark higher
++  // again. On a very short window the mark's top can fall above the content
++  // area -- it is dropped there rather than clipped, which BrowserView already
++  // handles.
++  const int y = content_area.y() + content_area.height() / 2 - height * 3 / 2;
++  return gfx::Rect(x, y, width, height);
++}
++
++// The input row inside the box: full width less kArcComposerFieldInset a side,
++// and the full height. It is still the FIRST row -- anchored at the top, so a
++// second one can be added underneath without this function moving.
++inline gfx::Rect ArcComposerFieldBounds(const gfx::Rect& box) {
++  if (box.IsEmpty()) {
++    return gfx::Rect();
++  }
++  const int width = std::max(0, box.width() - 2 * kArcComposerFieldInset);
++  const int height = std::min(kArcComposerFieldHeight, box.height());
++  return gfx::Rect(box.x() + kArcComposerFieldInset, box.y(), width, height);
++}
++
++// The product mark above the box: centred on it, sitting kArcComposerLogoGap
++// clear of its top edge. Deliberately NOT a child of the composer host -- the
++// host's local bounds are what the panel paints as the white card, so anything
++// added inside it makes the card taller.
++inline gfx::Rect ArcComposerLogoBounds(const gfx::Rect& box) {
++  if (box.IsEmpty()) {
++    return gfx::Rect();
++  }
++  return gfx::Rect(box.x() + (box.width() - kArcComposerLogoSize) / 2,
++                   box.y() - kArcComposerLogoGap - kArcComposerLogoSize,
++                   kArcComposerLogoSize, kArcComposerLogoSize);
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_COMPOSER_H_
+Index: src/chrome/browser/ui/helium/arc_composer_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_composer_unittest.cc
+@@ -0,0 +1,250 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_composer.h"
++
++#include <cstdlib>
++
++#include "testing/gtest/include/gtest/gtest.h"
++#include "ui/gfx/geometry/rect.h"
++
++namespace helium {
++namespace {
++
++// The measured baseline: our own window at 1728x1084 with the default sidebar,
++// where MultiContentsView reads (261,37) 1467x1047 -- the numbers the acceptance
++// probe checks against.
++constexpr int kWindowHeight = 1084;
++constexpr gfx::Rect kContentArea(261, 37, 1467, 1047);
++
++gfx::Rect Box() {
++  return ArcComposerBounds(kContentArea, kWindowHeight);
++}
++
++// The three numbers the user ruled on, pinned so a later "tidy-up" cannot
++// quietly drift them.
++TEST(ArcComposerTest, BoxIsTheMeasuredSize) {
++  EXPECT_EQ(651, Box().width());
++  EXPECT_EQ(57, Box().height());
++  // The box's BOTTOM EDGE is the anchor, and it lands HALF A BOX above the
++  // content area's half-way line -- see TheBoxesBottomEdgeSitsHalfABoxHigh.
++  EXPECT_EQ(kContentArea.y() + kContentArea.height() / 2 -
++                kArcComposerFieldHeight / 2,
++            Box().bottom());
++}
++
++// The width is a constant, NOT a fraction of the content area (r8.4 reversal;
++// r8.3 read `Dia:`'s single measurement as a ratio and the shrink at narrow
++// windows was the first thing the user cut). Widening the window past the
++// crossover must not widen the box by a single point.
++TEST(ArcComposerTest, WidthIsConstantUntilTheContentAreaRunsOut) {
++  for (int content_width : {700, 1139, 1467, 2200}) {
++    const gfx::Rect content(261, 37, content_width, 1047);
++    SCOPED_TRACE(testing::Message() << "content_width=" << content_width);
++    EXPECT_EQ(kArcComposerWidth,
++              ArcComposerBounds(content, kWindowHeight).width());
++  }
++}
++
++// "当网页的窗口缩小到搜索框固定宽度之后继续缩小的时候,搜索框的宽度才开始变小"
++// -- below the crossover it gives way, keeping kArcComposerMinSideMargin a
++// side, and it never outgrows the content area it sits in.
++TEST(ArcComposerTest, WidthGivesWayOnlyBelowTheCrossover) {
++  constexpr int kCrossover = kArcComposerWidth + 2 * kArcComposerMinSideMargin;
++  EXPECT_EQ(kArcComposerWidth,
++            ArcComposerBounds(gfx::Rect(0, 0, kCrossover, 1047), kWindowHeight)
++                .width());
++
++  int previous = kArcComposerWidth;
++  for (int content_width : {kCrossover - 1, 600, 500, 400}) {
++    const gfx::Rect content(0, 0, content_width, 1047);
++    const gfx::Rect box = ArcComposerBounds(content, kWindowHeight);
++    SCOPED_TRACE(testing::Message() << "content_width=" << content_width);
++    EXPECT_EQ(content_width - 2 * kArcComposerMinSideMargin, box.width());
++    EXPECT_LT(box.width(), previous);
++    previous = box.width();
++  }
++
++  // The floor keeps a transient sliver of a content area from producing a
++  // negative width, and the box never spills out of the content area.
++  for (int content_width : {200, 40, 1}) {
++    const gfx::Rect content(0, 0, content_width, 1047);
++    const gfx::Rect box = ArcComposerBounds(content, kWindowHeight);
++    SCOPED_TRACE(testing::Message() << "content_width=" << content_width);
++    EXPECT_GT(box.width(), 0);
++    EXPECT_LE(box.width(), content_width);
++  }
++}
++
++// The height is the row plus its padding and nothing else -- it does not move
++// with the width, and it does not carry Dia's two-row proportion. r8.3 did
++// carry it, which put a 44pt row in the middle of a 114pt card: "搜索胶囊在这个
++// 悬浮面板的中间很奇怪" (user 2026-08-21).
++TEST(ArcComposerTest, HeightIsTheSolveLessFivePerCent) {
++  // The solve: height is icon + 2*margin, and the margin is the column the
++  // suggestion rows put their icons in -- `Dia:`'s 21.5, taken as 22 (measured
++  // 2026-08-22; r8.5 used Chromium's stock 13 and the box came out too flat).
++  constexpr int kSolved = kArcComposerIconSize + 2 * kArcComposerIconInset;
++  EXPECT_EQ(60, kSolved);
++  // ...and then r8.6b's five per cent off it by hand ("输入框的高度在现在的基础
++  // 上矮百分之五", user 2026-08-22). Pinned as the arithmetic rather than as a
++  // literal so that moving the icon column still moves the box.
++  EXPECT_EQ(kSolved * 95 / 100, kArcComposerFieldHeight);
++  for (int content_width : {400, 839, 1467, 2200}) {
++    const gfx::Rect box = ArcComposerBounds(
++        gfx::Rect(261, 37, content_width, 1047), kWindowHeight);
++    SCOPED_TRACE(testing::Message() << "content_width=" << content_width);
++    EXPECT_EQ(kArcComposerFieldHeight, box.height());
++  }
++}
++
++// The leading icon lands in the suggestion list's column: the field's own
++// inset gives back exactly the 6pt LocationBarView + LocationIconView put in
++// front of the glyph.
++TEST(ArcComposerTest, LeadingIconLandsInTheListsColumn) {
++  const gfx::Rect box = Box();
++  const gfx::Rect field = ArcComposerFieldBounds(box);
++  const int glyph_left =
++      field.x() + kArcComposerFieldLeadingIconOffset - box.x();
++  EXPECT_EQ(kArcComposerIconInset, glyph_left);
++  // ⚠ The margin above and below is NO LONGER the same number -- r8.6b's five
++  // per cent came off the height alone, so the glyph clears 22 to its left and
++  // (57-16)/2 = 20 above and below. `Dia:` holds all three equal (29.75/30.0,
++  // measured 2026-08-22); this is the one place we knowingly do not. Pinned so
++  // the gap stays exactly this and does not widen unnoticed.
++  EXPECT_EQ(20, (field.height() - kArcComposerIconSize) / 2);
++  EXPECT_EQ(2, kArcComposerIconInset -
++                   (field.height() - kArcComposerIconSize) / 2);
++}
++
++// Centred on the content area, not on the window. `Dia:` its centre landed
++// 2.3pt off the content area's and 134.5pt off the window's -- that difference
++// is the sidebar, and it is the whole reason this takes a content rect.
++TEST(ArcComposerTest, CentredOnTheContentAreaNotTheWindow) {
++  const gfx::Rect box = Box();
++  EXPECT_LE(std::abs(kContentArea.CenterPoint().x() - box.CenterPoint().x()), 1);
++  EXPECT_NE(kWindowHeight, box.y());
++  // The window's own centre is 864; the content area's is 994.
++  EXPECT_GT(box.CenterPoint().x(), 1728 / 2);
++}
++
++// The whole group lives in the TOP HALF and then some: r8.6a put the box's
++// bottom edge on the half-way line ("面板最下沿刚好在垂直高度的百分之五十处"),
++// and r8.6b lifted the pair another half box off it ("中央框和logo这个整体UI，
++// 这两个元素整体再往上走，差不多输入框高度的一半", user 2026-08-22). The band
++// moving means the page moves and the group goes with it -- that is the point
++// of measuring against the content area rather than the window.
++TEST(ArcComposerTest, TheBoxesBottomEdgeSitsHalfABoxHigh) {
++  for (int band_height : {0, 34}) {
++    const gfx::Rect content(261, 3 + band_height, 1467,
++                            kWindowHeight - 3 - band_height);
++    const gfx::Rect box = ArcComposerBounds(content, kWindowHeight);
++    const gfx::Rect logo = ArcComposerLogoBounds(box);
++    SCOPED_TRACE(testing::Message() << "band_height=" << band_height);
++    const int half = content.y() + content.height() / 2;
++    EXPECT_EQ(half - kArcComposerFieldHeight / 2, box.bottom());
++    // ...and therefore every last point of ink clears that line by half a box.
++    EXPECT_LT(logo.y(), half);
++    EXPECT_LT(box.bottom(), half);
++  }
++}
++
++// One row, at the TOP of the box, inset a side. It is the first row, not the
++// only possible row: "它应该是在靠上第一行的位置" (user 2026-08-21). With the
++// box sized to the row the padding above and below happens to match, and that
++// is the intended reading -- but the anchor is the top edge.
++TEST(ArcComposerTest, FieldRowIsTheFirstRow) {
++  const gfx::Rect box = Box();
++  const gfx::Rect field = ArcComposerFieldBounds(box);
++  EXPECT_EQ(kArcComposerFieldHeight, field.height());
++  EXPECT_EQ(box.width() - 2 * kArcComposerFieldInset, field.width());
++  EXPECT_EQ(box.x() + kArcComposerFieldInset, field.x());
++  EXPECT_EQ(box.y(), field.y());
++  EXPECT_TRUE(box.Contains(field));
++
++  // A taller box (the day a second row lands) leaves the first row where it
++  // is rather than re-centring it.
++  gfx::Rect two_rows = box;
++  two_rows.set_height(box.height() + 40);
++  EXPECT_EQ(box.y(), ArcComposerFieldBounds(two_rows).y());
++}
++
++// The mark above the box: `Dia:` measured 2026-08-21 as centred on the card to
++// within 0.05pt with 29.5pt of clear air under it.
++TEST(ArcComposerTest, LogoSitsAboveTheBoxAndCentredOnIt) {
++  const gfx::Rect box = Box();
++  const gfx::Rect logo = ArcComposerLogoBounds(box);
++  EXPECT_EQ(kArcComposerLogoSize, logo.width());
++  EXPECT_EQ(kArcComposerLogoSize, logo.height());
++  EXPECT_LE(std::abs(box.CenterPoint().x() - logo.CenterPoint().x()), 1);
++  EXPECT_EQ(kArcComposerLogoGap, box.y() - logo.bottom());
++  EXPECT_FALSE(logo.Intersects(box));
++  EXPECT_TRUE(ArcComposerLogoBounds(gfx::Rect()).IsEmpty());
++}
++
++// The row is meaningfully taller than the band's capsule -- "在 new tab 中，
++// 这个搜索框是主要视觉，它不能太小" (user 2026-08-21). 28 is the band's
++// kLocationBarHeight.
++TEST(ArcComposerTest, FieldRowIsTallerThanTheBandCapsule) {
++  EXPECT_GT(kArcComposerFieldHeight, 28);
++  // r8.6b: 57 -- the r8.6 solve of 60 less the user's five per cent, see
++  // HeightIsTheSolveLessFivePerCent. Pinned here too so a change to either
++  // input has to come past both tests. `Dia:` reads 59.5 for the untrimmed
++  // solve (icon centre 29.75 from the card's left edge and 30.0 from its top,
++  // measured 2026-08-22).
++  EXPECT_EQ(57, kArcComposerFieldHeight);
++}
++
++// The list is the other half of the height solve, and this is the invariant
++// that binds them: `Dia:` measured 2026-08-22 puts its suggestion favicons in
++// the SAME column as its input row's magnifier (21.5pt off the card's left
++// edge), in a 36pt band inside a 40pt pitch, text at 50.5. Let the list's
++// column drift from the box's and the box's height stops being a solution.
++TEST(ArcComposerTest, TheListStandsInTheBoxesColumn) {
++  EXPECT_EQ(kArcComposerIconInset, kArcComposerListIconInset);
++  EXPECT_EQ(36, kArcComposerListRowHeight);
++  EXPECT_EQ(8, kArcComposerListRowInset);
++  EXPECT_EQ(50, kArcComposerListTextInset);
++  EXPECT_EQ(40, kArcComposerListRowPitch);
++  // The proportion the user rejected from both ends: r8.4's 68/30 = 2.27 was
++  // "很不协调" and r8.5's 42/30 = 1.4 was "过矮". `Dia:` runs 59.5/40 = 1.49;
++  // r8.6 landed on 1.50 and r8.6b's five per cent takes it to 57/40 = 1.425,
++  // which is the user's own trim and the one number here that is not Dia's.
++  EXPECT_NEAR(1.425,
++              static_cast<double>(kArcComposerFieldHeight) /
++                  kArcComposerListRowPitch,
++              0.02);
++}
++
++// And the cross-check that ties the two halves together the way the eye reads
++// them: `Dia:` measures 49.5pt from the magnifier's centre down to the first
++// suggestion's favicon centre (2026-08-22). Ours is the same arithmetic --
++// half a box, then the row gap, then half a band.
++TEST(ArcComposerTest, FirstSuggestionSitsWhereDiasDoes) {
++  const int field_icon_centre = kArcComposerFieldHeight / 2;
++  const int first_row_icon_centre = kArcComposerFieldHeight +
++                                    kArcComposerListRowGap +
++                                    kArcComposerListRowHeight / 2;
++  // r8.6 read 50 here against `Dia:`'s 49.5; r8.6b's shorter box lands on 49,
++  // i.e. half a point the other side of the same measurement.
++  EXPECT_EQ(49, first_row_icon_centre - field_icon_centre);
++  // And the box's own top margin above the glyph, which is the 20 that used to
++  // be 22 -- see LeadingIconLandsInTheListsColumn.
++  EXPECT_EQ(20, field_icon_centre - kArcComposerIconSize / 2);
++}
++
++// Degenerate inputs yield nothing rather than a stripe at the origin: both
++// happen before the first layout and during teardown.
++TEST(ArcComposerTest, DegenerateInputsYieldNothing) {
++  EXPECT_TRUE(ArcComposerBounds(gfx::Rect(), kWindowHeight).IsEmpty());
++  EXPECT_TRUE(ArcComposerBounds(kContentArea, 0).IsEmpty());
++  EXPECT_TRUE(ArcComposerFieldBounds(gfx::Rect()).IsEmpty());
++  // A box shorter than the row keeps the row inside it rather than
++  // overflowing -- the top inset gives way before the row does.
++  const gfx::Rect squat(0, 0, 200, 20);
++  EXPECT_TRUE(squat.Contains(ArcComposerFieldBounds(squat)));
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_omnibox_panel.h
++++ src/chrome/browser/ui/helium/arc_omnibox_panel.h
+@@ -20,55 +20,105 @@
+ // the band clips its own contents and the field can therefore not cast a
+ // shadow) when the field is focused with nothing to suggest yet. The user must
+ // not be able to tell which one is on screen, so the two must agree to the
+-// pixel. Before this header they did not even agree with themselves: one panel
+-// carried four different corner radii (field 11, the popup's cutout 8, its
+-// background layer a hard-coded 12, its shadow border 16).
+-//
+-// Numbers measured on Dia 2026-08-16 (2x screenshots, converted to pt) and the
+-// two places we cannot follow it, both recorded here because they are the first
+-// things to revisit if the panel ever reads as "not floating enough":
+-//
+-//   * Dia's panel is its hover capsule inflated by 40.5pt on each side, sharing
+-//     its centre exactly. We inflate by kHeliumBasePadding instead: our field
+-//     starts 3pt from the card's left edge (the navigation buttons live in the
+-//     sidebar, so we do not have Dia's 148pt of band to grow into), and 40pt
+-//     would push the panel out over the sidebar -- off the window entirely once
+-//     the sidebar is collapsed. Dia's panel never leaves its own card.
+-//     The user's answer to that (2026-08-17) is kEmptyPanelBottomOutset below:
+-//     spend the growth we cannot have sideways on height instead.
+-//   * Dia's panel radius is 20. Ours is the card's radius, because inflating by
+-//     only 3pt lands the panel's top-left corner exactly on the card's, and two
+-//     different arcs meeting there is the "two rectangles pretending to be one"
+-//     cue this whole shell exists to remove. The card's radius also keeps the
+-//     panel concentric with the field: panel_radius - outset == field_radius.
+-//
+-// The root cause of both is that Dia's band is 54pt and ours is 34pt; there is
+-// only 3pt of window margin above our card to grow into. Making the panel
+-// Dia-proportioned starts with the band's height, not with this file.
++// pixel.
++//
++// == r8: the panel is the capsule, grown upwards and downwards ==
++//
++// Until r8 this file computed "the field, inflated by kHeliumBasePadding on
++// three sides", from a 2026-08-17 measurement in which Dia's panel was its
++// hover capsule plus 40.5pt per side. Re-measured on 2026-08-21, Dia no longer
++// does that: it hangs a fixed 1232pt panel (86% of its 1432pt card) from the
++// top of the card, and the capsule's position has nothing to do with it.
++//
++// We tried that and it does not transfer, for a reason that is ours and not
++// Dia's. Measured on our own out/Default at three window widths on 2026-08-21,
++// our field is the card inset by 3 on the left and 125 on the right at every
++// one of them -- 84.7% / 88.8% / 91.3% of the card at 1100 / 1400 / 1728 --
++// because our navigation buttons live in the sidebar (see PROGRESS's standing
++// rule) where Dia has 148pt of them to the left of its capsule. A card-width
++// panel therefore opens 55-100pt to the RIGHT of where the site-settings icon
++// and the URL already are, and both have to jump sideways to get inside it.
++//
++// The user's ruling after seeing that (2026-08-21, second pass):
++//
++//   "我想干脆弹出的面板宽度就和地址栏的胶囊宽度一样，只不过点击之后弹出的面板
++//    它的高度更高。这个宽度我们就不参考 Dia 来。同时弹出的面板地址栏中，原本
++//    右边的收藏和其他按钮都不要显示，就是最干净的一个空白面板。"
++//
++// So the panel IS the capsule: same x, same width, to the pixel. Only its
++// height is new -- it reaches up to the window's top edge (covering the band,
++// which is what Dia's does too) and down past the band by kEmptyPanelBottomOutset.
++// The radius is Dia's 20 rather than the card's 14, which is the one thing this
++// round kept from the measurement.
++//
++// Two consequences that are part of the ruling, not side effects:
++//
++//   * The panel cannot be narrower or wider than the field, so nothing the
++//     field draws can fall outside it and no clipping is needed. The r8 first
++//     pass needed a trailing inset for exactly that; it is gone with the model
++//     that required it.
++//   * "最干净的一个空白面板" -- the page-action icons (the bookmark star and
++//     friends) are hidden for the panel's lifetime. That is enforced in
++//     LocationBarView::Layout(), not here.
++//
++// What this file still hands back is a set of outsets from the field, because
++// both owners only ever have the field's rect to hand (the popup positions
++// itself by insetting LocationBarView::GetBoundsInScreen()). Two of the four
++// are now zero by construction, and the unit test pins that.
+ //
+ // Header-only and free of //ui/views so it can be linked into the lightweight
+ // test target (see PROGRESS.md on why anything reaching TestingProfile cannot
+ // be built in this tree).
+ namespace helium {
+ 
+-// How far below the field the panel reaches while there is nothing to suggest
+-// yet -- the "it popped out" cue, and the only reason the panel is visible as a
+-// panel at all on a page whose colour the shadow cannot darken (a black page
+-// takes no shadow, so before this the panel's bottom edge sat exactly on the
+-// band's and there was nothing to see).
+-//
+-// Dia reaches 59pt past a 41.5pt band (1.42x the band's height; measured off
+-// d_01_click.png: card top y=12, band bottom y=95, panel y=1..213, all 2x).
+-// The proportional value for our 34pt band would be 48. We take 18: Dia fills
+-// its overhang with a real row ("+ Add tabs or files / ... / mic / Go", its AI
+-// attachment bar) and we have nothing to put there, so the rest of its 106pt is
+-// content we do not have rather than margin we are missing.
++// The panel's corner radius. `Dia:` fits R=40 device px on both the Cmd+L
++// panel and the new-tab composer, to within a point per sample.
++//
++// This is no longer the card's radius, nor the field's. It used to be the
++// card's, because a 3pt outset put the panel's top-left corner exactly on the
++// card's and two different arcs meeting at one corner is the "two rectangles
++// pretending to be one" cue this shell exists to remove. The r8 panel hangs
++// `card_inset` ABOVE the card's top edge and starts `card_inset` inside its
++// left one, so that corner no longer coincides with anything -- there is
++// nothing left to be concentric with, and the measured value wins.
++inline constexpr int kArcOmniboxPanelRadius = 20;
++
++// How far *past the band's bottom edge* the panel reaches while there is
++// nothing to suggest yet -- the "it popped out" cue, and the only reason the
++// panel is visible as a panel at all on a page whose colour the shadow cannot
++// darken (a black page takes no shadow, so without an overhang the panel's
++// bottom edge sits exactly on the band's and there is nothing to see).
++//
++// `Dia:` reaches 58.5pt past a 41.5pt band, i.e. 1.41x the band's height
++// (2026-08-21: panel y 0.5..106.5, band bottom 47.5). The user took the
++// proportional value for our 34pt band: 48.
++//
++// r8 changes what this is measured from as well as its value. Under the old
++// field-relative model it was an overhang past the *field's* bottom, and it
++// was 18 rather than the proportional 48 because Dia spends its extra height
++// on a row we do not copy ("+ Add tabs or files / ... / mic / Go", its AI
++// attachment bar -- the user ruled it out in M3.5 and did not reopen it in
++// r8). With the panel now hung from the card, the band's bottom is the edge
++// the eye actually reads the overhang against, and Dia's ratio is measured
++// from that same edge, so the two finally mean the same thing.
+ //
+ // This is the dial to turn when the panel reads as too shy or too empty. It is
+-// deliberately not a parameter of ComputeArcOmniboxPanel(): unlike the outset
+-// and the radii, which must stay tied to the layout constants they are derived
+-// from, this one answers only to the eye.
+-inline constexpr int kEmptyPanelBottomOutset = 18;
++// deliberately not a parameter of ComputeArcOmniboxPanel(): unlike the width
++// and the radii, which are tied to measurements, this one answers only to the
++// eye.
++inline constexpr int kEmptyPanelBottomOutset = 48;
++
++// The same apron for the sidebar row's panel (hidden address bar mode), which
++// r8 deliberately leaves where M3.6 put it.
++//
++// The two hosts shared one constant until r8 because they shared one model.
++// They no longer do: this one hangs off a ~200pt row inside the sidebar with
++// no band under it, its reference is Arc rather than Dia, and the user's
++// 2026-08-21 ruling was about the address bar's panel. Carrying the band's new
++// 48 across would have made an accepted surface 30pt taller on the strength of
++// a measurement of something else. If the two ever want one number again, this
++// is the line to delete -- not the one above.
++inline constexpr int kSidebarEmptyPanelBottomOutset = 18;
+ 
+ struct ArcOmniboxPanelMetrics {
+   // False when the Arc band treatment does not apply (popup windows, high
+@@ -77,24 +127,40 @@ struct ArcOmniboxPanelMetrics {
+   // own metrics rather than reading these.
+   bool enabled = false;
+ 
+-  // How far the panel grows past the field on the left, right and top. The
+-  // bottom is where the suggestions are, so it is never inset.
+-  int outset = 0;
+-
+-  // Extra growth on the right only, past `outset` -- zero on the band. The
+-  // sidebar-hosted row (hidden address bar mode) is where it is non-zero: Arc's
+-  // panel there shares the row's left and top edges and grows rightwards out
+-  // over the page (measured 2026-08-18: panel 349.5pt wide off a 281pt
+-  // sidebar, 81.5pt of overhang), because a ~200pt row cannot host a readable
+-  // suggestion list and the only direction with room is right.
+-  int right_extension = 0;
++  // How far the panel grows past the field on each side. Since r8 the left and
++  // the right are ZERO by construction -- the panel is the capsule, so those
++  // two edges coincide -- and they are kept as fields rather than dropped
++  // because the sidebar row's panel (the other host) still uses the right one,
++  // and because "they are zero" is the invariant worth asserting rather than
++  // assuming.
++  //
++  // The bottom is not here: it is where the suggestions go, so it belongs to
++  // PanelFor() alone -- see bottom_outset.
++  int left_outset = 0;
++  int top_outset = 0;
++  int right_outset = 0;
+ 
+   // How far the panel reaches past the field's bottom edge while there is
+-  // nothing to suggest -- see kEmptyPanelBottomOutset. It belongs to PanelFor()
+-  // alone: alignment_insets() is what the suggestion list aligns itself to the
+-  // field with, and there the bottom is where the results start.
++  // nothing to suggest -- kEmptyPanelBottomOutset measured from the band's
++  // bottom and then re-expressed against the field, which is the rect both
++  // owners actually hold. It belongs to PanelFor() alone: alignment_insets()
++  // is what the suggestion list aligns itself to the field with, and there the
++  // bottom is where the results start.
+   int bottom_outset = 0;
+ 
++  // How far below the field the suggestion list starts, and how tall the field
++  // itself is. Both are zero on the band and in the sidebar row, where the
++  // results begin immediately under a field of the layout's standard height;
++  // the composer sets them because neither is true there -- its box pads the
++  // row on all four sides, and its row is taller than kLocationBarHeight.
++  //
++  // They belong together: the popup derives its non-result section from the
++  // two, and the cutout it leaves for the field from the same numbers, so a
++  // field height without the matching bottom (or the reverse) puts the first
++  // suggestion through the middle of the input text.
++  int alignment_bottom_outset = 0;
++  int field_height = 0;
++
+   // The panel's own corner radius.
+   int panel_radius = 0;
+ 
+@@ -107,6 +173,18 @@ struct ArcOmniboxPanelMetrics {
+   // shape ShadowFrameView::ShadowAlpha takes. Kept as plain doubles so this
+   // header stays free of //ui/views.
+   int shadow_elevation = 0;
++
++  // helium-fork r8.5: the shadow language. False is the MD cast the band's
++  // panel has always used; true is the sidebar card's self-painted three-pass
++  // halo (arc_sidebar_surface.h), which is what the new tab composer wears.
++  //
++  // ⚠ It lives on the metrics, not on the view, because the SAME surface is
++  // painted by two different things -- the resting ArcOmniboxPanelView and,
++  // once a suggestion arrives, RoundedOmniboxResultsFrame's own widget. r8.4
++  // gave the resting one a sibling shadow view and left the popup on MD, and
++  // the shadow visibly jumped on every expand/collapse: "同一个UI元素只是不同
++  // 的形态，底层的语言逻辑肯定是要一样的" (user 2026-08-21).
++  bool card_shadow = false;
+   double shadow_light_key = 0.0;
+   double shadow_light_ambient = 0.0;
+   double shadow_dark_key = 0.0;
+@@ -119,26 +197,41 @@ struct ArcOmniboxPanelMetrics {
+   // The bottom stays 0 on purpose, bottom_outset or not: this is the popup's
+   // geometry, and there the space below the field is the suggestion list. The
+   // overhang is the empty panel's alone, so typing can only ever make the panel
+-  // taller -- the first suggestion row is worth more than the 18pt apron it
++  // taller -- the first suggestion row is worth more than the apron it
+   // replaces, so the bottom edge never travels back up.
+   gfx::Insets alignment_insets() const {
+-    return gfx::Insets::TLBR(outset, outset, 0, outset + right_extension);
++    return gfx::Insets::TLBR(top_outset, left_outset, alignment_bottom_outset,
++                             right_outset);
+   }
+ 
+   // The panel rect for a given field rect, before the suggestions add height.
+-  // Grows the field on three sides by `outset`, so the two share a horizontal
+-  // centre -- Dia's one invariant that survives our narrower margins -- and
+-  // past its bottom edge by `bottom_outset`, which is what lifts the panel off
+-  // the band and onto the page.
++  // The field must be the same one the metrics were computed from -- these are
++  // deltas off it, not absolute coordinates, which is what lets the popup
++  // apply them in screen space and ArcOmniboxPanelView in BrowserView space.
+   gfx::Rect PanelFor(const gfx::Rect& field) const {
+     if (!enabled) {
+       return gfx::Rect();
+     }
+     gfx::Rect panel(field);
+-    panel.Inset(-gfx::Insets::TLBR(outset, outset, bottom_outset,
+-                                   outset + right_extension));
++    panel.Inset(-gfx::Insets::TLBR(top_outset, left_outset, bottom_outset,
++                                   right_outset));
+     return panel;
+   }
++
++  // The hole a caller painting the panel must leave for the field -- and, to
++  // the pixel, the rect the field fills with the panel's own colour. The two
++  // have to be one shape: the fill shows through the hole, so anywhere the
++  // hole is bigger the band shows through instead, on a panel that sits
++  // directly on a page-tinted band.
++  //
++  // With the r8 panel this is just the field (the panel contains it on every
++  // edge), and the intersection is a floor for the states no arithmetic covers
++  // -- a field taller than the panel, a half-laid-out tree during teardown.
++  gfx::Rect FieldHoleFor(const gfx::Rect& field) const {
++    gfx::Rect hole(field);
++    hole.Intersect(PanelFor(field));
++    return hole;
++  }
+ };
+ 
+ // The sidebar-row panel's fixed width. Arc's measures 349.5pt regardless of
+@@ -150,29 +243,54 @@ struct ArcOmniboxPanelMetrics {
+ // this is the line to revisit.
+ inline constexpr int kArcSidebarPanelWidth = 350;
+ 
+-// `card_radius` is the content card's corner radius and `field_radius` the
+-// address field's; both must come from the callers' existing concentric chain
+-// (system window radius -> card -> field), never be written down a second time
+-// here. `outset` is the same kHeliumBasePadding the card and the field are
+-// already spaced by -- passing it in rather than reading the layout constant
+-// keeps this header dependency-free and the relationship assertable.
++// Where the panel goes. Separate from ComputeArcOmniboxPanel() so the two
++// things the caller needs -- the rect, and what that rect works out to as
++// outsets from the field -- cannot drift apart, and so the placement can be
++// asserted directly rather than through a subtraction.
++//
++// Horizontally it IS the field: same x, same width, per the user's 2026-08-21
++// ruling (see the header). Vertically it is the band's business -- `band` is
++// the card's top strip (same rect by construction, see arc_card_layout.h), its
++// top IS the card's top and its bottom is the edge the apron is measured from.
++// `card_inset` is the card's gap from the window, i.e. how far above the
++// band's top the window's own top edge is: `Dia:` puts its panel there (0.5pt,
++// 5.5pt above its card), so the panel covers the band rather than leaving a
++// sliver of it showing above.
++inline gfx::Rect ArcOmniboxPanelBounds(const gfx::Rect& band,
++                                       const gfx::Rect& field,
++                                       int card_inset) {
++  if (band.IsEmpty() || field.IsEmpty()) {
++    return gfx::Rect();
++  }
++  const int top = band.y() - std::max(0, card_inset);
++  return gfx::Rect(field.x(), top, field.width(),
++                   band.bottom() + kEmptyPanelBottomOutset - top);
++}
++
++// `band` and `field` must be in the same coordinate space; which one does not
++// matter, because everything this returns is a difference between them.
++// `card_inset` is the card's gap from the window (kContentCardInset), passed
++// in rather than read here so this header stays dependency-free and the
++// relationship stays assertable. `field_radius` is the address field's own,
++// which must come from the caller's existing concentric chain rather than be
++// written down a second time here.
+ inline ArcOmniboxPanelMetrics ComputeArcOmniboxPanel(bool enabled,
+-                                                     int outset,
+-                                                     int card_radius,
++                                                     const gfx::Rect& band,
++                                                     const gfx::Rect& field,
++                                                     int card_inset,
+                                                      int field_radius) {
+   ArcOmniboxPanelMetrics metrics;
+-  if (!enabled) {
++  const gfx::Rect panel = ArcOmniboxPanelBounds(band, field, card_inset);
++  if (!enabled || panel.IsEmpty()) {
+     return metrics;
+   }
+   metrics.enabled = true;
+-  metrics.outset = std::max(0, outset);
+-  metrics.bottom_outset = kEmptyPanelBottomOutset;
++  metrics.left_outset = field.x() - panel.x();
++  metrics.top_outset = field.y() - panel.y();
++  metrics.right_outset = panel.right() - field.right();
++  metrics.bottom_outset = panel.bottom() - field.bottom();
+   metrics.field_radius = std::max(0, field_radius);
+-  // Concentric with the field by construction rather than by coincidence: a
+-  // caller that hands over a card radius which does not sit `outset` outside
+-  // the field gets the concentric answer anyway, and the unit test pins that.
+-  metrics.panel_radius = std::max(metrics.field_radius + metrics.outset,
+-                                  std::max(0, card_radius));
++  metrics.panel_radius = kArcOmniboxPanelRadius;
+   // Dia's shadow, measured off dia_06_after_click_text.png with panelshadow.py
+   // and then matched by measuring ours the same way (both panels tall, so the
+   // two are comparable):
+@@ -195,6 +313,12 @@ inline ArcOmniboxPanelMetrics ComputeArc
+   //
+   // The dark-mode pair keeps the ratio to the light one that the content card's
+   // shadow uses (2.0x key, 2.35x ambient).
++  //
++  // ⚠ Not re-measured for r8. The 2026-08-21 burst captured Dia's panel over a
++  // near-white page, where its below-edge reach came out 33->17 against 14->7
++  // sideways and a coloured glow under the bottom edge that is not a grey
++  // shadow at all. Matching that is its own round with its own instrument;
++  // until then the panel keeps the shadow it shipped with.
+   metrics.shadow_elevation = 35;
+   metrics.shadow_light_key = 0.07;
+   metrics.shadow_light_ambient = 0.04;
+@@ -203,6 +327,48 @@ inline ArcOmniboxPanelMetrics ComputeArc
+   return metrics;
+ }
+ 
++// The new tab page's composer (r8.3): the box IS the panel, and the field sits
++// inside it rather than being a hole in it.
++//
++// `box` and `field` must be in the same coordinate space; `box` comes from
++// helium::ArcComposerBounds() and `field` is the row inside it. Both edges and
++// both ends are real outsets here -- unlike the band's panel, which shares two
++// of them with the capsule -- because the composer's box is generously padded
++// around a single row.
++//
++// ⚠ The panel's owner must NOT punch a field hole under the composer. On the
++// band the field paints in the band's layer, one BELOW the panel, so the panel
++// has to leave a hole for it to show through; in the composer the field is a
++// layer ABOVE the card (ArcComposerHostView is ordered after the panel view),
++// so a hole there would cut a window straight through the card to the page.
++inline ArcOmniboxPanelMetrics ComputeArcComposerPanel(bool enabled,
++                                                      const gfx::Rect& box,
++                                                      const gfx::Rect& field,
++                                                      int field_radius,
++                                                      int panel_radius) {
++  ArcOmniboxPanelMetrics metrics;
++  if (!enabled || box.IsEmpty() || field.IsEmpty()) {
++    return metrics;
++  }
++  metrics.enabled = true;
++  metrics.left_outset = field.x() - box.x();
++  metrics.top_outset = field.y() - box.y();
++  metrics.right_outset = box.right() - field.right();
++  metrics.bottom_outset = box.bottom() - field.bottom();
++  // The resting box IS the popup's non-result section: suggestions start where
++  // the box ended, so opening one reads as the box growing rather than as a
++  // second surface arriving under it.
++  metrics.alignment_bottom_outset = metrics.bottom_outset;
++  metrics.field_height = field.height();
++  metrics.field_radius = std::max(0, field_radius);
++  metrics.panel_radius = std::max(0, panel_radius);
++  // The composer wears the sidebar card's shadow, not the band panel's MD one
++  // -- the user's call at r8.4 acceptance, and the MD model cannot express
++  // that shape anyway (see HeliumCardShadowView).
++  metrics.card_shadow = true;
++  return metrics;
++}
++
+ // Where the toolbar goes while the sidebar row's field is being edited: a
+ // host sharing the row's top-left corner, widened to the panel's own width so
+ // the field IS as wide as the panel it stands on ("what you see is what you
+@@ -221,11 +387,15 @@ inline gfx::Rect ArcSidebarEditHostBound
+ // The sidebar-hosted row's panel (hidden address bar mode) -- Arc's shape,
+ // measured 2026-08-18: the panel shares the row's left and top edges exactly
+ // (no outset -- there is no band margin to grow into and Arc grows none), runs
+-// kArcSidebarPanelWidth wide out over the page, and overhangs the bottom the
+-// same way the band's panel does. Sharing the field's top-left corner means
+-// sharing its arc: the panel radius IS the field radius, the same
+-// one-corner-one-arc rule that pinned the band panel's radius to the card's.
+-// The shadow is the band panel's -- one panel, two hosts.
++// kArcSidebarPanelWidth wide out over the page, and overhangs the bottom.
++// Sharing the field's top-left corner means sharing its arc: the panel radius
++// IS the field radius, the same one-corner-one-arc rule that used to pin the
++// band panel's radius to the card's. The shadow is the band panel's -- one
++// panel, two hosts.
++//
++// Its overhang is measured from the field's own bottom, because in the sidebar
++// there is no band under the field for the eye to read it against -- and it
++// keeps M3.6's value, not r8's; see kSidebarEmptyPanelBottomOutset.
+ inline ArcOmniboxPanelMetrics ComputeArcSidebarRowPanel(bool enabled,
+                                                         int field_width,
+                                                         int field_radius) {
+@@ -234,9 +404,10 @@ inline ArcOmniboxPanelMetrics ComputeArc
+     return metrics;
+   }
+   metrics.enabled = true;
+-  metrics.outset = 0;
+-  metrics.right_extension = std::max(0, kArcSidebarPanelWidth - field_width);
+-  metrics.bottom_outset = kEmptyPanelBottomOutset;
++  metrics.left_outset = 0;
++  metrics.top_outset = 0;
++  metrics.right_outset = std::max(0, kArcSidebarPanelWidth - field_width);
++  metrics.bottom_outset = kSidebarEmptyPanelBottomOutset;
+   metrics.field_radius = std::max(0, field_radius);
+   metrics.panel_radius = metrics.field_radius;
+   metrics.shadow_elevation = 35;
+Index: src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
++++ src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/helium/arc_omnibox_panel.h"
+ 
++#include <cstdlib>
++#include <tuple>
++
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
+ 
+ #include "testing/gtest/include/gtest/gtest.h"
+@@ -12,89 +15,162 @@
+ namespace helium {
+ namespace {
+ 
+-// The measured baseline: kHeliumBasePadding, the 17 -> 14 -> 11 concentric
+-// chain, and the field as M3.4 leaves it (band x+3, band y+3, 28 tall,
+-// spanning the band's middle).
+-constexpr int kOutset = 3;
+-constexpr int kCardRadius = 14;
++// The measured baseline, read off our own out/Default build on 2026-08-21
++// through UI DevTools at a 1728x1084 window with the default 256pt sidebar:
++//
++//   TopContainerView (the band, and so the card's top strip)  259,3 1466x34
++//   LocationBarView  (the field)                              262,6 1338x28
++//
++// The field is the card inset by 3 on the left and 125 on the right (the
++// pinned actions, the extensions menu and the app menu), at all widths -- the
++// same probe at 1100 and 1400 gave 262..972 of 259..1097 and 262..1272 of
++// 259..1397. Which is the whole reason the r8 panel cannot be derived from the
++// field: the field's share of the card is 84.7% / 88.8% / 91.3% at those three
++// widths, so a fixed 86% panel is sometimes wider and sometimes narrower than
++// it, and always starts ~7% of the card further right.
++constexpr int kCardInset = 3;
+ constexpr int kFieldRadius = 11;
+-constexpr gfx::Rect kField(206, 6, 1000, 28);
++constexpr gfx::Rect kCard(259, 3, 1466, 1078);
++constexpr gfx::Rect kBand(259, 3, 1466, 34);
++constexpr gfx::Rect kField(262, 6, 1338, 28);
+ 
+ ArcOmniboxPanelMetrics Metrics() {
+-  return ComputeArcOmniboxPanel(/*enabled=*/true, kOutset, kCardRadius,
++  return ComputeArcOmniboxPanel(/*enabled=*/true, kBand, kField, kCardInset,
+                                 kFieldRadius);
+ }
+ 
+-// The invariant the four-radii mess gave away: the field shows through a hole
+-// in the panel, so the hole's radius IS the field's radius. Anything else
+-// paints two arcs one inside the other at every corner of the field.
+-TEST(ArcOmniboxPanelTest, HoleRadiusIsTheFieldRadius) {
+-  EXPECT_EQ(kFieldRadius, Metrics().field_radius);
++gfx::Rect Placed() {
++  return ArcOmniboxPanelBounds(kBand, kField, kCardInset);
+ }
+ 
+-// Concentric: stepping `outset` outwards from the field's arc has to land on
+-// the panel's arc. This is the same relationship the window (17), the card (14)
+-// and the field (11) already stand in, and it is why the panel's radius is the
+-// card's rather than Dia's 20 -- see the header.
+-TEST(ArcOmniboxPanelTest, PanelIsConcentricWithTheField) {
+-  const ArcOmniboxPanelMetrics metrics = Metrics();
+-  EXPECT_EQ(metrics.field_radius + metrics.outset, metrics.panel_radius);
+-}
++// --- The r8 placement: the capsule's width, the window's top, the band's foot
+ 
+-// A caller that derives the card radius somewhere else and gets it wrong must
+-// not be able to break concentricity -- it can only make the panel rounder.
+-TEST(ArcOmniboxPanelTest, ConcentricitySurvivesAWrongCardRadius) {
+-  for (int card_radius : {0, 5, 11, 14, 20, 40}) {
+-    const ArcOmniboxPanelMetrics metrics =
+-        ComputeArcOmniboxPanel(/*enabled=*/true, kOutset, card_radius,
+-                               kFieldRadius);
+-    SCOPED_TRACE(testing::Message() << "card_radius=" << card_radius);
+-    EXPECT_GE(metrics.panel_radius, metrics.field_radius + metrics.outset);
++// The one line of the user's 2026-08-21 ruling: the panel IS the capsule,
++// horizontally. Nothing in the band moves when it opens, because there is
++// nothing to move -- the two rectangles share both vertical edges.
++TEST(ArcOmniboxPanelTest, PanelIsExactlyAsWideAsTheField) {
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  EXPECT_EQ(kField.x(), Placed().x());
++  EXPECT_EQ(kField.width(), Placed().width());
++  EXPECT_EQ(kField.right(), Placed().right());
++  EXPECT_EQ(0, metrics.left_outset);
++  EXPECT_EQ(0, metrics.right_outset);
++}
++
++// ...and it follows the field's width rather than the card's. The r8 first
++// pass took 86% of the card from Dia; measured on our own build the field is
++// 84.7% / 88.8% / 91.3% of the card at 1100 / 1400 / 1728, so a card-derived
++// width is a different number at every window size and never the capsule's.
++TEST(ArcOmniboxPanelTest, PanelWidthIsNotDerivedFromTheCard) {
++  for (int field_width : {400, 710, 1010, 1338}) {
++    const gfx::Rect field(262, 6, field_width, 28);
++    SCOPED_TRACE(testing::Message() << "field_width=" << field_width);
++    EXPECT_EQ(field_width,
++              ArcOmniboxPanelBounds(kBand, field, kCardInset).width());
+   }
++  // 86% of the card is 1260, which is NOT what this baseline's field is.
++  EXPECT_NE(kCard.width() * 86 / 100, Placed().width());
++}
++
++// The top edge is the window's, `card_inset` above the card's own -- `Dia:`
++// 0.5pt against a card top of 6. That is what makes it cover the band rather
++// than sit inside it, and it is the only part of Dia's shape r8 kept.
++TEST(ArcOmniboxPanelTest, PanelTopIsTheWindowTop) {
++  EXPECT_EQ(kCard.y() - kCardInset, Placed().y());
++  EXPECT_EQ(0, Placed().y());
++  EXPECT_LT(Placed().y(), kBand.y());
++}
++
++// The apron is measured from the band's bottom, which is the edge the eye
++// reads it against -- `Dia:` 58.5 past a 41.5pt band, scaled to 48 for ours.
++TEST(ArcOmniboxPanelTest, PanelOverhangsTheBandsBottom) {
++  EXPECT_EQ(kBand.bottom() + kEmptyPanelBottomOutset, Placed().bottom());
++  EXPECT_EQ(48, kEmptyPanelBottomOutset);
++}
++
++// Height is the whole difference between the capsule and the panel: it starts
++// above the band and ends below it, and the field's own 28pt sits inside.
++TEST(ArcOmniboxPanelTest, OnlyTheHeightIsNew) {
++  EXPECT_EQ(85, Placed().height());
++  EXPECT_GT(Placed().height(), kField.height());
++  EXPECT_TRUE(Placed().Contains(kField));
++}
++
++// The radius is Dia's 20 and no longer the card's: the r8 panel hangs above
++// the card's top edge, so it shares no corner to be concentric with.
++TEST(ArcOmniboxPanelTest, PanelRadiusIsDiasAndNotTheCards) {
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  EXPECT_EQ(kArcOmniboxPanelRadius, metrics.panel_radius);
++  EXPECT_EQ(20, metrics.panel_radius);
++  // The card's radius at this window is 14 (17 - 3); the field's is 11.
++  EXPECT_NE(14, metrics.panel_radius);
++  EXPECT_NE(metrics.field_radius, metrics.panel_radius);
++}
++
++// The outsets are the panel minus the field, per edge. Two of the four are
++// zero and that is the invariant, not an accident of this baseline.
++TEST(ArcOmniboxPanelTest, OutsetsAreThePanelMinusTheFieldPerEdge) {
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  EXPECT_EQ(kField.x() - Placed().x(), metrics.left_outset);
++  EXPECT_EQ(kField.y() - Placed().y(), metrics.top_outset);
++  EXPECT_EQ(Placed().right() - kField.right(), metrics.right_outset);
++  EXPECT_EQ(Placed().bottom() - kField.bottom(), metrics.bottom_outset);
++  EXPECT_EQ(0, metrics.left_outset);
++  EXPECT_EQ(6, metrics.top_outset);
++  EXPECT_EQ(0, metrics.right_outset);
++  EXPECT_EQ(51, metrics.bottom_outset);
++}
++
++// The hole is the field, because the panel contains it on every edge. The
++// intersection is a floor for the states no arithmetic covers.
++TEST(ArcOmniboxPanelTest, FieldHoleIsTheField) {
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  EXPECT_EQ(kField.ToString(), metrics.FieldHoleFor(kField).ToString());
++  // A field taller than the panel is still clipped into it rather than
++  // punching out the bottom.
++  const gfx::Rect tall(262, 6, 1338, 400);
++  EXPECT_TRUE(Placed().Contains(
++      ComputeArcOmniboxPanel(/*enabled=*/true, kBand, tall, kCardInset,
++                             kFieldRadius)
++          .FieldHoleFor(tall)));
++}
++
++// The hole the field shows through has the field's radius. Anything else
++// paints two arcs one inside the other at every corner of the field.
++TEST(ArcOmniboxPanelTest, HoleRadiusIsTheFieldRadius) {
++  EXPECT_EQ(kFieldRadius, Metrics().field_radius);
+ }
+ 
+-// The alignment insets grow on three sides only: this is the geometry the
+-// suggestion list aligns itself to the field with, and the space below the
+-// field is the list. The empty panel's overhang deliberately does NOT show up
+-// here -- if it did, every suggestion list would gain an 18pt gap under its
+-// last row and the popup's bounds would stop matching the shipped build.
++// The alignment insets carry three edges and leave the bottom alone: this is
++// the geometry the suggestion list aligns itself to the field with, and there
++// the space below the field is the list. The empty panel's overhang
++// deliberately does NOT show up here -- if it did, every suggestion list would
++// gain a 48pt gap under its last row.
+ TEST(ArcOmniboxPanelTest, AlignmentInsetsLeaveTheBottomAlone) {
+-  const gfx::Insets insets = Metrics().alignment_insets();
+-  EXPECT_EQ(kOutset, insets.top());
+-  EXPECT_EQ(kOutset, insets.left());
+-  EXPECT_EQ(kOutset, insets.right());
++  const ArcOmniboxPanelMetrics metrics = Metrics();
++  const gfx::Insets insets = metrics.alignment_insets();
++  EXPECT_EQ(metrics.top_outset, insets.top());
++  EXPECT_EQ(metrics.left_outset, insets.left());
++  EXPECT_EQ(metrics.right_outset, insets.right());
+   EXPECT_EQ(0, insets.bottom());
+-  EXPECT_GT(Metrics().bottom_outset, 0);
++  EXPECT_GT(metrics.bottom_outset, 0);
+ }
+ 
+-// Dia's one geometric invariant that survives our narrower margins: the panel
+-// and the field share a horizontal centre, and the panel contains the field.
+-TEST(ArcOmniboxPanelTest, PanelSharesTheFieldsCentreAndContainsIt) {
+-  const ArcOmniboxPanelMetrics metrics = Metrics();
+-  const gfx::Rect panel = metrics.PanelFor(kField);
+-  EXPECT_TRUE(panel.Contains(kField));
+-  EXPECT_EQ(kField.CenterPoint().x(), panel.CenterPoint().x());
+-  EXPECT_EQ(kField.x() - kOutset, panel.x());
+-  EXPECT_EQ(kField.right() + kOutset, panel.right());
+-  EXPECT_EQ(kField.y() - kOutset, panel.y());
+-  EXPECT_EQ(kField.bottom() + metrics.bottom_outset, panel.bottom());
+-}
+-
+-// The overhang is the whole point of M3.6: without it the panel's bottom edge
+-// sits exactly on the band's, so on a page whose colour the shadow cannot
+-// darken there is nothing at all to see and the panel reads as a second capsule
+-// inside the address bar.
+-TEST(ArcOmniboxPanelTest, PanelReachesPastTheFieldsBottom) {
++// PanelFor() and alignment_insets() are two views of one rectangle: applying
++// the insets to the field has to land on the panel's three shared edges, or
++// the empty panel and the suggestion popup would not line up at the moment the
++// popup opens.
++TEST(ArcOmniboxPanelTest, AlignmentInsetsAgreeWithPanelFor) {
+   const ArcOmniboxPanelMetrics metrics = Metrics();
+-  EXPECT_EQ(kEmptyPanelBottomOutset, metrics.bottom_outset);
+-  EXPECT_GT(metrics.bottom_outset, metrics.outset);
++  gfx::Rect aligned(kField);
++  aligned.Inset(-metrics.alignment_insets());
+   const gfx::Rect panel = metrics.PanelFor(kField);
+-  EXPECT_EQ(kField.height() + kOutset + metrics.bottom_outset, panel.height());
++  EXPECT_EQ(panel.x(), aligned.x());
++  EXPECT_EQ(panel.y(), aligned.y());
++  EXPECT_EQ(panel.width(), aligned.width());
+ }
+ 
+-// The overhang goes down and nowhere else. Anything that spent it sideways
+-// would push the panel over the sidebar -- off the window once the sidebar is
+-// collapsed -- which is the reason we are growing downwards in the first place.
++// The overhang goes down and nowhere else.
+ TEST(ArcOmniboxPanelTest, OverhangDoesNotMoveTheOtherThreeEdges) {
+   ArcOmniboxPanelMetrics no_overhang = Metrics();
+   no_overhang.bottom_outset = 0;
+@@ -103,34 +179,35 @@ TEST(ArcOmniboxPanelTest, OverhangDoesNo
+   EXPECT_EQ(before.x(), after.x());
+   EXPECT_EQ(before.y(), after.y());
+   EXPECT_EQ(before.width(), after.width());
+-  EXPECT_EQ(before.bottom() + kEmptyPanelBottomOutset, after.bottom());
+-}
+-
+-// The panel's top-left corner lands exactly on the card's, which is the whole
+-// reason its radius is the card's. Written as the card's own arithmetic so a
+-// change to kHeliumBasePadding cannot silently split the two apart.
+-TEST(ArcOmniboxPanelTest, PanelTopLeftLandsOnTheCardTopLeft) {
+-  constexpr gfx::Rect kCard(203, 3, 1074, 794);
+-  const gfx::Rect panel = Metrics().PanelFor(kField);
+-  EXPECT_EQ(kCard.x(), panel.x());
+-  EXPECT_EQ(kCard.y(), panel.y());
++  EXPECT_EQ(before.bottom() + Metrics().bottom_outset, after.bottom());
+ }
+ 
+ // Disabled means "keep upstream's numbers", not "use zeroed-out ones": every
+ // field has to read as obviously unusable so a caller that forgets to check
+ // `enabled` fails loudly rather than drawing a radius-0 panel at the origin.
++// An empty band or field is the same answer -- during teardown and before the
++// first layout both are empty, and a panel derived from them would be a stripe
++// at the window's origin.
+ TEST(ArcOmniboxPanelTest, DisabledYieldsNothing) {
+-  const ArcOmniboxPanelMetrics metrics =
+-      ComputeArcOmniboxPanel(/*enabled=*/false, kOutset, kCardRadius,
+-                             kFieldRadius);
+-  EXPECT_FALSE(metrics.enabled);
+-  EXPECT_EQ(0, metrics.outset);
+-  EXPECT_EQ(0, metrics.bottom_outset);
+-  EXPECT_EQ(0, metrics.panel_radius);
+-  EXPECT_EQ(0, metrics.field_radius);
+-  EXPECT_EQ(0, metrics.shadow_elevation);
+-  EXPECT_TRUE(metrics.PanelFor(kField).IsEmpty());
+-  EXPECT_TRUE(metrics.alignment_insets().IsEmpty());
++  for (const auto& [enabled, band, field] :
++       {std::tuple(false, kBand, kField), std::tuple(true, gfx::Rect(), kField),
++        std::tuple(true, kBand, gfx::Rect())}) {
++    const ArcOmniboxPanelMetrics metrics =
++        ComputeArcOmniboxPanel(enabled, band, field, kCardInset, kFieldRadius);
++    EXPECT_FALSE(metrics.enabled);
++    EXPECT_EQ(0, metrics.left_outset);
++    EXPECT_EQ(0, metrics.top_outset);
++    EXPECT_EQ(0, metrics.right_outset);
++    EXPECT_EQ(0, metrics.bottom_outset);
++    EXPECT_EQ(0, metrics.panel_radius);
++    EXPECT_EQ(0, metrics.field_radius);
++    EXPECT_EQ(0, metrics.shadow_elevation);
++    EXPECT_TRUE(metrics.PanelFor(kField).IsEmpty());
++    EXPECT_TRUE(metrics.FieldHoleFor(kField).IsEmpty());
++    EXPECT_TRUE(metrics.alignment_insets().IsEmpty());
++  }
++  EXPECT_TRUE(ArcOmniboxPanelBounds(gfx::Rect(), kField, kCardInset).IsEmpty());
++  EXPECT_TRUE(ArcOmniboxPanelBounds(kBand, gfx::Rect(), kCardInset).IsEmpty());
+ }
+ 
+ // The shadow is one material shared by the popup frame and the focus panel, so
+@@ -149,6 +226,81 @@ TEST(ArcOmniboxPanelTest, ShadowIsFullyS
+   EXPECT_GT(metrics.shadow_dark_ambient, metrics.shadow_light_ambient);
+ }
+ 
++// One panel, two hosts: the band's and the sidebar row's must not drift into
++// two different materials.
++TEST(ArcOmniboxPanelTest, BothHostsShareOneShadow) {
++  const ArcOmniboxPanelMetrics band = Metrics();
++  const ArcOmniboxPanelMetrics row =
++      ComputeArcSidebarRowPanel(/*enabled=*/true, 142, 14);
++  EXPECT_EQ(band.shadow_elevation, row.shadow_elevation);
++  EXPECT_EQ(band.shadow_light_key, row.shadow_light_key);
++  EXPECT_EQ(band.shadow_light_ambient, row.shadow_light_ambient);
++  EXPECT_EQ(band.shadow_dark_key, row.shadow_dark_key);
++  EXPECT_EQ(band.shadow_dark_ambient, row.shadow_dark_ambient);
++}
++
++// --- The new tab page's composer (r8.3) ---
++
++// The box is the panel, and the field is inside it on all four sides -- the
++// opposite of the band, where the panel shares the capsule's two vertical
++// edges.
++TEST(ArcOmniboxPanelTest, ComposerPanelIsTheBoxAroundTheField) {
++  constexpr gfx::Rect kBox(661, 363, 667, 114);
++  constexpr gfx::Rect kRow(681, 398, 627, 44);
++  const ArcOmniboxPanelMetrics metrics =
++      ComputeArcComposerPanel(/*enabled=*/true, kBox, kRow, kFieldRadius, 20);
++  EXPECT_TRUE(metrics.enabled);
++  EXPECT_EQ(20, metrics.left_outset);
++  EXPECT_EQ(20, metrics.right_outset);
++  EXPECT_EQ(35, metrics.top_outset);
++  EXPECT_EQ(35, metrics.bottom_outset);
++  EXPECT_EQ(20, metrics.panel_radius);
++  EXPECT_EQ(kBox.ToString(), metrics.PanelFor(kRow).ToString());
++  // Every edge is a real outset, so the box strictly contains the row.
++  EXPECT_TRUE(metrics.PanelFor(kRow).Contains(kRow));
++  // The resting box IS the popup's non-result section: the alignment insets
++  // carry a bottom here (the band's are deliberately zero), and the field's
++  // own height is published so the popup does not fall back to the layout's
++  // 28 and cut the first suggestion through the input text.
++  EXPECT_EQ(35, metrics.alignment_insets().bottom());
++  EXPECT_EQ(44, metrics.field_height);
++  EXPECT_EQ(kBox.height(), metrics.field_height +
++                               metrics.alignment_insets().height());
++  // The band publishes neither, so its callers keep the layout constant and
++  // start their suggestions immediately under the capsule.
++  EXPECT_EQ(0, Metrics().alignment_insets().bottom());
++  EXPECT_EQ(0, Metrics().field_height);
++}
++
++// ⚠ r8.5 reverses this one. r8.3 asserted the composer wore the band's MD
++// shadow so it could not "drift into a second material"; the user's ruling at
++// r8.4 acceptance is that the composer wears the sidebar card's self-painted
++// cast instead ("这个阴影应该和之前我们做的侧边栏标签白条胶囊的阴影应该是一样的"),
++// and the MD model cannot express that shape at any parameter.
++//
++// What must NOT drift is the composer against ITSELF: the resting card and the
++// expanded popup are the same surface in two states, and they read the shadow
++// language off this one flag. r8.4 gave the resting one a sibling shadow view
++// and left the popup on MD, and the cast visibly jumped on every expand.
++TEST(ArcOmniboxPanelTest, ComposerWearsTheCardShadowAndTheBandDoesNot) {
++  const ArcOmniboxPanelMetrics band = Metrics();
++  const ArcOmniboxPanelMetrics composer = ComputeArcComposerPanel(
++      /*enabled=*/true, gfx::Rect(661, 363, 667, 114),
++      gfx::Rect(681, 398, 627, 44), kFieldRadius, 20);
++  EXPECT_FALSE(band.card_shadow);
++  EXPECT_TRUE(composer.card_shadow);
++  // And the band keeps its MD parameters, which the composer no longer reads.
++  EXPECT_GT(band.shadow_elevation, 0);
++  // Disabled and degenerate inputs are as loudly unusable as the other two.
++  EXPECT_FALSE(ComputeArcComposerPanel(/*enabled=*/false,
++                                       gfx::Rect(661, 363, 667, 114),
++                                       gfx::Rect(681, 398, 627, 44), 11, 20)
++                   .enabled);
++  EXPECT_FALSE(ComputeArcComposerPanel(/*enabled=*/true, gfx::Rect(),
++                                       gfx::Rect(681, 398, 627, 44), 11, 20)
++                   .enabled);
++}
++
+ // --- The sidebar-hosted row's panel (M3.9b, Arc-measured 2026-08-18) ---
+ 
+ // The row as M3.9a leaves it in a 200pt sidebar: 12,44 origin, 142 wide,
+@@ -168,7 +320,12 @@ TEST(ArcOmniboxPanelTest, SidebarPanelSh
+   const gfx::Rect panel = RowMetrics().PanelFor(kRowField);
+   EXPECT_EQ(kRowField.x(), panel.x());
+   EXPECT_EQ(kRowField.y(), panel.y());
+-  EXPECT_EQ(kRowField.bottom() + kEmptyPanelBottomOutset, panel.bottom());
++  EXPECT_EQ(kRowField.bottom() + kSidebarEmptyPanelBottomOutset,
++            panel.bottom());
++  // r8 left this host's apron where M3.6 put it -- the band's new 48 comes
++  // from a Dia measurement of a surface this one is not.
++  EXPECT_EQ(18, kSidebarEmptyPanelBottomOutset);
++  EXPECT_NE(kEmptyPanelBottomOutset, kSidebarEmptyPanelBottomOutset);
+ }
+ 
+ // The panel is kArcSidebarPanelWidth wide regardless of the field's width --
+@@ -177,22 +334,27 @@ TEST(ArcOmniboxPanelTest, SidebarPanelSh
+ TEST(ArcOmniboxPanelTest, SidebarPanelHasTheFixedWidth) {
+   EXPECT_EQ(kArcSidebarPanelWidth, RowMetrics().PanelFor(kRowField).width());
+   // A field already wider than the panel keeps its own width rather than
+-  // getting a negative extension.
++  // getting a negative outset -- unlike the band's, where the negative is the
++  // measured truth, here it would mean the sidebar has grown past the panel
++  // and the panel should simply stop mattering.
+   const ArcOmniboxPanelMetrics wide = ComputeArcSidebarRowPanel(
+       /*enabled=*/true, kArcSidebarPanelWidth + 50, kRowFieldRadius);
+-  EXPECT_EQ(0, wide.right_extension);
++  EXPECT_EQ(0, wide.right_outset);
+ }
+ 
+ // Sharing the top-left corner means sharing its arc: one corner, one radius.
++// This is the rule the band panel USED to follow too; r8 released the band
++// from it because its panel no longer touches the card, and the sidebar's
++// still does.
+ TEST(ArcOmniboxPanelTest, SidebarPanelRadiusIsTheFieldRadius) {
+   const ArcOmniboxPanelMetrics metrics = RowMetrics();
+   EXPECT_EQ(kRowFieldRadius, metrics.field_radius);
+   EXPECT_EQ(metrics.field_radius, metrics.panel_radius);
++  EXPECT_NE(kArcOmniboxPanelRadius, metrics.panel_radius);
+ }
+ 
+ // The popup aligns itself through the same insets the panel grows by, so the
+-// suggestion list and the empty panel agree on every edge (the band panel's
+-// own invariant, restated for the asymmetric shape).
++// suggestion list and the empty panel agree on every edge.
+ TEST(ArcOmniboxPanelTest, SidebarAlignmentMatchesPanelSides) {
+   const ArcOmniboxPanelMetrics metrics = RowMetrics();
+   const gfx::Insets insets = metrics.alignment_insets();
+@@ -208,21 +370,12 @@ TEST(ArcOmniboxPanelTest, SidebarAlignme
+   EXPECT_EQ(panel.width(), aligned.width());
+ }
+ 
+-// The band's own factory must stay exactly where M3.5 pinned it: the new
+-// right_extension is the sidebar's alone.
+-TEST(ArcOmniboxPanelTest, BandPanelHasNoRightExtension) {
+-  const ArcOmniboxPanelMetrics metrics = Metrics();
+-  EXPECT_EQ(0, metrics.right_extension);
+-  const gfx::Rect panel = metrics.PanelFor(kField);
+-  EXPECT_EQ(kField.CenterPoint().x(), panel.CenterPoint().x());
+-}
+-
+ // Disabled sidebar metrics are as loudly unusable as the band's.
+ TEST(ArcOmniboxPanelTest, SidebarDisabledYieldsNothing) {
+   const ArcOmniboxPanelMetrics metrics = ComputeArcSidebarRowPanel(
+       /*enabled=*/false, kRowField.width(), kRowFieldRadius);
+   EXPECT_FALSE(metrics.enabled);
+-  EXPECT_EQ(0, metrics.right_extension);
++  EXPECT_EQ(0, metrics.right_outset);
+   EXPECT_TRUE(metrics.PanelFor(kRowField).IsEmpty());
+ }
+ 
+@@ -238,20 +391,22 @@ TEST(ArcOmniboxPanelTest, EditHostShares
+ }
+ 
+ // With the field widened to the panel's width the sidebar metrics collapse to
+-// "the panel IS the field plus its apron": zero extension, aligned popup.
++// "the panel IS the field plus its apron": zero outsets, aligned popup.
+ // This is the geometric statement of what-you-see-is-what-you-get.
+ TEST(ArcOmniboxPanelTest, PanelEqualsFieldOnceFieldIsPanelWide) {
+   const ArcOmniboxPanelMetrics metrics = ComputeArcSidebarRowPanel(
+       /*enabled=*/true, kArcSidebarPanelWidth, kRowFieldRadius);
+-  EXPECT_EQ(0, metrics.right_extension);
++  EXPECT_EQ(0, metrics.right_outset);
+   EXPECT_TRUE(metrics.alignment_insets().IsEmpty());
+-  const gfx::Rect wide_field(kRowField.origin(),
+-                             gfx::Size(kArcSidebarPanelWidth, kRowField.height()));
++  const gfx::Rect wide_field(
++      kRowField.origin(),
++      gfx::Size(kArcSidebarPanelWidth, kRowField.height()));
+   const gfx::Rect panel = metrics.PanelFor(wide_field);
+   EXPECT_EQ(wide_field.x(), panel.x());
+   EXPECT_EQ(wide_field.y(), panel.y());
+   EXPECT_EQ(wide_field.width(), panel.width());
+-  EXPECT_EQ(wide_field.bottom() + kEmptyPanelBottomOutset, panel.bottom());
++  EXPECT_EQ(wide_field.bottom() + kSidebarEmptyPanelBottomOutset,
++            panel.bottom());
+ }
+ 
+ // The sidebar's default width, pinned with its derivation: 2x6 side padding
+Index: src/chrome/browser/ui/helium/arc_toolbar_host.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_toolbar_host.h
++++ src/chrome/browser/ui/helium/arc_toolbar_host.h
+@@ -73,6 +73,66 @@ inline constexpr bool ArcToolbarIsSideba
+   return host != ArcToolbarHost::kBand;
+ }
+ 
++// Whether the field lives in the new tab page's centred composer rather than
++// in the band (r8.3, user 2026-08-21).
++//
++// It is the same field either way -- the LocationBarView is reparented, not
++// duplicated -- which is what makes Cmd+L land in the composer for free and
++// what stops the band ever flashing a capsule on the way.
++//
++// ⚠ r8.4 widened this. r8.3 took `band_hosted`, on the reasoning that the
++// hidden address bar mode's sidebar row was its own accepted design and should
++// be left alone. The user overruled that at acceptance, and the reasoning is
++// the module's, not the mode's:
++//
++//   "全隐藏模式下，也是要做成 new tab 的样式……New tab 的逻辑就是打开一个网页中央
++//    带有搜索框的空白页面，这个逻辑跟 app 窗口 UI 布局怎么变没有关系，只要打开
++//    new tab 永远都是网页中央有个搜索框。"
++//
++// So the question is not "which chrome host would have held the field" but
++// "does the shell hold the field at all" -- band or sidebar row, on a blank
++// new tab it moves to the page. `shell_hosts_field` is
++// IsArcBandHostedFor() || IsArcSidebarHostedFor(); the one case that stays
++// false is a window with no Arc shell (popups, horizontal tabs), where there
++// is no composer to move to.
++inline constexpr bool ShouldHostFieldInComposer(bool shell_hosts_field,
++                                                bool blank_new_tab) {
++  return shell_hosts_field && blank_new_tab;
++}
++
++// Whether the band shows its address capsule at all (r8, user 2026-08-21).
++//
++// On a blank new tab it does not, because the field is not there -- it is in
++// the composer. The user's reasoning is the point of the whole module, so it
++// is recorded here rather than lost in a commit message: the composer is where
++// ~90% of typing happens, and a visible capsule at the top of the window
++// competes with it for the same job while being further from the pointer.
++//
++// ⚠ This answers "is the capsule shown", not "where does the toolbar live". It
++// is deliberately NOT a fourth ArcToolbarHost: the extensions, the avatar and
++// the menu stay in the band either way (`Dia:` keeps its own band chrome on
++// the new tab page and simply has no capsule in the middle -- measured
++// 2026-08-21 off the Cmd+T burst). Only the field moves.
++//
++// ⚠ r8.2 had a third parameter, `revealed`, so that Cmd+L could pull the
++// capsule back on a page that had nowhere else to type. The composer is that
++// somewhere else, so it is gone: on a blank new tab the capsule is never shown,
++// full stop.
++//
++// ⚠ This is NOT the complement of ShouldHostFieldInComposer any more (r8.4).
++// That one now fires for the sidebar row too, where this one's `band_hosted`
++// is false and it answers "shown". The caller reconciles them by asking the
++// toolbar whether the field is actually in the composer -- a fact that stays
++// true across the reparent, which neither of these two derived predicates does
++// (see ToolbarView::UpdateArcBandFieldVisibility).
++inline constexpr bool ShouldShowArcBandField(bool band_hosted,
++                                             bool blank_new_tab) {
++  if (!band_hosted) {
++    return true;
++  }
++  return !blank_new_tab;
++}
++
+ // Whether the sidebar row's extensions area is shown -- the pinned action
+ // icons and the extensions menu button together, since the user reads them as
+ // one group and Arc hides the whole group or none of it.
+Index: src/chrome/browser/ui/helium/arc_toolbar_host_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_toolbar_host_unittest.cc
++++ src/chrome/browser/ui/helium/arc_toolbar_host_unittest.cc
+@@ -160,5 +160,64 @@ TEST(ArcToolbarHostTest, TheAreasWidthTr
+                                                  /*revealed_or_fading=*/false));
+ }
+ 
++
++// --- r8.3: the field moves to the composer on a blank new tab ---
++
++// A normal page keeps its capsule in the band.
++TEST(ArcToolbarHostTest, BandFieldStaysOnANormalPage) {
++  EXPECT_TRUE(ShouldShowArcBandField(/*band_hosted=*/true,
++                                     /*blank_new_tab=*/false));
++  EXPECT_FALSE(ShouldHostFieldInComposer(/*band_hosted=*/true,
++                                         /*blank_new_tab=*/false));
++}
++
++// On a blank new tab the two answers are exact opposites, and that is the
++// invariant: the capsule is absent because the field is elsewhere, not hidden
++// alongside a second one. r8.2 had a `revealed` escape hatch here because the
++// composer did not exist yet; it is gone.
++TEST(ArcToolbarHostTest, BlankNewTabMovesTheFieldToTheComposer) {
++  EXPECT_FALSE(ShouldShowArcBandField(/*band_hosted=*/true,
++                                      /*blank_new_tab=*/true));
++  EXPECT_TRUE(ShouldHostFieldInComposer(/*shell_hosts_field=*/true,
++                                        /*blank_new_tab=*/true));
++}
++
++// r8.4: and it moves there from the sidebar row too, not just from the band.
++// "只要打开 new tab 永远都是网页中央有个搜索框" (user 2026-08-21) -- the composer
++// belongs to the page, so which chrome host would otherwise have held the
++// field does not enter into it.
++TEST(ArcToolbarHostTest, HiddenAddressBarModeGetsTheComposerToo) {
++  // The sidebar row is not band-hosted, and that no longer keeps the field
++  // out of the composer.
++  EXPECT_TRUE(ShouldHostFieldInComposer(/*shell_hosts_field=*/true,
++                                        /*blank_new_tab=*/true));
++  // On a real page it stays in whichever host holds it, either way.
++  EXPECT_FALSE(ShouldHostFieldInComposer(/*shell_hosts_field=*/true,
++                                         /*blank_new_tab=*/false));
++}
++
++// The band never shows a capsule while the composer holds the field. ⚠ This is
++// only a statement about the band: since r8.4 ShouldShowArcBandField's
++// `band_hosted=false` (the sidebar row, a popup) answers "shown" while the
++// composer may still have taken the field, and reconciling those two is the
++// caller's job, from the fact of where the field actually is.
++TEST(ArcToolbarHostTest, TheBandNeverCompetesWithTheComposer) {
++  for (bool blank : {false, true}) {
++    SCOPED_TRACE(testing::Message() << "blank=" << blank);
++    EXPECT_FALSE(ShouldShowArcBandField(/*band_hosted=*/true, blank) &&
++                 ShouldHostFieldInComposer(/*shell_hosts_field=*/true, blank));
++  }
++}
++
++// With no Arc shell holding the field at all -- a popup window, or the
++// horizontal tab strip -- there is no composer to move it to.
++TEST(ArcToolbarHostTest, NoShellNoComposer) {
++  for (bool blank : {false, true}) {
++    SCOPED_TRACE(testing::Message() << "blank=" << blank);
++    EXPECT_FALSE(ShouldHostFieldInComposer(/*shell_hosts_field=*/false, blank));
++    EXPECT_TRUE(ShouldShowArcBandField(/*band_hosted=*/false, blank));
++  }
++}
++
+ }  // namespace
+ }  // namespace helium
+Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
++++ src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
+@@ -120,7 +120,14 @@ ExtensionsToolbarDesktop::DropInfo::Drop
+ 
+ ExtensionsToolbarDesktop::ExtensionsToolbarDesktop(Browser* browser,
+                                                    DisplayMode display_mode)
+-    : ToolbarIconContainerView(/*uses_highlight=*/true),
++    // helium-fork r8: no container outline. ToolbarIconContainerView draws a
++    // 1px rounded stroke around the whole group whenever any child is hovered
++    // or focused; in the Arc band that reads as a box around the extensions
++    // that nothing else in the shell has, and it is mis-sized besides. The
++    // user asked for it gone: "扩展图标，这个区域外部的线条框不要了，只需要每个
++    // 图标的背景胶囊就可以" (2026-08-21). Each icon keeps its own hover capsule,
++    // which is what actually says "this is a button".
++    : ToolbarIconContainerView(/*uses_highlight=*/false),
+       browser_(browser),
+       model_(ToolbarActionsModel::Get(browser_->profile())),
+       display_mode_(display_mode),
+Index: src/chrome/browser/ui/views/frame/arc_composer_host_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/arc_composer_host_view.cc
+@@ -0,0 +1,35 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/arc_composer_host_view.h"
++
++#include "chrome/browser/ui/helium/arc_composer.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/compositor/layer.h"
++
++ArcComposerHostView::ArcComposerHostView() {
++  // A layer of its own so the field composites above the panel's card, which
++  // is itself layer-backed; a view without one paints into the shared parent
++  // layer, which is *below* every layer-backed sibling whatever the child
++  // order says. (The same trap ArcOmniboxPanelView's comment records.)
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  SetVisible(false);
++}
++
++ArcComposerHostView::~ArcComposerHostView() = default;
++
++void ArcComposerHostView::Layout(PassKey) {
++  // One child, and the geometry is the shell's, not a layout manager's: the
++  // row is centred in the box by helium::ArcComposerFieldBounds() so the two
++  // rectangles cannot be derived twice.
++  if (children().empty()) {
++    return;
++  }
++  children().front()->SetBoundsRect(
++      helium::ArcComposerFieldBounds(GetLocalBounds()));
++}
++
++BEGIN_METADATA(ArcComposerHostView)
++END_METADATA
+Index: src/chrome/browser/ui/views/frame/arc_composer_host_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/arc_composer_host_view.h
+@@ -0,0 +1,46 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_ARC_COMPOSER_HOST_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_ARC_COMPOSER_HOST_VIEW_H_
++
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/view.h"
++
++// helium-fork: where the address field lives while a blank new tab is showing
++// -- the centred composer, the only place that page has for typing.
++//
++// It holds the real LocationBarView, reparented out of the toolbar. Not a copy
++// and not a second omnibox: there is one field in the window, and on a new tab
++// it is here. That is what makes Cmd+L land in the composer without a single
++// line of routing, and what makes it impossible for the band to flash a capsule
++// at the same time -- the capsule is not hidden, it is absent.
++//
++// It paints nothing. The white card behind the field is ArcOmniboxPanelView's,
++// the same painter the band's edit panel and the suggestion popup use, so the
++// three surfaces cannot drift apart and the hand-off from "empty box" to "box
++// with suggestions" stays invisible. This view is ordered directly after that
++// one in BrowserView so the field sits ON the card rather than under it -- and
++// that is also why the panel leaves no hole here, unlike on the band where the
++// field is a layer below it.
++//
++// Only the field moves. The extensions, the avatar and the app menu stay in
++// the band (`Dia:` does the same -- measured 2026-08-21, its new tab page keeps
++// the sidebar toggle, the navigation buttons and Personalization and simply has
++// nothing in the middle), so the toolbar keeps hosting everything else and
++// ToolbarView's trailing spacer keeps them against the right edge.
++class ArcComposerHostView : public views::View {
++  METADATA_HEADER(ArcComposerHostView, views::View)
++
++ public:
++  ArcComposerHostView();
++  ArcComposerHostView(const ArcComposerHostView&) = delete;
++  ArcComposerHostView& operator=(const ArcComposerHostView&) = delete;
++  ~ArcComposerHostView() override;
++
++  // views::View:
++  void Layout(PassKey) override;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_ARC_COMPOSER_HOST_VIEW_H_
+Index: src/chrome/browser/ui/views/frame/arc_omnibox_panel_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/arc_omnibox_panel_view.cc
++++ src/chrome/browser/ui/views/frame/arc_omnibox_panel_view.cc
+@@ -4,8 +4,9 @@
+ 
+ #include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
+ 
++#include "chrome/browser/ui/views/frame/arc_composer_host_view.h"
++
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+-#include "chrome/browser/ui/omnibox/omnibox_controller.h"
+ #include "chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+@@ -63,6 +64,18 @@ void ArcOmniboxPanelView::UpdateFromFiel
+   // Editing, and nothing to suggest yet. Once the popup is up it draws the very
+   // same panel around the very same field, and two of them would double the
+   // shadow.
++  //
++  // ⚠ r8.6b: the test for "the popup is up" is IsArcPopupOnScreen(), NOT
++  // OmniboxController::IsPopupOpen(). The two widgets composite independently,
++  // so the model's answer flips a frame before the popup's pixels arrive (and
++  // a frame after they leave), and stepping aside on the model's schedule left
++  // one frame with the card on neither surface. The user caught it on both
++  // edges -- "中央框在输入文字的一瞬间和删除所有文字的一瞬间，阴影都会跳一下"
++  // (2026-08-22); measured off their screen recording, frames 36 and 60 of 73
++  // read the page's own 253 all the way up from the card's top edge where every
++  // other frame reads 239/242/243/245. Since the card is a plain white fill on
++  // a white page with no stroke, "no shadow" IS "no card".
++  //
+   // IsDrawn(), not GetVisible(): in the hidden address bar mode the field
+   // rides inside the floating sidebar, and when the card slides away the
+   // field's own flag stays true while an ancestor's goes false. The panel is
+@@ -76,11 +89,20 @@ void ArcOmniboxPanelView::UpdateFromFiel
+   // row returns to rest showing icon+host, the input survives invisibly, and
+   // the next click reopens the panel with it. One rule for the revealed card
+   // and the docked sidebar alike.
+-  const bool editing = ToolbarView::IsArcSidebarHostedFor(location_bar_)
+-                           ? location_bar_->HasFocus()
+-                           : location_bar_->IsArcFieldEditing();
++  //
++  // Composer: no edit state to wait for. The box IS the new tab page's search
++  // field, and an empty page with no box on it would be a page with nowhere to
++  // type -- so it is on screen from the moment the tab commits, exactly as
++  // `Dia:`'s is.
++  const bool in_composer =
++      location_bar_->parent() &&
++      views::IsViewClass<ArcComposerHostView>(location_bar_->parent());
++  const bool editing =
++      in_composer || (ToolbarView::IsArcSidebarHostedFor(location_bar_)
++                          ? location_bar_->HasFocus()
++                          : location_bar_->IsArcFieldEditing());
+   if (!metrics.enabled || !location_bar_->IsDrawn() || !editing ||
+-      location_bar_->GetOmniboxController()->IsPopupOpen()) {
++      location_bar_->IsArcPopupOnScreen()) {
+     hide();
+     return;
+   }
+@@ -101,15 +123,26 @@ void ArcOmniboxPanelView::UpdateFromFiel
+   view_bounds.Inset(-helium::ArcOmniboxPanelShadowInsets(metrics));
+ 
+   const gfx::Rect panel_in_view = panel - view_bounds.OffsetFromOrigin();
+-  const gfx::Rect field_in_view = field - view_bounds.OffsetFromOrigin();
++  // helium-fork: the hole, not the field -- clipped to the panel so nothing
++  // punches out the far side (see FieldHoleFor).
++  //
++  // ⚠ And no hole at all under the composer. There the field is a layer ABOVE
++  // this card (ArcComposerHostView is ordered after this view in BrowserView),
++  // so it needs nothing cut for it; a hole would be a window straight through
++  // the card to the page. On the band the field is a layer BELOW, which is the
++  // whole reason the hole exists.
++  const gfx::Rect field_in_view =
++      metrics.FieldHoleFor(field) - view_bounds.OffsetFromOrigin();
+   // BrowserView::Layout() calls this on every pass, so repainting has to be
+   // conditional -- otherwise a window resize with the field focused would
+   // re-raster this layer once per layout for nothing.
+   const bool repaint = panel_in_view != panel_in_view_ ||
+-                       field_in_view != field_in_view_ || !GetVisible();
++                       (in_composer ? !field_in_view_.IsEmpty()
++                                    : field_in_view != field_in_view_) ||
++                       !GetVisible();
+   metrics_ = metrics;
+   panel_in_view_ = panel_in_view;
+-  field_in_view_ = field_in_view;
++  field_in_view_ = in_composer ? gfx::Rect() : field_in_view;
+   SetBoundsRect(view_bounds);
+   SetVisible(true);
+   if (repaint) {
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -174,6 +174,9 @@
+ #include "chrome/browser/ui/views/frame/scrim_view.h"
+ #include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
+ #include "chrome/browser/ui/views/frame/arc_loading_bar_view.h"
++#include "chrome/browser/ui/helium/arc_composer.h"
++#include "chrome/app/vector_icons/vector_icons.h"
++#include "chrome/browser/ui/views/frame/arc_composer_host_view.h"
+ #include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
+ #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
+@@ -334,6 +337,7 @@
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/models/image_model.h"
++#include "ui/views/controls/image_view.h"
+ #include "ui/base/mojom/window_show_state.mojom.h"
+ #include "ui/base/resource/resource_bundle.h"
+ #include "ui/base/text/bytes_formatting.h"
+@@ -723,7 +727,14 @@ class ArcOmniboxDismissHandler : public
+     // edit host without carrying focus through a reparent (that dispatches
+     // Blur mid-move). The press then dispatches into the very same field at
+     // the very same origin, one layout later, and focuses it there.
+-    browser_view_->MaybeBeginArcFieldEditFromPress();
++    // ⚠ r8.6a: and a press the begin half CLAIMED does not also go to the end
++    // half. On a blank new tab the field is in the composer, so a press on the
++    // sidebar's address row is "outside the field" by the end half's own
++    // hit-test -- it granted the caret and the very next line took it away
++    // again, in the same event (user-hit 2026-08-22, "还是不可点击").
++    if (browser_view_->MaybeBeginArcFieldEditFromPress()) {
++      return;
++    }
+     browser_view_->MaybeEndArcFieldEditing();
+   }
+ 
+@@ -1268,6 +1279,27 @@ BrowserView::BrowserView(Browser* browse
+   // long after BrowserViewTabbedLayoutImpl.
+   arc_omnibox_panel_ = AddChildView(std::make_unique<ArcOmniboxPanelView>());
+ 
++  // helium-fork r8.3: the new tab page's composer, directly after the panel so
++  // the field it holds composites ON the card the panel paints rather than
++  // under it. Unlike the panel this one takes input -- it IS the field.
++  arc_composer_host_ = AddChildView(std::make_unique<ArcComposerHostView>());
++
++  // helium-fork r8.4: and the product mark above it. `Dia:` puts a flat
++  // neutral-grey mark over its own composer (measured 2026-08-21: 50x41pt in
++  // (219,219,219), 29.5pt of clear air under it) and the user chose that
++  // treatment over Helium's blue app icon -- the mark is meant to be the
++  // quietest thing on an otherwise empty page.
++  arc_composer_logo_ = AddChildView(std::make_unique<views::ImageView>());
++  arc_composer_logo_->SetCanProcessEventsWithinSubtree(false);
++  // ⚠ A layer of its own, for the same reason ArcComposerHostView has one: a
++  // view without one paints into the shared parent layer, which composites
++  // BENEATH every layer-backed sibling -- including the web contents. Probe-hit
++  // 2026-08-21: geometry read back correct, visible=true, and the mark was
++  // simply not on the screen.
++  arc_composer_logo_->SetPaintToLayer();
++  arc_composer_logo_->layer()->SetFillsBoundsOpaquely(false);
++  arc_composer_logo_->SetVisible(false);
++
+   window_scrim_view_ = AddChildView(std::make_unique<ScrimView>());
+   window_scrim_view_->layer()->SetName("WindowScrimView");
+ 
+@@ -2592,20 +2624,37 @@ void BrowserView::MaybeEndArcFieldEditin
+   UpdateZenModeRevealFromCursor();
+ }
+ 
+-void BrowserView::MaybeBeginArcFieldEditFromPress() {
++bool BrowserView::MaybeBeginArcFieldEditFromPress() {
+   if (arc_field_edit_active_ || !toolbar_) {
+-    return;
++    return false;
+   }
+   LocationBarView* const location_bar = toolbar_->location_bar_view();
+-  if (!location_bar || !ToolbarView::IsArcSidebarHostedFor(location_bar)) {
+-    return;
++  if (!location_bar) {
++    return false;
++  }
++  // The blank new tab's own answer, and it is neither r8.5's nor r8.6's first
++  // pass. r8.5 had the row BORROW the field back, which emptied the composer;
++  // the user ruled that out ("new tab 只要打开界面就是固定的，不被任何操作所影响",
++  // 2026-08-22). r8.6 then made the row inert, and the user ruled THAT out too
++  // ("侧边栏顶部的地址栏还是不可点击，又变成以前了", same day).
++  //
++  // Both hold only if the click reaches the address bar without moving it --
++  // and on a blank new tab the address bar IS the box in the middle of the
++  // page. So the press puts the caret there (user's pick, 2026-08-22: "点它＝
++  // 把光标放进中央框"). The row shows its own press feedback, the panel opens
++  // where the field actually is, and the page does not move a pixel.
++  if (location_bar->IsArcComposerHosted()) {
++    return FocusComposerFromRowPress();
++  }
++  if (!ToolbarView::IsArcSidebarHostedFor(location_bar)) {
++    return false;
+   }
+   // Same cursor-over-event-coordinates trick as MaybeEndArcFieldEditing: the
+   // monitor fires pre-dispatch, so the pointer is exactly where it pressed.
+   gfx::Point local(display::Screen::Get()->GetCursorScreenPoint());
+   views::View::ConvertPointFromScreen(location_bar, &local);
+   if (!location_bar->HitTestPoint(local)) {
+-    return;
++    return false;
+   }
+   // helium-fork: only a press that can actually reach the field starts the
+   // hand-off. The row's blank stretch is a window-drag point (#337: not moving
+@@ -2614,9 +2663,44 @@ void BrowserView::MaybeBeginArcFieldEdit
+   // the caption predicate itself means the two cannot disagree about which
+   // pixels are draggable.
+   if (location_bar->IsPositionInWindowCaption(local)) {
+-    return;
++    return false;
+   }
+   BeginArcSidebarFieldEdit();
++  // NOT claimed: the sidebar-hosted hand-off has always run the end half after
++  // itself, and that is load-bearing -- see MaybeEndArcFieldEditing()'s own
++  // comment about the row's blank stretch.
++  return false;
++}
++
++bool BrowserView::FocusComposerFromRowPress() {
++  if (!toolbar_ || !vertical_tab_strip_region_view_) {
++    return false;
++  }
++  views::View* const address_row =
++      vertical_tab_strip_region_view_->arc_address_row();
++  // Only the sidebar row, and only while it is on screen: the press monitor
++  // fires for every press in the window, so without this a click anywhere
++  // would re-focus the composer.
++  if (!address_row || !address_row->IsDrawn()) {
++    return false;
++  }
++  // Same cursor-over-event-coordinates trick as the two neighbours: the
++  // monitor fires pre-dispatch, so the pointer is exactly where it pressed.
++  gfx::Point local(display::Screen::Get()->GetCursorScreenPoint());
++  views::View::ConvertPointFromScreen(address_row, &local);
++  if (!address_row->HitTestPoint(local)) {
++    return false;
++  }
++  if (LocationBarView* const field = toolbar_->location_bar_view()) {
++    // Nothing is reparented and nothing is shown or hidden -- the field is
++    // already in the composer, this only moves the caret. FocusLocation() no
++    // longer starts a sidebar edit for a composer-hosted field (r8.5 made the
++    // two host predicates answer false there), so this cannot pull the toolbar
++    // into the 350pt edit host behind the user's back.
++    field->FocusLocation(/*is_user_initiated=*/true,
++                         /*clear_focus_if_failed=*/false);
++  }
++  return true;
+ }
+ 
+ void BrowserView::BeginArcSidebarFieldEdit() {
+@@ -2661,6 +2745,150 @@ void BrowserView::LayoutArcFieldEditHost
+   arc_field_edit_host_->SetVisible(true);
+ }
+ 
++void BrowserView::UpdateArcComposerHost() {
++  if (!arc_composer_host_ || !toolbar_) {
++    return;
++  }
++  // Re-entrant by design: ending a sidebar edit below funnels back here. One
++  // level is all that is ever needed, and the guard makes "all that is ever
++  // needed" true rather than hoped for.
++  if (arc_updating_composer_host_) {
++    return;
++  }
++  base::AutoReset<bool> guard(&arc_updating_composer_host_, true);
++  LocationBarView* const location_bar = toolbar_->location_bar_view();
++  if (!location_bar) {
++    return;
++  }
++  // r8.4: band OR sidebar row. The composer is a property of the page, not of
++  // the window's chrome layout -- "这个逻辑跟 app 窗口 UI 布局怎么变没有关系"
++  // (user 2026-08-21). What still has to be true is that some Arc host holds
++  // the field at all: a popup window or the horizontal tab strip has no
++  // composer to move it to.
++  //
++  // ⚠ r8.5: asked of the toolbar, not of the two "which host holds it"
++  // predicates -- those now answer false once the field IS in the composer,
++  // which would make this flip-flop every call.
++  //
++  // ⛔ r8.6: nothing borrows the field back. r8.5 let a press on the sidebar's
++  // address row take it, and the price was that the new tab page changed shape
++  // under a click that was not about it -- which the user ruled out in the
++  // strongest terms he has used on this module ("new tab 只要打开界面就是固定的，
++  // 不被任何操作所影响", 2026-08-22). A blank new tab holds the field, full stop.
++  const bool want_composer =
++      helium::ShouldHostFieldInComposer(toolbar_->ArcShellHostsField(),
++                                        toolbar_->IsArcBlankNewTab());
++
++  // ⚠ The page outranks an edit it did not ask for. A blank new tab's own
++  // SetFocusToLocationBar() reaches FocusLocation() while the field is still
++  // in the sidebar row, which begins the row's edit hand-off -- so in the
++  // hidden address bar mode the toolbar was in the panel-wide edit host before
++  // this function ever ran, and the row looked empty because the toolbar was
++  // no longer in it (user-hit 2026-08-21, "侧边栏顶部的地址栏又没有了").
++  // Ended in place rather than by re-entering: the funnel's own tail call back
++  // here is swallowed by the guard above, so this call carries on and does the
++  // reparent itself with the toolbar already back in the row.
++  // A borrow is different: that edit IS what the user asked for, and
++  // want_composer is already false for it.
++  if (want_composer && arc_field_edit_active_) {
++    EndArcSidebarFieldEdit();
++  }
++  if (want_composer == toolbar_->IsLocationBarInComposer()) {
++    LayoutArcComposerHost();
++    return;
++  }
++
++  // Focus leaves before the field does. Moving a focused subtree dispatches
++  // Blur mid-move -- the reparent-then-focus rule this shell already learned
++  // once, in LocationBarView::FocusLocation(). Whoever wanted the field
++  // focused asks again afterwards; on a new tab that is the page's own
++  // automatic SetFocusToLocationBar().
++  if (views::FocusManager* const focus_manager = GetFocusManager()) {
++    if (focus_manager->GetFocusedView() &&
++        location_bar->Contains(focus_manager->GetFocusedView())) {
++      focus_manager->ClearFocus();
++    }
++  }
++
++  location_bar->SetArcComposerTypography(want_composer);
++  if (want_composer) {
++    if (std::unique_ptr<views::View> field =
++            toolbar_->ReleaseLocationBarForComposer()) {
++      arc_composer_host_->AddChildView(std::move(field));
++    }
++  } else {
++    if (!arc_composer_host_->children().empty()) {
++      toolbar_->ReclaimLocationBarFromComposer(
++          arc_composer_host_->RemoveChildViewT(
++              arc_composer_host_->children().front()));
++    }
++  }
++  LayoutArcComposerHost();
++  // The caret belongs in the box. `Dia:`'s new tab opens with it there, and the
++  // page has nothing else to type into -- so the focus the reparent had to
++  // drop is asked for again here, once the field has bounds. Not user
++  // initiated: this is the page's own focus, the same one Chromium gives a new
++  // tab's omnibox.
++  if (want_composer && IsActive()) {
++    location_bar->FocusLocation(/*is_user_initiated=*/false,
++                                /*clear_focus_if_failed=*/false);
++  }
++}
++
++void BrowserView::LayoutArcComposerHost() {
++  if (!arc_composer_host_) {
++    return;
++  }
++  if (!toolbar_ || !toolbar_->IsLocationBarInComposer() ||
++      !multi_contents_view_) {
++    if (arc_composer_host_->GetVisible()) {
++      arc_composer_host_->SetVisible(false);
++    }
++    SetArcComposerOrnamentsVisible(false);
++    return;
++  }
++  // Against the contents area, not the window: `Dia:` centres its composer on
++  // the content area (measured 2026-08-21 -- its centre landed 2.3pt off the
++  // content area's and 134.5pt off the window's), and that difference is the
++  // sidebar. The height fraction is the window's, though; see arc_composer.h.
++  gfx::RectF contents_f((gfx::SizeF(multi_contents_view_->size())));
++  views::View::ConvertRectToTarget(multi_contents_view_, this, &contents_f);
++  const gfx::Rect box = helium::ArcComposerBounds(
++      gfx::ToEnclosingRect(contents_f), height());
++  if (box.IsEmpty()) {
++    arc_composer_host_->SetVisible(false);
++    SetArcComposerOrnamentsVisible(false);
++    return;
++  }
++  arc_composer_host_->SetBoundsRect(box);
++  arc_composer_host_->SetVisible(true);
++  arc_composer_host_->DeprecatedLayoutImmediately();
++
++  // The mark is placed outside the card entirely (see arc_composer.h on why it
++  // is not a child of the host). The card's shadow is not a view at all any
++  // more -- it is painted by the panel, so the resting card and the expanded
++  // popup cast the same one (r8.5).
++  if (arc_composer_logo_) {
++    arc_composer_logo_->SetBoundsRect(helium::ArcComposerLogoBounds(box));
++  }
++  SetArcComposerOrnamentsVisible(true);
++}
++
++void BrowserView::SetArcComposerOrnamentsVisible(bool visible) {
++  if (!arc_composer_logo_) {
++    return;
++  }
++  if (visible && arc_composer_logo_->GetImageModel().IsEmpty()) {
++    // Built here rather than at construction: the vector icon is rasterised
++    // against the widget's scale factor, which does not exist yet when
++    // BrowserView's children are added.
++    arc_composer_logo_->SetImage(ui::ImageModel::FromVectorIcon(
++        kChromeProductHollowIcon, helium::kArcComposerLogoColor,
++        helium::kArcComposerLogoSize));
++  }
++  arc_composer_logo_->SetVisible(visible);
++}
++
+ void BrowserView::EndArcSidebarFieldEdit() {
+   if (!arc_field_edit_active_) {
+     return;
+@@ -2880,6 +3108,13 @@ void BrowserView::UpdateArcAddressBarPla
+   // event, so flipping kDocked <-> kHidden with the sidebar collapsed left
+   // them stale for the gap.
+   UpdateCaptionButtonsOpacityForChromeState();
++  // helium-fork r8.4: and re-decide whether the field belongs to the composer.
++  // Since r8.3 that answer depended on the band, so a mode switch could not
++  // change it and this never asked; now that the sidebar row hosts the
++  // composer too, kDocked <-> kHidden, a sidebar collapse and a dock flip all
++  // move the answer. Asked LAST on purpose -- the toolbar has to have finished
++  // arriving at its new host before the field is taken out of it or put back.
++  UpdateArcComposerHost();
+   InvalidateLayout();
+ }
+ 
+@@ -4019,6 +4254,10 @@ void BrowserView::SetFocusToLocationBar(
+     return;
+   }
+ #endif
++  // helium-fork r8.3: nothing to refuse any more. The blank new tab's field is
++  // in the composer, so both the page's own automatic focus and Cmd+L land
++  // there -- the r8.2 machinery that pulled a hidden capsule back existed only
++  // because that page had nowhere else to type.
+   if (!IsLocationBarVisible()) {
+     return;
+   }
+@@ -6528,6 +6767,10 @@ void BrowserView::Layout(PassKey) {
+   if (arc_omnibox_panel_) {
+     arc_omnibox_panel_->UpdateFromField();
+   }
++  // helium-fork r8.3: same reason as the edit host above -- the composer is
++  // placed against the contents area, whose rect is only settled once this
++  // pass has run.
++  LayoutArcComposerHost();
+ 
+   // helium-fork: the loading bar rides the contents' top edge, which is only
+   // settled -- band height, card inset -- once the layout has run. Its corner
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -96,6 +96,7 @@ class ProjectsPanelView;
+ class ScrimView;
+ class ArcCardOutlineView;
+ class ArcLoadingBarView;
++class ArcComposerHostView;
+ class ArcOmniboxPanelView;
+ class ShadowFrameView;
+ class SidePanel;
+@@ -133,6 +134,7 @@ enum class Channel;
+ 
+ namespace views {
+ class EventMonitor;
++class ImageView;
+ class WebView;
+ }  // namespace views
+ 
+@@ -484,6 +486,21 @@ class BrowserView : public BrowserWindow
+   // clears its focus, so the order is reparent-then-focus). Moves the toolbar
+   // into arc_field_edit_host_ and shows it at the panel's width. No-op unless
+   // the hidden mode's sidebar row is on screen.
++  // helium-fork r8.3: move the address field into or out of the new tab
++  // page's centred composer, from the one predicate that decides it
++  // (helium::ShouldHostFieldInComposer). Idempotent; safe to call from any
++  // state change that could flip the answer.
++  void UpdateArcComposerHost();
++  // helium-fork r8.3: place the composer against the contents area. Only ever
++  // called from the layout, because that is the only point the contents rect
++  // is settled.
++  void LayoutArcComposerHost();
++
++  // helium-fork r8.4: the composer's shadow and product mark, which follow
++  // the box in and out together. Kept off LayoutArcComposerHost's happy
++  // path so every early return hides them too.
++  void SetArcComposerOrnamentsVisible(bool visible);
++
+   void BeginArcSidebarFieldEdit();
+   void ToggleZenModeTopChrome();
+ 
+@@ -1042,7 +1059,14 @@ class BrowserView : public BrowserWindow
+   // helium-fork: the begin half, from the same pre-dispatch press monitor --
+   // a press landing on the sidebar row's field starts the edit hand-off
+   // before the field takes focus. See BeginArcSidebarFieldEdit().
+-  void MaybeBeginArcFieldEditFromPress();
++  // Returns true if the press was CLAIMED, i.e. it has already been decided
++  // and must not also be read as a click outside the field.
++  bool MaybeBeginArcFieldEditFromPress();
++
++  // helium-fork r8.6a: and its blank-new-tab half -- a press on the sidebar's
++  // address row while the field lives in the composer puts the caret there
++  // rather than moving anything. See MaybeBeginArcFieldEditFromPress().
++  bool FocusComposerFromRowPress();
+ 
+   // Places the edit host over the sidebar row (called from Layout() while
+   // active, before the panel reads the field's bounds).
+@@ -1329,6 +1353,16 @@ class BrowserView : public BrowserWindow
+   // here because the band clips its own contents. See ArcOmniboxPanelView.
+   raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
+ 
++  // helium-fork r8.3: the new tab page's centred composer, which holds the
++  // real address field while a blank new tab is showing. Ordered directly
++  // after the panel so the field sits ON the white card the panel paints.
++  raw_ptr<ArcComposerHostView> arc_composer_host_ = nullptr;
++
++  // helium-fork r8.4: the product mark above the composer. A sibling rather
++  // than a child of the host because the host's local bounds ARE the white
++  // card -- anything inside it makes the card taller.
++  raw_ptr<views::ImageView> arc_composer_logo_ = nullptr;
++
+   // helium-fork: while the sidebar row's field is being edited the whole
+   // toolbar moves here -- a BrowserView child sharing the row's origin at the
+   // panel's width, so the field can be as wide as the panel standing on it
+@@ -1337,6 +1371,8 @@ class BrowserView : public BrowserWindow
+   // the field through. See BeginArcSidebarFieldEdit().
+   raw_ptr<views::View> arc_field_edit_host_ = nullptr;
+   bool arc_field_edit_active_ = false;
++  // helium-fork r8.5: UpdateArcComposerHost() re-entrancy guard.
++  bool arc_updating_composer_host_ = false;
+   base::ScopedObservation<LocationBar, LocationBar::Observer>
+       arc_location_bar_observation_{this};
+ 
+Index: src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.cc
++++ src/chrome/browser/ui/views/helium/arc_omnibox_panel_painter.cc
+@@ -8,9 +8,14 @@
+ #include <vector>
+ 
+ #include "base/numerics/safe_conversions.h"
++#include "cc/paint/draw_looper.h"
++#include "cc/paint/paint_canvas.h"
+ #include "cc/paint/paint_flags.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "third_party/skia/include/core/SkClipOp.h"
+ #include "third_party/skia/include/core/SkRRect.h"
+ #include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/insets_f.h"
+ #include "ui/gfx/geometry/rect_f.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/gfx/scoped_canvas.h"
+@@ -32,6 +37,45 @@ gfx::ShadowValues ShadowGeometry(const A
+   return gfx::ShadowValue::MakeMdShadowValues(metrics.shadow_elevation);
+ }
+ 
++// The sidebar card's shadow, painted around `panel`. Same pass table and the
++// same "only the ring paints" clip HeliumCardShadowView uses -- the card is
++// opaque, and a blur that bleeds inward shows through the moment anything
++// fades. Factored here rather than shared with that view because this one has
++// to run inside another view's paint pass, where there is no layer of its own
++// to fade.
++void PaintCardShadowRing(gfx::Canvas* canvas,
++                         const gfx::Rect& panel,
++                         int radius,
++                         bool dark) {
++  const SkScalar r = SkIntToScalar(radius);
++  const gfx::RectF card(panel);
++  const SkRRect card_rrect =
++      SkRRect::MakeRectXY(gfx::RectFToSkRect(card), r, r);
++
++  cc::PaintCanvas* const paint_canvas = canvas->sk_canvas();
++  cc::PaintCanvasAutoRestore restore(paint_canvas, /*save=*/true);
++  paint_canvas->clipRRect(card_rrect, SkClipOp::kDifference,
++                          /*do_anti_alias=*/true);
++
++  for (const SidebarCardShadowPass& pass : kSidebarCardShadowPasses) {
++    const double alpha = dark ? pass.dark_alpha : pass.light_alpha;
++    gfx::RectF pass_rect = card;
++    pass_rect.Inset(gfx::InsetsF::VH(0, pass.inset_h));
++    cc::DrawLooperBuilder looper;
++    looper.AddShadow(
++        {0, SkIntToScalar(pass.offset_y)}, SkDoubleToScalar(pass.sigma),
++        SkColor4f::FromColor(SkColorSetA(
++            SK_ColorBLACK, base::ClampRound<U8CPU>(255.0 * alpha))),
++        cc::DrawLooper::kOverrideAlphaFlag);
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setColor(SK_ColorTRANSPARENT);
++    flags.setLooper(looper.Detach());
++    paint_canvas->drawRRect(
++        SkRRect::MakeRectXY(gfx::RectFToSkRect(pass_rect), r, r), flags);
++  }
++}
++
+ }  // namespace
+ 
+ gfx::Insets ArcOmniboxPanelShadowInsets(
+@@ -39,6 +83,10 @@ gfx::Insets ArcOmniboxPanelShadowInsets(
+   if (!metrics.enabled) {
+     return gfx::Insets();
+   }
++  if (metrics.card_shadow) {
++    return gfx::Insets::VH(kSidebarCardShadowOutsetV,
++                           kSidebarCardShadowOutsetH);
++  }
+   // GetMargin() is negative (it is meant for Rect::Inset to expand with), and
+   // callers here want the room as a positive number.
+   return gfx::Insets() - gfx::ShadowValue::GetMargin(ShadowGeometry(metrics));
+@@ -54,17 +102,21 @@ void PaintArcOmniboxPanel(gfx::Canvas* c
+     return;
+   }
+ 
+-  const gfx::ShadowValues shadows = gfx::ShadowValue::MakeMdShadowValues(
+-      metrics.shadow_elevation,
+-      BlackWithAlpha(dark ? metrics.shadow_dark_key : metrics.shadow_light_key),
+-      BlackWithAlpha(dark ? metrics.shadow_dark_ambient
+-                          : metrics.shadow_light_ambient));
+-
+   cc::PaintFlags flags;
+   flags.setAntiAlias(true);
+   flags.setStyle(cc::PaintFlags::kFill_Style);
+   flags.setColor(background);
+-  flags.setLooper(gfx::CreateShadowDrawLooper(shadows));
++  if (!metrics.card_shadow) {
++    flags.setLooper(gfx::CreateShadowDrawLooper(
++        gfx::ShadowValue::MakeMdShadowValues(
++            metrics.shadow_elevation,
++            BlackWithAlpha(dark ? metrics.shadow_dark_key
++                                : metrics.shadow_light_key),
++            BlackWithAlpha(dark ? metrics.shadow_dark_ambient
++                                : metrics.shadow_light_ambient))));
++  } else {
++    PaintCardShadowRing(canvas, panel, metrics.panel_radius, dark);
++  }
+ 
+   gfx::ScopedCanvas scoped(canvas);
+   if (hole.has_value() && !hole->IsEmpty()) {
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -73,7 +73,11 @@
+ #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+ #include "chrome/browser/ui/views/chrome_typography.h"
++#include "chrome/browser/ui/helium/arc_composer.h"
++#include "chrome/browser/ui/views/frame/arc_composer_host_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/multi_contents_view.h"
++#include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
+ #include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_layout.h"
+@@ -178,6 +182,8 @@
+ #include "ui/compositor/paint_recorder.h"
+ #include "ui/display/screen.h"
+ #include "ui/events/event.h"
++#include "ui/gfx/geometry/rect_conversions.h"
++#include "ui/gfx/geometry/rect_f.h"
+ #include "ui/gfx/animation/slide_animation.h"
+ #include "ui/gfx/canvas.h"
+ // helium-fork: deriving the field's colors from the Arc shell's band tint.
+@@ -1081,10 +1087,21 @@ void LocationBarView::Layout(PassKey) {
+   // sidebar-hosted row they sit out entirely: the row's width belongs to the
+   // domain, and the two actions that lived here (install-PWA, bookmark) moved
+   // into the page info bubble's header (user's ask, 2026-08-18).
+-  const bool sidebar_hosted_row = ToolbarView::IsArcSidebarHostedFor(this);
+-  page_action_icon_container_->SetVisible(!arc_minimal_rest &&
+-                                          !sidebar_hosted_row);
+-  page_action_container_->SetVisible(!arc_minimal_rest && !sidebar_hosted_row);
++  // r8.5: the composer counts too. IsArcSidebarHostedFor() now answers false
++  // for a composer-hosted field (it is not a chrome host), and the composer
++  // wants the same empty row the panel does.
++  const bool sidebar_hosted_row =
++      ToolbarView::IsArcSidebarHostedFor(this) || IsArcComposerHosted();
++  // helium-fork r8: and they sit out the panel too. "同时弹出的面板地址栏中，
++  // 原本右边的收藏和其他按钮都不要显示，就是最干净的一个空白面板" -- the
++  // user's ruling on 2026-08-21. The panel is now exactly as wide as the
++  // capsule, so this is not a clipping workaround; it is what the panel is
++  // meant to contain, which is a magnifier, the text, and nothing else.
++  const bool arc_panel = IsArcBandPanelOnScreen();
++  page_action_icon_container_->SetVisible(
++      !arc_minimal_rest && !sidebar_hosted_row && !arc_panel);
++  page_action_container_->SetVisible(!arc_minimal_rest && !sidebar_hosted_row &&
++                                     !arc_panel);
+   add_trailing_decoration(page_action_icon_container_,
+                           /*intra_item_padding=*/0,
+                           /*edge_padding=*/
+@@ -1114,6 +1131,7 @@ void LocationBarView::Layout(PassKey) {
+   // Perform layout.
+   int entry_width = width();
+ 
++
+   // Use the unelided omnibox width as the `reserved_width` so preferred size
+   // calculations of decorations are calculated to maximize this constraint.
+   // TODO(crbug.com/350541615): This can be removed once current non-resizable
+@@ -1153,8 +1171,14 @@ void LocationBarView::Layout(PassKey) {
+   // target, and (via the caption hit test) the edge of the drag zone, so
+   // nothing else needs its own geometry. Focused or editing, the short
+   // circuit below reclaims the full width so the edit-state scroll behaves.
++  // helium-fork r8.3: never in the composer. This arm exists so the band's
++  // resting field is a domain plus a forgiveness margin rather than a slab
++  // across the window, and it sizes the omnibox to its *text*. On a new tab
++  // there is no text -- only a placeholder -- so it shrank the omnibox to
++  // about 100pt and elided "Search DuckDuckGo" down to "Search D...", inside
++  // a 629pt row. The composer's row IS the box's content; it takes all of it.
+   const bool arc_minimal_unfocused_field =
+-      ShouldMinimizeArcChrome() &&
++      ShouldMinimizeArcChrome() && !IsArcComposerHosted() &&
+       !(omnibox_view_ && omnibox_view_->HasFocus()) &&
+       !GetOmniboxController()->edit_model()->user_input_in_progress() &&
+       !ime_inline_autocomplete_view_->GetVisible();
+@@ -1381,6 +1405,16 @@ bool LocationBarView::ShouldCloseOmnibox
+     return false;
+   }
+ 
++  // helium-fork r8.6: not the composer's list. `Dia:`'s new tab list stays open
++  // when the pointer goes elsewhere and only folds away when the query itself
++  // is gone -- the user tested it and asked for the same ("在中央框输入文字展开
++  // 列表之后，鼠标再点击别的地方，失焦之后，列表是不会收回的，只有把文字删除
++  // 之后，列表才会收回", 2026-08-22). Clearing the text ends it on its own: an
++  // empty input has no matches, and no matches closes the popup.
++  if (IsArcComposerListPinned()) {
++    return false;
++  }
++
+   auto* const view = static_cast<views::View*>(event->target());
+   CHECK(view);
+   return !Contains(view);
+@@ -1498,6 +1532,15 @@ bool LocationBarView::ShouldMinimizeArcC
+   // this is reached from GetBorderRadius() in the constructor, before the
+   // field has one. Nothing is painted yet at that point, so answering "no" is
+   // both safe and correct; the first real layout asks again.
++  //
++  // ⚠ r8.4: construction is not the only widget-less moment. The field is
++  // detached for the length of every reparent (band <-> sidebar row <->
++  // composer), and this answers "no" throughout -- so anything that derives a
++  // *layout* decision from ShouldMinimizeArcChrome() (or from
++  // ToolbarView::IsArcBandHosted(), which is built on it) has to hold its own
++  // fact about where the field is instead of re-deriving it here. Cost of
++  // learning that: the extensions detached from the right edge of the band
++  // for a whole release cycle.
+   if (!GetWidget()) {
+     return false;
+   }
+@@ -1965,7 +2008,14 @@ void LocationBarView::RefreshBackground(
+     // toolbar (station icon + domain + extensions in one pill) is the hover
+     // treatment there; a second wash on the field alone would read as a pill
+     // inside a pill.
+-    if (ToolbarView::IsArcSidebarHostedFor(this)) {
++    //
++    // helium-fork r8.4: the composer is the same shape of argument -- the
++    // white card IS the affordance, so a radius-12 wash inside a radius-20
++    // card is a pill inside a pill again. Reported 2026-08-21: on a new tab
++    // the field starts focused (invisible, because the focused branch below
++    // paints it the card's own colour), but click the page to blur it and
++    // move the mouse back over the box and the grey capsule appears.
++    if (ToolbarView::IsArcSidebarHostedFor(this) || IsArcComposerHosted()) {
+       hovered = SkColorSetA(hovered, 0);
+     }
+   }
+@@ -2794,20 +2844,54 @@ bool LocationBarView::IsArcHoverUrlPrevi
+ 
+ helium::ArcOmniboxPanelMetrics LocationBarView::GetArcOmniboxPanelMetrics()
+     const {
+-  // Two hosts, two shapes, one panel. On the band the panel grows
+-  // symmetrically inside the band's margins; in the sidebar-hosted row
+-  // (hidden address bar mode) it shares the row's top-left corner and grows
+-  // rightwards out over the page -- Arc's shape, measured 2026-08-18. The
+-  // sidebar shape derives from the field's width at call time, which is why
+-  // it cannot be a set of constants like the band's.
++  // Two hosts, two shapes, one panel. In the sidebar-hosted row (hidden
++  // address bar mode) the panel shares the row's top-left corner and grows
++  // rightwards out over the page -- Arc's shape, measured 2026-08-18 -- and
++  // derives from the field's width at call time, which is why it cannot be a
++  // set of constants.
++  // helium-fork r8.3: the composer first. On a blank new tab the field is not
++  // in the band at all -- it has been reparented into ArcComposerHostView --
++  // and the panel it wants is the composer's own box, which that host's bounds
++  // already are.
++  if (IsArcComposerHosted()) {
++    return helium::ComputeArcComposerPanel(
++        /*enabled=*/true, gfx::Rect(parent()->size()), bounds(),
++        GetBorderRadius(), helium::kArcComposerRadius);
++  }
+   if (ToolbarView::IsArcSidebarHostedFor(this)) {
+     return helium::ComputeArcSidebarRowPanel(/*enabled=*/true, width(),
+                                              GetBorderRadius());
+   }
+-  const bool enabled = ToolbarView::IsArcBandHostedFor(this);
++  if (!ToolbarView::IsArcBandHostedFor(this)) {
++    return helium::ArcOmniboxPanelMetrics();
++  }
++  // helium-fork r8: the band panel IS the capsule -- same x, same width -- but
++  // it reaches from the window's top edge to `kEmptyPanelBottomOutset` below
++  // the band, so the arithmetic needs the band as well as the field. The band
++  // is the card's top strip: BrowserViewTabbedLayoutImpl hands the two the
++  // same rect and DCHECKs that it did (arc_card_layout.h).
++  //
++  // Reading it off the top container rather than recomputing the card here is
++  // the point: a second derivation is exactly how the band and the page ended
++  // up with two rectangles that only agreed by coincidence, five rework rounds
++  // running.
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser_);
++  const views::View* const band =
++      browser_view ? browser_view->top_container() : nullptr;
++  if (!band) {
++    return helium::ArcOmniboxPanelMetrics();
++  }
++  // Any common space will do -- everything the metrics carry is a difference
++  // between these two rects -- so use the one both are already descendants of.
++  gfx::RectF band_f((gfx::SizeF(band->size())));
++  views::View::ConvertRectToTarget(band, browser_view, &band_f);
++  gfx::RectF field_f((gfx::SizeF(size())));
++  views::View::ConvertRectToTarget(this, browser_view, &field_f);
+   return helium::ComputeArcOmniboxPanel(
+-      enabled, GetLayoutConstant(LayoutConstant::kHeliumBasePadding),
+-      GetPaddedFrameRadius(), GetBorderRadius());
++      /*enabled=*/true, gfx::ToEnclosingRect(band_f),
++      gfx::ToEnclosingRect(field_f), MultiContentsView::kContentCardInset,
++      GetBorderRadius());
+ }
+ 
+ bool LocationBarView::IsArcFieldEditing() const {
+@@ -2815,6 +2899,79 @@ bool LocationBarView::IsArcFieldEditing(
+          GetOmniboxController()->edit_model()->user_input_in_progress();
+ }
+ 
++bool LocationBarView::IsArcComposerHosted() const {
++  return parent() && views::IsViewClass<ArcComposerHostView>(parent());
++}
++
++bool LocationBarView::IsArcComposerListPinned() const {
++  // "Pinned" means: the suggestions belong to a query the user can still see,
++  // so nothing but the query going away may take them off screen. Deliberately
++  // asked of the composer only -- on the band and in the sidebar row a click on
++  // the page is how you dismiss the panel, and r8.6 does not touch that.
++  return IsArcComposerHosted() && omnibox_view_ &&
++         !omnibox_view_->GetText().empty() &&
++         GetOmniboxController()->edit_model()->user_input_in_progress();
++}
++
++void LocationBarView::SetArcComposerTypography(bool enabled) {
++  // r8.5: and the leading icon stops being a button. On a blank new tab it is
++  // a magnifier that does nothing, so the bubble fill and the ink drop are
++  // just noise around it (user 2026-08-21).
++  if (location_icon_view_) {
++    location_icon_view_->SetArcPlainIcon(enabled);
++  }
++  if (!omnibox_view_ || arc_composer_typography_ == enabled) {
++    return;
++  }
++  arc_composer_typography_ = enabled;
++  // Derived from the band's font rather than written down a second time, so a
++  // theme or a touch-mode change that moves one moves both. +4 is what it
++  // takes for the row to read as the page's headline element rather than as a
++  // toolbar control that has wandered into the middle of the window; `Dia:`'s
++  // placeholder measures about a third larger than its band text.
++  constexpr int kArcComposerFontSizeDelta = 4;
++  const gfx::FontList& band_font =
++      views::TypographyProvider::Get().GetFont(CONTEXT_OMNIBOX_PRIMARY,
++                                               views::style::STYLE_PRIMARY);
++  omnibox_view_->SetFontList(
++      enabled ? band_font.DeriveWithSizeDelta(kArcComposerFontSizeDelta)
++              : band_font);
++  InvalidateLayout();
++}
++
++void LocationBarView::UpdateArcBandFieldVisibility() {
++  // helium-fork r8: the capsule's visibility on a blank new tab follows the
++  // field's edit state, and the toolbar owns both that decision and the
++  // trailing spacer that compensates for it. Reached through the browser
++  // rather than by walking ancestors, because while the sidebar's edit host
++  // has the toolbar this view's ancestors are not the toolbar's.
++  if (BrowserView* const browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_)) {
++    if (ToolbarView* const toolbar = browser_view->toolbar()) {
++      toolbar->UpdateArcBandFieldVisibility();
++    }
++  }
++}
++
++bool LocationBarView::IsArcBandPanelOnScreen() const {
++  // The band panel's lifetime, as ArcOmniboxPanelView defines it for the band:
++  // the metrics apply AND the field is showing its edit state. Not the same as
++  // "the band hosts the field" -- that is true at rest too, when there is no
++  // panel and the field is just a capsule in the band.
++  return GetArcOmniboxPanelMetrics().enabled && IsArcFieldEditing();
++}
++
++void LocationBarView::SetArcPopupOnScreen(bool on_screen) {
++  if (arc_popup_on_screen_ == on_screen) {
++    return;
++  }
++  arc_popup_on_screen_ = on_screen;
++  // Synchronously, and that is the whole point: on the way out this has to put
++  // the in-window panel back into the very frame whose presentation the popup
++  // widget is waiting on before it leaves the screen.
++  NotifyEditStateChanged();
++}
++
+ void LocationBarView::EndArcFieldEditing() {
+   if (!omnibox_view_ || !IsArcFieldEditing()) {
+     return;
+@@ -3131,16 +3288,32 @@ ui::ImageModel LocationBarView::GetLocat
+     return GetOmniboxController()->edit_model()->GetAddContextIcon(dip_size);
+   }
+ 
+-  return omnibox_view_
+-             ? omnibox_view_->GetIcon(
+-                   dip_size, location_icon_view_->GetForegroundColor(),
+-                   View::GetColorProvider()->GetColor(kColorOmniboxResultsIcon),
+-                   View::GetColorProvider()->GetColor(
+-                       kColorOmniboxResultsStarterPackIcon),
+-                   View::GetColorProvider()->GetColor(
+-                       kColorOmniboxAnswerIconGM3Foreground),
+-                   std::move(on_icon_fetched), dark_mode)
+-             : ui::ImageModel();
++  if (!omnibox_view_) {
++    return ui::ImageModel();
++  }
++  // helium-fork r8.6: in the composer the leading glyph is the other half of
++  // the hint, so every colour this can come back in is the hint's. Two of the
++  // arguments matter in practice and only the FIRST is the icon view's own
++  // foreground: an empty new tab has a search-type match with no favicon, which
++  // falls all the way through GetIcon() to the generic vector icon painted in
++  // `color_vectors` (kColorOmniboxResultsIcon, L70 measured) -- which is why
++  // colouring LocationIconView::GetForegroundColor() alone left the magnifier
++  // dark next to L153 text.
++  const SkColor arc_hint =
++      View::GetColorProvider()->GetColor(kColorOmniboxArcComposerHint);
++  const bool composer = IsArcComposerHosted();
++  return omnibox_view_->GetIcon(
++      dip_size,
++      composer ? arc_hint : location_icon_view_->GetForegroundColor(),
++      composer ? arc_hint
++               : View::GetColorProvider()->GetColor(kColorOmniboxResultsIcon),
++      composer ? arc_hint
++               : View::GetColorProvider()->GetColor(
++                     kColorOmniboxResultsStarterPackIcon),
++      composer ? arc_hint
++               : View::GetColorProvider()->GetColor(
++                     kColorOmniboxAnswerIconGM3Foreground),
++      std::move(on_icon_fetched), dark_mode);
+ }
+ 
+ void LocationBarView::UpdateChipVisibility() {
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -239,6 +239,47 @@ class LocationBarView
+   // is visible or there is in-progress input. The panel is on screen for
+   // exactly this, whether the suggestion popup is up or not.
+   bool IsArcFieldEditing() const;
++  // helium-fork r8: ask the toolbar to recompute whether the band shows its
++  // address capsule -- the blank new tab hides it, and a focus change is one
++  // of the two things that can flip that answer (the other is a tab change,
++  // which ToolbarView::Update() handles itself).
++  void UpdateArcBandFieldVisibility();
++
++  // helium-fork r8.3: switch the field's typography between the band's and the
++  // new tab composer's. The composer is the page's main visual -- "在 new tab
++  // 中，这个搜索框是主要视觉，它不能太小" (user 2026-08-21) -- so the same view
++  // has to read as a 28pt capsule in the band and as a 44pt row on the page.
++  void SetArcComposerTypography(bool enabled);
++
++  // helium-fork r8.3: true while ArcComposerHostView holds this field -- i.e.
++  // the new tab page's centred box, not the band and not the sidebar row.
++  bool IsArcComposerHosted() const;
++
++  // helium-fork r8.6: true while the composer is showing a list that belongs to
++  // a query still in the field. Nothing but clearing that query may close it --
++  // `Dia:`'s behaviour, which the user asked for by name (2026-08-22). See
++  // ShouldCloseOmniboxPopup() and OmniboxViewViews::OnBlur().
++  bool IsArcComposerListPinned() const;
++
++  // helium-fork r8: whether the band's edit-state panel is on screen right
++  // now -- the band applies AND the field is in its edit state. Distinct from
++  // "the band hosts the field", which is also true at rest.
++  bool IsArcBandPanelOnScreen() const;
++
++  // helium-fork r8.6b: whether the suggestion popup's own widget is ACTUALLY
++  // ON SCREEN, which is not the same question as OmniboxController's
++  // IsPopupOpen(). The Arc card is one surface drawn by two owners -- the
++  // in-window ArcOmniboxPanelView while there is nothing to suggest, that
++  // widget once there is -- and they composite independently, so "open" and
++  // "visible" are a frame apart at each hand-over. Read this, never
++  // IsPopupOpen(), to decide whether the in-window panel steps aside: it is
++  // raised only after the popup's compositor has presented a frame, and
++  // dropped before the popup leaves the screen, so the two overlap by a frame
++  // rather than leaving one where the card is on neither.
++  // See OmniboxPopupViewViews and ArcOmniboxPanelView::UpdateFromField().
++  bool IsArcPopupOnScreen() const { return arc_popup_on_screen_; }
++  void SetArcPopupOnScreen(bool on_screen);
++
+   // helium-fork: leave the edit state. Clicking anywhere that is not the field
+   // ends it, which upstream only gets for free where the click lands on
+   // something focusable -- the web contents. Reverts the display text too when
+@@ -689,6 +730,10 @@ class LocationBarView
+   // 200ms after the transition, and the swap must happen exactly once, on the
+   // frame the pointer crosses the boundary.
+   bool arc_hovered_ = false;
++  // helium-fork r8.3: true while the field is wearing the composer's larger
++  // type. Kept so SetArcComposerTypography() is idempotent -- it is called
++  // from a placement funnel that runs on every state change.
++  bool arc_composer_typography_ = false;
+   // helium-fork: whether the last mouse press was forwarded to the omnibox.
+   // Drag/release forward only when the press did -- Textfield opens its
+   // context menu from OnMouseReleased, so an unpaired release forward leaks
+@@ -752,6 +797,9 @@ class LocationBarView
+   // helium-fork: what the last Layout() applied. See
+   // UpdateArcMinimalDecorations().
+   bool arc_minimal_rest_ = false;
++
++  // helium-fork r8.6b: see IsArcPopupOnScreen().
++  bool arc_popup_on_screen_ = false;
+   // helium-fork: whether the reveal fade owns the layer on each trailing
+   // decoration container (neither of them paints to one on its own today, but
+   // tearing down a layer we did not create would be a silent upstream
+Index: src/chrome/browser/ui/views/location_bar/location_icon_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_icon_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_icon_view.cc
+@@ -102,6 +102,14 @@ bool LocationIconView::OnMouseDragged(co
+ }
+ 
+ SkColor LocationIconView::GetForegroundColor() const {
++  // helium-fork r8.6: in the composer the magnifier is not a security chip, it
++  // is the other half of the hint. `Dia:` draws its magnifier and its
++  // placeholder in the SAME (152,153,153) (measured 2026-08-22); ours had the
++  // chip's full-contrast foreground next to L153 text.
++  if (arc_plain_icon_) {
++    return GetColorProvider()->GetColor(kColorOmniboxArcComposerHint);
++  }
++
+   const std::u16string& display_text = GetText();
+   const bool is_text_dangerous =
+       display_text == l10n_util::GetStringUTF16(IDS_DANGEROUS_VERBOSE_STATE);
+@@ -333,7 +341,10 @@ void LocationIconView::UpdateIcon() {
+     if (is_super_g && GetWidget() && GetWidget()->GetCustomTheme()) {
+       SetBackgroundColor(SK_ColorWHITE);
+     }
+-  } else {
++  } else if (!arc_plain_icon_) {
++    // helium-fork r8.5: not in the composer -- see SetArcPlainIcon(). This is
++    // the other half of the flag: without it every icon update turns the ink
++    // drop back on.
+     views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
+   }
+ #endif
+@@ -341,8 +352,33 @@ void LocationIconView::UpdateIcon() {
+   SetImageModel(icon);
+ }
+ 
++void LocationIconView::SetArcPlainIcon(bool plain) {
++  if (arc_plain_icon_ == plain) {
++    return;
++  }
++  arc_plain_icon_ = plain;
++  UpdateBackground();
++  // r8.6: and re-fetch the glyph. Its colour is chosen where the image is
++  // built (LocationBarView::GetLocationIcon), not at paint time, so a flag flip
++  // that does not rebuild it leaves the old colour until the next unrelated
++  // toolbar update.
++  UpdateIcon();
++}
++
+ void LocationIconView::UpdateBackground() {
+   CHECK(GetColorProvider());
++  if (arc_plain_icon_) {
++    // helium-fork r8.5: no bubble fill and no ink drop. Both are re-applied by
++    // the icon-update path (SetIconImage turns the ink drop back ON) and by
++    // this function, so the flag is checked here rather than set once -- and
++    // the ink drop is what actually showed: with the Arc shell's focus ring
++    // suppressed, IconLabelBubbleView falls back to highlight-on-focus, and
++    // the composer's field is focused the moment a blank new tab opens. The
++    // user saw a lavender rounded rect behind the magnifier (2026-08-21).
++    SetBackgroundColor(SK_ColorTRANSPARENT);
++    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
++    return;
++  }
+   const std::u16string& display_text = GetText();
+   const bool is_text_dangerous =
+       display_text == l10n_util::GetStringUTF16(IDS_DANGEROUS_VERBOSE_STATE);
+Index: src/chrome/browser/ui/views/location_bar/location_icon_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_icon_view.h
++++ src/chrome/browser/ui/views/location_bar/location_icon_view.h
+@@ -123,6 +123,13 @@ class LocationIconView : public IconLabe
+   // For animating the page info icon when the bubble opens and closes.
+   void MaybeAnimateIcon(bool open);
+ 
++  // helium-fork r8.5: in the Arc shell's new tab composer this is not a button
++  // -- "放大镜按钮不需要填充背景，本来就是一个无法点击的按钮。只是当做一个icon
++  // 放在这里就可以了" (user 2026-08-21). Suppresses the bubble fill and the ink
++  // drop; sticky, because both are re-applied on every icon and background
++  // update.
++  void SetArcPlainIcon(bool plain);
++
+   const views::InkDrop* get_ink_drop_for_testing();
+ 
+  protected:
+@@ -184,6 +191,9 @@ class LocationIconView : public IconLabe
+   // invalidated whenever we start a new icon fetch, so don't use this weak
+   // factory for any other purposes.
+   base::WeakPtrFactory<LocationIconView> icon_fetch_weak_ptr_factory_{this};
++
++  // helium-fork r8.5: see SetArcPlainIcon().
++  bool arc_plain_icon_ = false;
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_LOCATION_ICON_VIEW_H_
+Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
+@@ -14,8 +14,10 @@
+ #include "base/containers/span.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/metrics/histogram_functions.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/page_load_metrics/observers/top_chrome_webui_metrics_observer.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -40,6 +42,7 @@
+ #include "ui/accessibility/ax_node_data.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/compositor/closure_animation_observer.h"
++#include "ui/compositor/compositor.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/compositor/scoped_layer_animation_settings.h"
+ #include "ui/gfx/image/image.h"
+@@ -144,7 +147,36 @@ class OmniboxPopupViewViews::PopupWidget
+     SetBounds(bounds);
+   }
+ 
+-  void ShowAnimated() {
++  // helium-fork r8.6: `animate` is false wherever the Arc shell's panel is on
++  // screen, and it is the fix for the shadow the user reported twice ("中央框的
++  // 阴影，在展开/收起列表时还是会跳", 2026-08-22).
++  //
++  // The panel is one surface drawn by two owners: ArcOmniboxPanelView inside
++  // the browser window while there is nothing to suggest, and this widget once
++  // there is. This widget faded over 82ms, so for those 82ms the page carried
++  // either one and a half shadows or none. Measured 2026-08-22 off a burst capture of our own
++  // out/Default: a frame caught just after Escape reads 23/18/16/10 darker than
++  // the page above the card's top edge where both the resting state and the
++  // settled popup read 12/9/8/5 -- exactly twice, i.e. both surfaces painting
++  // their shadow at once. r8.5 made the two shadows the same shape, which is
++  // why what is left is visible as a pulse rather than as a change of shape.
++  //
++  // Fading is upstream's own answer to a popup appearing out of nothing. Ours
++  // does not appear out of nothing: the card is already on the page, and what
++  // happens is that it grows. `Dia:` does not fade its card either -- resting
++  // and expanded measure the same shadow to within a point (2026-08-22).
++  //
++  // ⚠ r8.6b: killing the fade was necessary but not sufficient. WHEN each side
++  // gives the card up is the other half, and r8.6 had the browser side give it
++  // up on the model's schedule -- a frame before this widget's pixels arrived,
++  // and a frame after they left. See CloseAnimated() and
++  // OmniboxPopupViewViews::OnWidgetVisibilityChanged().
++  void ShowAnimated(bool animate) {
++    if (!animate) {
++      GetLayer()->SetOpacity(1.0);
++      ShowInactive();
++      return;
++    }
+     // Set the initial opacity to 0 and ease into fully opaque.
+     GetLayer()->SetOpacity(0.0);
+     ShowInactive();
+@@ -153,11 +185,49 @@ class OmniboxPopupViewViews::PopupWidget
+     GetLayer()->SetOpacity(1.0);
+   }
+ 
+-  void CloseAnimated() {
++  void CloseAnimated(bool animate, ui::Compositor* host_compositor) {
+     // If the opening or shrinking animations still running, abort them, as the
+     // popup is closing. This is an edge case for superhumanly fast users.
+     GetLayer()->GetAnimator()->AbortAllAnimations();
+ 
++    if (!animate) {
++      is_animating_closed_ = true;
++      // helium-fork r8.6b: STAY ON SCREEN until the browser window has
++      // actually presented a frame with its own panel back.
++      //
++      // r8.6 hid this widget here and now, reasoning that a widget still
++      // composited after the browser had brought its panel back is a doubled
++      // shadow. It is -- but hiding first is the other error, and it is the
++      // worse one: this widget leaves at the window server's next composite
++      // while the browser's frame is still a vsync away, so the page carries
++      // NO card for that frame. The card is a plain white fill on a white page
++      // with no stroke, so a missing shadow is a missing card, and the user
++      // reported exactly that on both edges ("删除所有文字的时候，特别明显",
++      // 2026-08-22; their recording has it on frames 36 and 60 of 73).
++      //
++      // Two surfaces with independent compositors cannot swap atomically, so
++      // the choice is which way to err: a frame with two shadows, or a frame
++      // with none. Two is the quieter error -- the shape stays, only the halo
++      // deepens -- and gating on presentation keeps it to the one frame.
++      // `is_animating_closed_` already makes this widget inert to input for
++      // that window; it is the same shape as the animated branch below, which
++      // has always outlived widget_.reset() by its whole 82ms.
++      if (host_compositor) {
++        host_compositor->RequestSuccessfulPresentationTimeForNextFrame(
++            base::IgnoreArgs<const viz::FrameTimingDetails&>(base::BindOnce(
++                &PopupWidget::FinishDeferredClose, AsWeakPtr())));
++        // A window that is occluded or minimised may never present again, and
++        // this widget must not be what is left of it.
++        base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++            FROM_HERE,
++            base::BindOnce(&PopupWidget::FinishDeferredClose, AsWeakPtr()),
++            base::Milliseconds(200));
++        return;
++      }
++      FinishDeferredClose();
++      return;
++    }
++
+     auto scoped_settings = GetScopedAnimationSettings();
+     GetLayer()->SetOpacity(0.0);
+     is_animating_closed_ = true;
+@@ -167,6 +237,17 @@ class OmniboxPopupViewViews::PopupWidget
+         base::BindOnce(&PopupWidget::Close, AsWeakPtr())));
+   }
+ 
++  // helium-fork r8.6b: idempotent -- whichever of the presentation callback and
++  // the timeout arrives first gets to run it.
++  void FinishDeferredClose() {
++    if (deferred_close_done_) {
++      return;
++    }
++    deferred_close_done_ = true;
++    Hide();
++    Close();
++  }
++
+   void OnWidgetDestroying(views::Widget* widget) override {
+     // ThemeCopyingWidget observation is set on the role_model widget, which in
+     // the case of `PopupWidget` is the hosting parent widget.
+@@ -231,6 +312,9 @@ class OmniboxPopupViewViews::PopupWidget
+   // True if the popup is in the process of closing via animation.
+   bool is_animating_closed_ = false;
+ 
++  // helium-fork r8.6b: see FinishDeferredClose().
++  bool deferred_close_done_ = false;
++
+   // True if the popup's bounds are currently being set.
+   bool is_setting_popup_bounds_ = false;
+ 
+@@ -289,6 +373,11 @@ OmniboxPopupViewViews::~OmniboxPopupView
+   if (widget_) {
+     widget_->RemoveObserver(&widget_observer_helper_);
+   }
++  // helium-fork r8.6b: same reason as in OnWidgetDestroying() -- the in-window
++  // panel must not be left standing aside for a popup that no longer exists.
++  if (location_bar_view_) {
++    location_bar_view_->SetArcPopupOnScreen(false);
++  }
+   CHECK(!widget_observer_helper_.IsInObserverList());
+   controller()->edit_model()->set_popup_view(nullptr);
+   UpdateAccessibleControlIds();
+@@ -334,6 +423,29 @@ bool OmniboxPopupViewViews::IsOpen() con
+   return widget_ != nullptr;
+ }
+ 
++void OmniboxPopupViewViews::OnArcPopupOnScreen() {
++  if (location_bar_view_) {
++    location_bar_view_->SetArcPopupOnScreen(true);
++  }
++}
++
++ui::Compositor* OmniboxPopupViewViews::ArcHandoffCompositor() const {
++  if (ShouldAnimatePopupOpacity() || !location_bar_view_) {
++    return nullptr;
++  }
++  views::Widget* const host = location_bar_view_->GetWidget();
++  return host ? host->GetCompositor() : nullptr;
++}
++
++bool OmniboxPopupViewViews::ShouldAnimatePopupOpacity() const {
++  // helium-fork r8.6: not while the Arc panel is the surface -- see
++  // PopupWidget::ShowAnimated(). The metrics answer for all three hosts (band,
++  // sidebar row, composer), which is right: all three hand off between this
++  // widget and a panel already on screen.
++  return !location_bar_view_ ||
++         !location_bar_view_->GetArcOmniboxPanelMetrics().enabled;
++}
++
+ void OmniboxPopupViewViews::InvalidateLine(size_t line) {
+   // TODO(tommycli): This is weird, but https://crbug.com/40680508 shows that
+   // crashes like this have happened, so we add this to avoid it for now.
+@@ -361,8 +473,18 @@ void OmniboxPopupViewViews::UpdatePopupA
+       }
+       // Drop stale metrics callbacks.
+       metrics_weak_factory_.InvalidateWeakPtrs();
++      arc_handoff_weak_factory_.InvalidateWeakPtrs();
+ 
+-      widget_->CloseAnimated();  // This will eventually delete the popup.
++      // helium-fork r8.6b: hand the card back to the browser window BEFORE the
++      // popup starts leaving -- this puts ArcOmniboxPanelView back on screen
++      // synchronously, so the very frame whose presentation CloseAnimated()
++      // waits for is the one that has it. See LocationBarView::
++      // IsArcPopupOnScreen().
++      if (location_bar_view_) {
++        location_bar_view_->SetArcPopupOnScreen(false);
++      }
++      widget_->CloseAnimated(ShouldAnimatePopupOpacity(),
++                             ArcHandoffCompositor());  // Deletes the popup.
+       widget_->RemoveObserver(&widget_observer_helper_);
+       widget_.reset();
+ 
+@@ -470,7 +592,7 @@ void OmniboxPopupViewViews::UpdatePopupA
+   widget_->SetTargetBounds(GetTargetBounds());
+ 
+   if (!was_open) {
+-    widget_->ShowAnimated();
++    widget_->ShowAnimated(ShouldAnimatePopupOpacity());
+ 
+     // Popup is now expanded and first item will be selected.
+     UpdateAccessibleStates();
+@@ -610,6 +732,26 @@ void OmniboxPopupViewViews::OnWidgetVisi
+                            .result_ready_time(),
+                        popup_create_start_time_));
+     popup_create_start_time_.reset();
++    // helium-fork r8.6b: and the other half of the hand-over. The in-window
++    // panel keeps drawing the card until this widget's own compositor says its
++    // first frame is on screen; without that it steps aside on the model's
++    // schedule and the page carries no card for a frame. Same reasoning, other
++    // direction, as PopupWidget::CloseAnimated().
++    if (location_bar_view_ && !ShouldAnimatePopupOpacity()) {
++      widget_->GetCompositor()->RequestSuccessfulPresentationTimeForNextFrame(
++          base::IgnoreArgs<const viz::FrameTimingDetails&>(
++              base::BindOnce(&OmniboxPopupViewViews::OnArcPopupOnScreen,
++                             arc_handoff_weak_factory_.GetWeakPtr())));
++      // Belt, as on the way out: a popup whose frame never lands would
++      // otherwise leave both surfaces drawing the card for good.
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++          FROM_HERE,
++          base::BindOnce(&OmniboxPopupViewViews::OnArcPopupOnScreen,
++                         arc_handoff_weak_factory_.GetWeakPtr()),
++          base::Milliseconds(200));
++    } else if (location_bar_view_) {
++      location_bar_view_->SetArcPopupOnScreen(true);
++    }
+   } else {
+     // Drop metrics callbacks if the widget is not visible.
+     metrics_weak_factory_.InvalidateWeakPtrs();
+@@ -624,6 +766,13 @@ void OmniboxPopupViewViews::OnWidgetDest
+   }
+   // Drop metrics callbacks when the widget is destroyed.
+   metrics_weak_factory_.InvalidateWeakPtrs();
++  // helium-fork r8.6b: and hand the card back, for the path where the OS
++  // destroys the window without going through UpdatePopupAppearance(). Leaving
++  // the flag raised would hide the in-window panel with nothing in its place.
++  arc_handoff_weak_factory_.InvalidateWeakPtrs();
++  if (location_bar_view_) {
++    location_bar_view_->SetArcPopupOnScreen(false);
++  }
+ 
+   UpdateAccessibleStates();
+ 
+Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h
++++ src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h
+@@ -23,6 +23,10 @@
+ #include "ui/views/view.h"
+ #include "ui/views/widget/widget_observer.h"
+ 
++namespace ui {
++class Compositor;
++}
++
+ namespace viz {
+ class FrameTimingDetails;
+ }
+@@ -176,6 +180,22 @@ class OmniboxPopupViewViews : public vie
+   // OmniboxPopupView:
+   bool IsOpen() const override;
+ 
++  // helium-fork r8.6: whether the popup widget may fade in and out. False while
++  // the Arc shell's panel is on screen, because the panel is already drawn in
++  // the browser window and a fade shows both shadows at once (see
++  // PopupWidget::ShowAnimated()).
++  bool ShouldAnimatePopupOpacity() const;
++
++  // helium-fork r8.6b: the two ends of the card's hand-over between this
++  // widget and the browser window's ArcOmniboxPanelView. Each surface only
++  // gives up the card once the other's compositor has put a frame on screen,
++  // so the two overlap by a frame instead of leaving one with neither. See
++  // LocationBarView::IsArcPopupOnScreen().
++  void OnArcPopupOnScreen();
++  // The BROWSER WINDOW's compositor, or null when this hand-over does not
++  // apply (no Arc panel, no location bar, no widget yet).
++  ui::Compositor* ArcHandoffCompositor() const;
++
+   // Callback to log presentation metrics.
+   void OnPopupFirstPaintPresented(
+       base::TimeTicks request_start_time,
+@@ -227,6 +247,10 @@ class OmniboxPopupViewViews : public vie
+   bool has_logged_content_ready_since_open_ = false;
+ 
+   base::WeakPtrFactory<OmniboxPopupViewViews> metrics_weak_factory_{this};
++
++  // helium-fork r8.6b: separate from the metrics one so the card hand-over is
++  // not cancelled by, and does not cancel, metrics bookkeeping.
++  base::WeakPtrFactory<OmniboxPopupViewViews> arc_handoff_weak_factory_{this};
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_OMNIBOX_OMNIBOX_POPUP_VIEW_VIEWS_H_
+Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+@@ -1808,6 +1808,45 @@ void OmniboxViewViews::OnFocus() {
+   UpdateAccessibleTextOffsetsIfNeeded();
+ #endif  // BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
+ 
++  // helium-fork r8.5: coming back to a field that still has typed text has to
++  // bring the suggestions back with it. Upstream only asks for zero-suggest on
++  // focus, and zero-suggest is the EMPTY-input list -- so on the new tab page's
++  // composer, clicking away and clicking back left the user staring at their
++  // own query with nothing under it. "当用户把鼠标再次点击到搜索框时，且搜索框里
++  // 是有文字的状态下，搜索列表要弹出来" (user 2026-08-21).
++  //
++  // Scoped to the composer: on the band and the sidebar row a re-focus is
++  // usually the user reaching for the URL to copy or replace, and popping a
++  // list open under it is not what those two do today.
++  //
++  // ⚠ r8.6a: two more guards, and both are load-bearing -- this line crashed
++  // the browser (SIGABRT 2026-08-22 01:58:48, user-hit).
++  //
++  //   * `!IsPopupOpen()`: since r8.6 the list SURVIVES a blur, so the normal
++  //     way back into the field now has the list already up and nothing to
++  //     restart. That is also the crashing path: the click lands on the field
++  //     THROUGH the popup's own cutout, so this ran with the popup's inline
++  //     autocompletion live.
++  //   * the cursor check: `OmniboxEditModel::StartAutocomplete()` builds an
++  //     `AutocompleteInput` from `user_text_` but takes the cursor from the
++  //     VIEW, and `AutocompleteInput::Init()` DCHECKs that the cursor is
++  //     inside the text. An inline autocompletion makes the view longer than
++  //     `user_text_` ("youtube" + a selected ".com"), so the cursor lands 4
++  //     past the end and the DCHECK build aborts. Upstream only ever calls
++  //     this right after OnAfterPossibleChange(), where the two agree.
++  //
++  // Both are "is the model in a state where restarting means anything", which
++  // is the question this call should have been asking from the start.
++  if (location_bar_view_ && location_bar_view_->IsArcComposerHosted() &&
++      !GetText().empty() &&
++      controller()->edit_model()->user_input_in_progress() &&
++      !controller()->IsPopupOpen() &&
++      GetSelectionBounds().end() <=
++          controller()->edit_model()->user_text().length()) {
++    controller()->edit_model()->StartAutocomplete(
++        /*prevent_inline_autocomplete=*/true);
++  }
++
+   if (location_bar_view_) {
+     location_bar_view_->OnOmniboxFocused();
+   }
+@@ -1864,7 +1903,15 @@ void OmniboxViewViews::OnBlur() {
+     RevertAll();
+   } else if (auto* popup_closer =
+                  controller()->client()->GetOmniboxPopupCloser()) {
+-    if (!base::FeatureList::IsEnabled(omnibox::kWebUIOmniboxFullPopup)) {
++    // helium-fork r8.6: the composer's list survives a blur. `Dia:` keeps its
++    // new tab list up when focus goes elsewhere and only folds it away when the
++    // query is deleted (user tested it and asked for the same, 2026-08-22).
++    // Only the closing is skipped -- the model still kills focus below, so the
++    // caret goes and the list is a list, not an edit state.
++    const bool pinned =
++        location_bar_view_ && location_bar_view_->IsArcComposerListPinned();
++    if (!pinned &&
++        !base::FeatureList::IsEnabled(omnibox::kWebUIOmniboxFullPopup)) {
+       popup_closer->CloseWithReason(omnibox::PopupCloseReason::kBlur);
+     }
+   }
+@@ -2097,6 +2144,18 @@ bool OmniboxViewViews::ShouldShowPlaceho
+     }
+   }
+ 
++  // helium-fork r8.6: the composer keeps its hint while focused. Upstream hides
++  // the DSE placeholder as soon as the caret is up, which is right for a
++  // toolbar field the user has just reached for -- but the composer is focused
++  // from the moment a blank new tab opens, so that rule left the middle of the
++  // page holding a magnifier and nothing else. `Dia:` shows both at once:
++  // measured 2026-08-22 on the live window, its resting card carries the
++  // magnifier, "Ask anything..." AND the caret. It is also what makes the
++  // user's ask about that text's grey mean anything ("示意文字的灰度也参考Dia").
++  if (location_bar_view_ && location_bar_view_->IsArcComposerHosted()) {
++    return true;
++  }
++
+   // If the omnibox is blurred, only show the DSE placeholder if there is no
+   // keyword selected.
+   if (!controller()->edit_model()->is_caret_visible()) {
+@@ -2745,9 +2804,32 @@ void OmniboxViewViews::UpdatePlaceholder
+       controller()->edit_model()->keyword_placeholder().empty() &&
+       !ShouldInstallAimPlaceholderText() &&
+       !ShouldInstallContextualTasksPlaceholderText();
+-  SetPlaceholderTextColorId(dse_placeholder_installed
+-                                ? kColorOmniboxText
+-                                : kColorOmniboxForegroundDisabled);
++  // helium-fork r8.5: not in the new tab page's composer. Upstream's reasoning
++  // for the full-contrast DSE placeholder is "draw attention to the omnibox" --
++  // the composer IS the page, it needs no drawing attention to, and the shell's
++  // rule is the opposite one: everything the app shows for itself recedes, and
++  // only what the user typed (and the list under it) is full contrast
++  // ("除了用户自己添加的标签页，其他所有 app 本身展示用的元素都是半灰色，降低他们
++  // 的存在感" -- user 2026-08-21). `Arc:` measures its own composer hint at L125
++  // against an L249 card and its suggestion text at L50 (2026-08-21).
++  //
++  // ⚠ This is where the colour has to be set, not LocationBarView: this
++  // function re-runs on every omnibox update and overwrote a colour set from
++  // outside within a frame.
++  const bool arc_composer =
++      location_bar_view_ && location_bar_view_->IsArcComposerHosted();
++  // kColorOmniboxTextDimmed for the composer rather than the disabled grey the
++  // other dim placeholders use: measured, the disabled one lands at L170 on our
++  // white card where `Arc:` sits at L125 on its L249 one -- washed out, not
++  // half-grey.
++  // r8.6: `Dia:`'s own hint grey (152,153,153) rather than r8.5's dimmed id
++  // (L71 measured on our card) -- the reference for this module changed from
++  // `Arc:` (L125) to Dia when the user said "示意文字的灰度也参考Dia"
++  // (2026-08-22). The id carries the light/dark split; see omnibox_color_mixer.
++  SetPlaceholderTextColorId(
++      arc_composer            ? kColorOmniboxArcComposerHint
++      : dse_placeholder_installed ? kColorOmniboxText
++                                  : kColorOmniboxForegroundDisabled);
+ }
+ 
+ bool OmniboxViewViews::AreAimHintImpressionLimitsReached() const {
+Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
++++ src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
+@@ -346,10 +346,21 @@ helium::ArcOmniboxPanelMetrics ArcPanelM
+ int RoundedOmniboxResultsFrame::GetNonResultSectionHeight(
+     const LocationBar* location_bar,
+     bool include_cutout) {
+-  return include_cutout
+-             ? GetLayoutConstant(LayoutConstant::kLocationBarHeight) +
+-                   GetLocationBarAlignmentInsets(location_bar).height()
+-             : 0;
++  if (!include_cutout) {
++    return 0;
++  }
++  // helium-fork r8.3: the field's own height, not the layout's, when the panel
++  // knows better. The new tab composer's row is 44 where kLocationBarHeight is
++  // 28, and this number decides both where the suggestions start and how tall
++  // a cutout is left for the field -- so the constant put the first suggestion
++  // straight through the input text.
++  const helium::ArcOmniboxPanelMetrics metrics =
++      ArcPanelMetricsFor(location_bar);
++  const int field_height =
++      metrics.enabled && metrics.field_height > 0
++          ? metrics.field_height
++          : GetLayoutConstant(LayoutConstant::kLocationBarHeight);
++  return field_height + GetLocationBarAlignmentInsets(location_bar).height();
+ }
+ 
+ // static
+@@ -442,6 +453,12 @@ void RoundedOmniboxResultsFrame::Layout(
+     gfx::Rect top_bounds(contents_host_->GetContentsBounds());
+     top_bounds.set_height(GetNonResultSectionHeight(location_bar_, true));
+     top_bounds.Inset(GetLocationBarAlignmentInsets(location_bar_));
++    // helium-fork r8: the same floor helium::ArcOmniboxPanelMetrics::
++    // FieldHoleFor() applies, expressed in the coordinates this already works
++    // in. The cutout is both the kSrc clear and the hole OnPaint() leaves in
++    // the panel's fill, and anywhere it reaches past the panel is a
++    // transparent notch with the page showing through it.
++    top_bounds.Intersect(contents_host_->GetContentsBounds());
+     top_background_->SetBoundsRect(top_bounds);
+   }
+ 
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -48,7 +48,13 @@ namespace {
+ // cap in three rows) and the height of the persistent empty state.
+ constexpr int kTabPadding = 4;
+ constexpr int kMaxFavoritesPerRow = 4;
+-constexpr int kFavoritesPlaceholderHeight = 90;
++// ⚠ r8.5: a FLOOR, not the height. The placeholder is a star, an emphasized
++// title and a two-line subtitle inside 12pt of vertical padding, which at the
++// default font comes to 91 -- one point over, and BoxLayout paid for it by
++// squeezing the first child, so the star came out with its bottom points cut
++// off (user-hit 2026-08-21). Anything that hard-codes a height for a stack of
++// labels is a font change away from the same bug; ask the view.
++constexpr int kFavoritesPlaceholderMinHeight = 90;
+ 
+ // helium-fork: one number for every gap around the grid -- between capsules,
+ // between rows, and (via the address row's bottom margin) between the sidebar's
+@@ -92,9 +98,14 @@ class FavoritesEmptyPlaceholder : public
+     // The tab strip paints into non-opaque scroll layers, so labels here
+     // must opt out of the subpixel-rendering opacity DCHECK, same as every
+     // other label in the tab strip (see tab_title.cc).
++    // r8.5: secondary, not emphasized. "除了用户自己添加的标签页，其他所有 app
++    // 本身展示用的元素都是半灰色，降低他们的存在感" (user 2026-08-21) -- this
++    // placeholder is app copy, and it was the one full-contrast black label
++    // left in the sidebar. `Arc:` runs its own chrome text at L88-101 against
++    // an L233 sidebar, its tab titles at L25 (measured 2026-08-21).
+     auto* title = AddChildView(std::make_unique<views::Label>(
+         l10n_util::GetStringUTF16(IDS_HELIUM_WS_FAVORITES_PLACEHOLDER_TITLE),
+-        views::style::CONTEXT_LABEL, views::style::STYLE_EMPHASIZED));
++        views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
+     title->SetSkipSubpixelRenderingOpacityCheck(true);
+ 
+     auto* subtitle = AddChildView(std::make_unique<views::Label>(
+@@ -402,6 +413,15 @@ void WorkspaceSidebarView::SyncBindings(
+   UpdateCardShadow();
+ }
+ 
++int WorkspaceSidebarView::FavoritesPlaceholderHeight(int width) const {
++  // The stack of labels decides, not a constant -- see
++  // kFavoritesPlaceholderMinHeight. The floor keeps the empty state from
++  // collapsing to a thin dashed strip if the strings ever get shorter.
++  const int preferred =
++      placeholder_ ? placeholder_->GetHeightForWidth(std::max(width, 1)) : 0;
++  return std::max(preferred, kFavoritesPlaceholderMinHeight);
++}
++
+ WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::ComputeLayout(
+     int width) const {
+   SidebarLayout out;
+@@ -421,9 +441,9 @@ WorkspaceSidebarView::SidebarLayout Work
+ 
+   if (favorite_count_ == 0) {
+     out.placeholder_visible = true;
+-    out.placeholder_bounds =
+-        gfx::Rect(0, 0, row_width, kFavoritesPlaceholderHeight);
+-    y = kFavoritesPlaceholderHeight;
++    const int placeholder_height = FavoritesPlaceholderHeight(row_width);
++    out.placeholder_bounds = gfx::Rect(0, 0, row_width, placeholder_height);
++    y = placeholder_height;
+   } else {
+     const helium_workspace::FavoritesGridPlan plan =
+         helium_workspace::PlanFavoritesGrid(static_cast<int>(favorite_count_),
+@@ -493,7 +513,8 @@ gfx::Size WorkspaceSidebarView::GetMinim
+   // empty, and one row's worth of content.
+   int height = kSpaceHeaderHeight + FavoriteGridGap();
+   height += favorite_count_ == 0
+-                ? kFavoritesPlaceholderHeight
++                ? FavoritesPlaceholderHeight(
++                      GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth))
+                 : GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
+   if (ordered_entries_.size() > favorite_count_ && !space_collapsed_) {
+     height +=
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -112,6 +112,11 @@ class WorkspaceSidebarView : public view
+   raw_ptr<Profile> profile_ = nullptr;
+   raw_ptr<helium_workspace::WorkspaceService> service_ = nullptr;
+ 
++  // helium-fork r8.5: how tall the empty-Favorites placeholder has to be at
++  // `width` -- its own preferred height, floored. Hard-coding it clipped the
++  // star (see the constant in the .cc).
++  int FavoritesPlaceholderHeight(int width) const;
++
+   raw_ptr<views::View> placeholder_ = nullptr;
+   raw_ptr<views::View> space_header_ = nullptr;
+   bool space_collapsed_ = false;
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -4,6 +4,10 @@
+ 
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+ 
++#include "chrome/browser/ui/views/frame/arc_composer_host_view.h"
++
++#include "base/auto_reset.h"
++
+ #include <algorithm>
+ #include <memory>
+ #include <utility>
+@@ -56,6 +60,8 @@
+ #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/helium/arc_toolbar_host.h"
++#include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
++#include "content/public/browser/navigation_controller.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
+ #include "chrome/browser/ui/intent_picker_tab_helper.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -1407,6 +1413,14 @@ void ToolbarView::Update(WebContents* ta
+     location_bar_->Update(tab);
+   }
+ 
++  // helium-fork r8: a navigation or a tab switch can change the answer -- both
++  // whether the band shows a capsule and whether the field belongs to the
++  // composer. BrowserView owns the second half because it owns the host.
++  UpdateArcBandFieldVisibility();
++  if (browser_view_) {
++    browser_view_->UpdateArcComposerHost();
++  }
++
+   if (extensions_container_) {
+     extensions_container_->UpdateAllIcons();
+   }
+@@ -2042,6 +2056,7 @@ void ToolbarView::UpdateToolbarLayout()
+   if (!location_bar_) {
+     return;
+   }
++  base::AutoReset<bool> reentrancy(&arc_updating_toolbar_layout_, true);
+ 
+   const auto flex_preferred =
+       views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+@@ -2163,15 +2178,12 @@ void ToolbarView::UpdateToolbarLayout()
+     }
+   }
+ 
+-  if (arc_trailing_spacer_) {
+-    // helium-fork: parked since the full-width field took over the slack
+-    // (2026-08-16). The View stays in the tree so the child order is stable
+-    // and a future layout can re-enable it without re-plumbing; if it ever
+-    // comes back, remember its flex spec must use the three-argument
+-    // FlexSpecification -- the two-argument form applies to BOTH axes and
+-    // blew the row's preferred height up to 298px once.
+-    arc_trailing_spacer_->SetVisible(false);
+-  }
++  // helium-fork r8: parked since the full-width field took over the slack
++  // (2026-08-16) -- and un-parked exactly while the capsule is hidden on a
++  // blank new tab, where there is no flexible child left to keep the trailing
++  // buttons against the right edge. UpdateArcBandFieldVisibility() owns both
++  // halves so the two flags cannot disagree.
++  UpdateArcBandFieldVisibility();
+ 
+   // Pinned actions (including downloads) and extensions
+   // should not shrink in compact layout.
+@@ -2272,17 +2284,83 @@ bool ToolbarView::IsArcBandHosted() cons
+          !arc_sidebar_hosted_;
+ }
+ 
++namespace {
++
++// helium-fork r8.3: the ToolbarView that owns `view`, for views that may have
++// been reparented out of it.
++//
++// The plain ancestor walk was enough while every hand-off moved the WHOLE
++// toolbar (the sidebar row, its edit host). The composer moves the field
++// alone, so from inside it the walk finds no ToolbarView at all and every
++// Arc predicate on the field silently answered "not the Arc band".
++//
++// ⚠ The fallback is keyed on the composer host, NOT on "the walk failed".
++// GetArcBandTintFor() relies on the walk failing for the buttons the sidebar
++// borrows -- the collapse and navigation controls, which are on the app
++// surface and must keep the theme's colours. A blanket window-level fallback
++// would hand them the band's tint.
++const ToolbarView* ArcToolbarFor(const views::View* view) {
++  for (const views::View* ancestor = view; ancestor;
++       ancestor = ancestor->parent()) {
++    if (const auto* const toolbar = views::AsViewClass<ToolbarView>(ancestor)) {
++      return toolbar;
++    }
++    if (views::IsViewClass<ArcComposerHostView>(ancestor)) {
++      const views::Widget* const widget = view->GetWidget();
++      BrowserView* const browser_view =
++          widget ? BrowserView::GetBrowserViewForNativeWindow(
++                       widget->GetNativeWindow())
++                 : nullptr;
++      return browser_view ? browser_view->toolbar() : nullptr;
++    }
++  }
++  return nullptr;
++}
++
++}  // namespace
++
+ // static
+ bool ToolbarView::IsArcBandHostedFor(const views::View* view) {
++  // ⚠ r8.5: a composer-hosted field is in NEITHER chrome host. ArcToolbarFor()
++  // still resolves the toolbar for it (the tint and the metrics need that),
++  // but "which host holds this view" has to answer honestly, or every caller
++  // that turns the answer into behaviour has to remember the composer on its
++  // own. Three of them did not, and the third cost a user-visible regression:
++  // LocationBarView::FocusLocation() begins the sidebar row's edit hand-off
++  // when sidebar-hosted, so focusing the composer on a blank new tab in the
++  // hidden address bar mode dragged the whole toolbar into the panel-wide
++  // edit host and left the sidebar's address row empty (reported 2026-08-21).
++  // Ask ArcShellHostsField() when you mean "would the shell hold it".
++  if (IsArcComposerHostedView(view)) {
++    return false;
++  }
++  const ToolbarView* const toolbar = ArcToolbarFor(view);
++  return toolbar && toolbar->IsArcBandHosted();
++}
++
++// static
++bool ToolbarView::IsArcComposerHostedView(const views::View* view) {
+   for (const views::View* ancestor = view; ancestor;
+        ancestor = ancestor->parent()) {
+-    if (const auto* const toolbar = views::AsViewClass<ToolbarView>(ancestor)) {
+-      return toolbar->IsArcBandHosted();
++    if (views::IsViewClass<ArcComposerHostView>(ancestor)) {
++      return true;
++    }
++    if (views::IsViewClass<ToolbarView>(ancestor)) {
++      return false;
+     }
+   }
+   return false;
+ }
+ 
++bool ToolbarView::ArcShellHostsField() const {
++  // "Is the Arc shell the thing that owns the address field", independent of
++  // which of its hosts is holding it this instant -- band, sidebar row, or
++  // lent out to the new tab page's composer. False only where there is no Arc
++  // shell at all (popup windows, horizontal tabs, high contrast), which is
++  // exactly where there is no composer to lend it to either.
++  return location_bar_view_ && location_bar_view_->ShouldMinimizeArcChrome();
++}
++
+ void ToolbarView::SetArcRowHovered(bool hovered) {
+   if (!arc_sidebar_hosted_) {
+     return;
+@@ -2296,6 +2374,126 @@ void ToolbarView::SetArcRowHovered(bool
+   UpdateArcExtensionsReveal();
+ }
+ 
++bool ToolbarView::IsArcBlankNewTab() const {
++  content::WebContents* const active =
++      browser_ ? browser_->tab_strip_model()->GetActiveWebContents() : nullptr;
++  // The same reading tab_strip_model.cc's IsBlankNewTab() takes: the *visible*
++  // URL, because it is the virtual one and it is already set while the tab is
++  // still pending -- so a new tab is recognised on the way in rather than one
++  // layout later, and the capsule never flashes.
++  return active && helium_workspace::IsBlankNewTabState(
++                       active->GetVisibleURL(),
++                       active->GetController().GetEntryCount());
++}
++
++void ToolbarView::UpdateArcBandFieldVisibility() {
++  if (!location_bar_view_) {
++    return;
++  }
++  // r8.3: the capsule is not hidden on a blank new tab, it is ABSENT -- the
++  // field itself has gone to the composer (BrowserView::UpdateArcComposerHost).
++  // This still runs, and still has work to do, because the trailing spacer has
++  // to take over the right-alignment job the field's unbounded flex was doing;
++  // without it the extensions, the avatar and the menu slide left into the gap.
++  // ⚠ r8.4: the composer term is FIRST, and it is not an optimisation -- it is
++  // the invariant. `IsArcBandHosted()` asks the field
++  // `ShouldMinimizeArcChrome()`, which answers *false* whenever the field has
++  // no widget (location_bar_view.cc), and ReleaseLocationBarForComposer()
++  // calls us from exactly that gap: after RemoveChildViewT(), before the
++  // composer has adopted it. `ShouldShowArcBandField(false, ...)` returns true
++  // for an off-band field, so the band concluded it was showing a capsule and
++  // switched the spacer OFF -- at the one moment the spacer is the only thing
++  // holding the extensions, the avatar and the menu against the right edge.
++  // They slid to the left of the band (reported 2026-08-21) and stayed there
++  // until some later Update() happened to re-ask with the field re-parented.
++  // The field being in the composer is the one fact that is true throughout
++  // the reparent, so ask that instead of re-deriving it from view state.
++  const bool show =
++      !arc_location_bar_in_composer_ &&
++      helium::ShouldShowArcBandField(IsArcBandHosted(), IsArcBlankNewTab());
++  if (arc_trailing_spacer_) {
++    // ⚠ The THREE-argument FlexSpecification. The two-argument form applies to
++    // both axes, and an unbounded vertical maximum blew this row's preferred
++    // height up to 298px the first time the spacer was tried (2026-08-16).
++    //
++    // ⚠ And the order matters. FlexLayout allocates in ASCENDING order, so a
++    // default-order (1) unbounded spacer is served before the field's
++    // kLocationBarFlexOrder and eats the whole surplus, pinning the capsule to
++    // its preferred width. The two are meant to be mutually exclusive, but
++    // they overlap for the length of a reparent; ordering the spacer after the
++    // field makes the overlap harmless instead of merely unlikely.
++    arc_trailing_spacer_->SetProperty(
++        views::kFlexBehaviorKey,
++        views::FlexSpecification(views::LayoutOrientation::kHorizontal,
++                                 views::MinimumFlexSizeRule::kScaleToZero,
++                                 views::MaximumFlexSizeRule::kUnbounded)
++            .WithOrder(kLocationBarFlexOrder + 1));
++    arc_trailing_spacer_->SetVisible(!show);
++  }
++  // While the composer holds the field, this view is not ours to place at all.
++  if (arc_location_bar_in_composer_) {
++    // ⚠ but do ask for a relayout on the way out. The spacer's preferred size
++    // is 0x0, so FlexLayout filters it out through
++    // LayoutManagerBase::SetViewVisibility(), which does not touch
++    // `can_be_visible`; a later SetVisible(true) then matches the stored value
++    // and returns without invalidating anything. Without this the corrected
++    // spacer state above can sit there un-applied. (Same trap
++    // SetArcExtensionsSpaceReserved() sidesteps with kViewIgnoredByLayoutKey.)
++    InvalidateLayout();
++    return;
++  }
++  if (location_bar_view_->GetVisible() == show) {
++    return;
++  }
++  location_bar_view_->SetVisible(show);
++  // ⚠ And re-run the layout configuration, do not just relayout. The capsule's
++  // flex rule, its preferred size and its margins are all assigned by
++  // UpdateToolbarLayout(); a capsule that comes back from hidden with whatever
++  // those were left at is a capsule at the wrong width in the wrong place.
++  // Cheap: this only runs on an actual flip.
++  if (!arc_updating_toolbar_layout_) {
++    UpdateToolbarLayout();
++  }
++}
++
++std::unique_ptr<views::View> ToolbarView::ReleaseLocationBarForComposer() {
++  if (!location_bar_view_ || arc_location_bar_in_composer_) {
++    return nullptr;
++  }
++  arc_location_bar_in_composer_ = true;
++  // Visible again on the way out: the composer places it, and a view that left
++  // here with the blank-new-tab rule's `false` on it would arrive invisible.
++  location_bar_view_->SetVisible(true);
++  std::unique_ptr<views::View> released =
++      RemoveChildViewT(location_bar_view_.get());
++  UpdateArcBandFieldVisibility();
++  return released;
++}
++
++void ToolbarView::ReclaimLocationBarFromComposer(
++    std::unique_ptr<views::View> view) {
++  if (!view) {
++    return;
++  }
++  arc_location_bar_in_composer_ = false;
++  // Back into its own slot, not onto the end: the trailing spacer and the
++  // extensions are ordered after the field and keep the trailing chrome
++  // against the right edge, so appending would put the field on their far
++  // side. The spacer is the field's immediate neighbour by construction (it
++  // was added directly after it), which makes it the anchor.
++  const std::optional<size_t> anchor =
++      arc_trailing_spacer_ ? GetIndexOf(arc_trailing_spacer_) : std::nullopt;
++  AddChildViewAt(std::move(view), anchor.value_or(children().size()));
++  // Everything the field's layout depends on is assigned by
++  // UpdateToolbarLayout(); a field that comes back without it keeps whatever
++  // the composer left on it.
++  UpdateToolbarLayout();
++}
++
++bool ToolbarView::IsLocationBarInComposer() const {
++  return arc_location_bar_in_composer_;
++}
++
+ void ToolbarView::UpdateArcExtensionsReveal() {
+   if (!arc_sidebar_hosted_) {
+     SetArcExtensionsSpaceReserved(true);
+@@ -2435,24 +2633,20 @@ void ToolbarView::SetArcEditHosted(bool
+ }
+ 
+ bool ToolbarView::IsArcSidebarHostedFor(const views::View* view) {
+-  for (const views::View* ancestor = view; ancestor;
+-       ancestor = ancestor->parent()) {
+-    if (const auto* const toolbar = views::AsViewClass<ToolbarView>(ancestor)) {
+-      return toolbar->arc_sidebar_hosted_ &&
+-             toolbar->location_bar_view() &&
+-             toolbar->location_bar_view()->ShouldMinimizeArcChrome();
+-    }
+-  }
+-  return false;
++  // See IsArcBandHostedFor(): the composer is not a chrome host.
++  if (IsArcComposerHostedView(view)) {
++    return false;
++  }
++  const ToolbarView* const toolbar = ArcToolbarFor(view);
++  return toolbar && toolbar->arc_sidebar_hosted_ &&
++         toolbar->location_bar_view() &&
++         toolbar->location_bar_view()->ShouldMinimizeArcChrome();
+ }
+ 
+ // static
+ std::optional<SkColor> ToolbarView::GetArcBandTintFor(const views::View* view) {
+-  for (const views::View* ancestor = view; ancestor;
+-       ancestor = ancestor->parent()) {
+-    if (const auto* const toolbar = views::AsViewClass<ToolbarView>(ancestor)) {
+-      return toolbar->band_tint();
+-    }
++  if (const ToolbarView* const toolbar = ArcToolbarFor(view)) {
++    return toolbar->band_tint();
+   }
+   // Buttons that have been reparented out of the toolbar -- the collapse and
+   // navigation controls, which live in the sidebar's top row -- are on the app
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -255,6 +255,17 @@ class ToolbarView : public views::Access
+   // The row's edit panel keys off this the way the band's keys off
+   // IsArcBandHostedFor.
+   static bool IsArcSidebarHostedFor(const views::View* view);
++
++  // helium-fork r8.5: whether `view` is inside the new tab page's composer,
++  // which is a host but not a *chrome* host -- the two predicates above answer
++  // false for it.
++  static bool IsArcComposerHostedView(const views::View* view);
++
++  // helium-fork r8.5: whether the Arc shell owns the address field at all,
++  // regardless of which of its hosts is holding it right now. The question
++  // "should the field be in the composer" needs this rather than either
++  // predicate above, which would flip to false the moment it moved there.
++  bool ArcShellHostsField() const;
+   // helium-fork: the sidebar row's field is being edited and the toolbar
+   // rides in BrowserView's edit host at the panel's width. Sidebar-hosted
+   // stays true throughout; this narrows the row to its edit shape (the
+@@ -276,6 +287,25 @@ class ToolbarView : public views::Access
+   // exit event (the "icons never retract after the menu" bug, 2026-08-19).
+   void UpdateArcExtensionsReveal();
+ 
++  // helium-fork r8: recompute whether the band shows its address capsule. The
++  // blank new tab hides it (helium::ShouldShowArcBandField); the trailing
++  // spacer takes over the right-alignment job the capsule's unbounded flex was
++  // doing, so the extensions and the menu do not slide left into the gap.
++  void UpdateArcBandFieldVisibility();
++
++  // helium-fork r8: whether the active tab is the browser's own new tab page
++  // with nothing behind it (helium_workspace::IsBlankNewTabState).
++  bool IsArcBlankNewTab() const;
++
++  // helium-fork r8.3: hand the address field over to the new tab page's
++  // centred composer, and take it back. The toolbar owns the child order, so
++  // it also owns putting the field back in the right slot -- returning it to
++  // the end of the list would leave the trailing spacer and the extensions on
++  // the wrong side of it.
++  std::unique_ptr<views::View> ReleaseLocationBarForComposer();
++  void ReclaimLocationBarFromComposer(std::unique_ptr<views::View> view);
++  bool IsLocationBarInComposer() const;
++
+   ToolbarButton* vertical_tabs_collapse_button() const {
+     return vertical_tabs_collapse_button_;
+   }
+@@ -513,6 +543,15 @@ class ToolbarView : public views::Access
+   raw_ptr<ToolbarButton> vertical_tabs_collapse_button_ = nullptr;
+   // helium-fork: see SetArcSidebarHosted().
+   bool arc_sidebar_hosted_ = false;
++  // helium-fork r8: the capsule is hidden on this tab, and a user-initiated
++  // focus has asked for it back. Cleared when the field blurs or the tab
++  // changes, so a fresh new tab always opens clean.
++  // helium-fork r8.2: re-entrancy guard. UpdateArcBandFieldVisibility() re-runs
++  // UpdateToolbarLayout() whenever it flips the capsule's visibility, and
++  // UpdateToolbarLayout() calls it back.
++  bool arc_updating_toolbar_layout_ = false;
++  // helium-fork r8.3: true while ArcComposerHostView holds the field.
++  bool arc_location_bar_in_composer_ = false;
+   bool arc_edit_hosted_ = false;
+   // helium-fork: see SetArcExtensionsSpaceReserved(). True outside the
+   // sidebar and whenever the area is revealed or still fading out.
+Index: src/components/search/ntp_features.cc
+===================================================================
+--- src.orig/components/search/ntp_features.cc
++++ src/components/search/ntp_features.cc
+@@ -175,7 +175,14 @@ BASE_FEATURE(kNtpSharepointModule,
+ 
+ // If enabled, shortcuts will be shown.
+ // This is a kill switch. Keep indefinitely.
+-BASE_FEATURE(kNtpShortcuts, base::FEATURE_ENABLED_BY_DEFAULT);
++// helium-fork r8.1: off. The Arc shell's new tab page is the centred search
++// box and nothing else -- "helium 原生的 shortcut 就不需要了，new tab 就是干干净净
++// 的搜索框" (user 2026-08-21). The whole point of moving the field into the page
++// is that the page is where the typing happens; a grid of tiles under it is the
++// old model's furniture. Flipping the feature rather than the pref because the
++// pref is a customisation the shortcuts' own UI writes back, and there is no
++// shortcuts UI any more.
++BASE_FEATURE(kNtpShortcuts, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // If enabled, the Tab Resumption module will be shown.
+ // TODO(b/516245005): Enable Tab Resumption Module for Android.

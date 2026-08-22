@@ -1,0 +1,161 @@
+Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.html
+===================================================================
+--- src.orig/chrome/browser/resources/settings/appearance_page/appearance_page.html
++++ src/chrome/browser/resources/settings/appearance_page/appearance_page.html
+@@ -115,10 +115,10 @@
+               pref="{{prefs.helium.browser.vertical_right_aligned}}"
+               label="$i18n{tabStripRightAlign}">
+           </settings-toggle-button>
+-          <settings-toggle-button class="hr"
+-              pref="{{prefs.helium.browser.centered_location_bar}}"
+-              label="$i18n{centeredLocationBar}">
+-          </settings-toggle-button>
++          <!-- helium-fork r8.3: the centered address bar option is gone. The
++               Arc shell has one placement and it is left (user 2026-08-21);
++               the pref stays registered but nothing reads it, so leaving the
++               toggle here would be a switch that does nothing. -->
+           <settings-toggle-button class="hr"
+               pref="{{prefs.helium.browser.minimal_location_bar}}"
+               label="$i18n{minimalLocationBar}">
+Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
++++ src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
+@@ -257,11 +257,6 @@ OmniboxViewViews::OmniboxViewViews(bool
+     pref_change_registrar_.Add(
+         prefs::kHeliumMinimalLocationBar,
+         base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
+-    // helium-fork: alignment now rides this pref instead, so it needs the
+-    // same refresh on change.
+-    pref_change_registrar_.Add(
+-        prefs::kHeliumCenteredLocationBar,
+-        base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
+     pref_change_registrar_.Add(
+         omnibox::kPreventUrlElisionsInOmnibox,
+         base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
+@@ -939,22 +934,22 @@ void OmniboxViewViews::UpdateAccessibleT
+ }
+ 
+ void OmniboxViewViews::UpdateSteadyStateTextAlignment() {
+-  bool center_text = false;
+-  if (controller()->edit_model()->focus_state() == OMNIBOX_FOCUS_NONE &&
+-      !controller()->edit_model()->user_input_in_progress() &&
+-      location_bar_view_ && location_bar_view_->GetProfile()) {
+-    // helium-fork: alignment follows the "centered location bar" pref, not
+-    // the "minimal" one. Upstream rode both behaviours on kHeliumMinimal-
+-    // LocationBar, so turning off centering also turned off the domain-only
+-    // elision -- and the Arc shell wants domain-only text that is LEFT
+-    // aligned. The two are now independent switches.
+-    center_text = location_bar_view_->GetProfile()->GetPrefs()->GetBoolean(
+-        prefs::kHeliumCenteredLocationBar);
+-  }
+-
+-  SetHorizontalAlignment(center_text ? gfx::ALIGN_CENTER : gfx::ALIGN_LEFT);
+-  set_placeholder_text_draw_flags(center_text ? gfx::Canvas::TEXT_ALIGN_CENTER
+-                                              : gfx::Canvas::TEXT_ALIGN_LEFT);
++  // helium-fork r8.4: the address bar has exactly one mode -- left. r8.3
++  // sealed the *bounds* half of Helium's "centered location bar"
++  // (ToolbarView::GetCenteredLocationBarBounds) but left this, the text
++  // alignment half, still riding the pref. With the pref on, a resting field
++  // put the domain 50pt to the right of the site-settings icon: the Arc band
++  // sizes the resting omnibox to text width + 100pt of forgiveness slack
++  // (LocationBarView::Layout), and centring inside that box splits the slack
++  // in two. On a blank new tab, where there is no text, the same arm centred
++  // the *placeholder* in the composer's box. Both read as "the URL has a hole
++  // in front of it" -- reported 2026-08-21 with the pref True in the profile.
++  //
++  // Sealed the same way as the bounds half: the pref stays registered (no
++  // migration), the switch is gone. Anything that wants centred omnibox text
++  // back has to reinstate both halves deliberately.
++  SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  set_placeholder_text_draw_flags(gfx::Canvas::TEXT_ALIGN_LEFT);
+ }
+ 
+ void OmniboxViewViews::OnOmniboxPaste() {
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -246,7 +246,7 @@ void SetRefreshMargins(views::View* butt
+                                   : kBrowserAppMenuRefreshCollapsedMargin));
+ }
+ 
+-constexpr int kCenteredLocationBarMaxWidth = 700;
++[[maybe_unused]] constexpr int kCenteredLocationBarMaxWidth = 700;
+ 
+ struct CenteredLocationBarStep {
+   int min_toolbar_width;
+@@ -259,7 +259,9 @@ constexpr CenteredLocationBarStep kCente
+     {600, 5},
+ };
+ 
+-int CenteredLocationBarWidthReduction(int toolbar_width) {
++// helium-fork r8.3: kept for shape, no longer called -- see
++// ToolbarView::GetCenteredLocationBarBounds().
++[[maybe_unused]] int CenteredLocationBarWidthReduction(int toolbar_width) {
+   for (const auto& step : kCenteredLocationBarSteps) {
+     if (toolbar_width >= step.min_toolbar_width) {
+       return toolbar_width * step.toolbar_width_reduction_percent / 100;
+@@ -2872,40 +2874,31 @@ void ToolbarView::OnLocationBarCenteredC
+ 
+ gfx::Rect ToolbarView::GetCenteredLocationBarBounds(gfx::Rect bounds,
+                                                     int toolbar_width) const {
+-  if (IsCompactLayout() || display_mode_ != DisplayMode::kNormal ||
+-      !location_bar_is_centered_.GetValue()) {
+-    return bounds;
+-  }
+-
+-  const int width_reduction = CenteredLocationBarWidthReduction(toolbar_width);
+-  if (width_reduction == 0) {
+-    return bounds;
+-  }
+-
+-  const int centered_width =
+-      std::clamp(bounds.width() - width_reduction,
+-                 location_bar_view_->GetMinimumSize().width(),
+-                 kCenteredLocationBarMaxWidth);
+-
+-  // Center against the full width of the toolbar's parent. If that position
+-  // does not fit in the slot assigned by layout, fall back to centering within
+-  // the slot instead.
+-  int centered_x = bounds.x() + (bounds.width() - centered_width) / 2;
+-  if (parent() && centered_width <= bounds.width()) {
+-    const int ideal_centered_x = (parent()->width() - centered_width) / 2 - x();
+-    const int min_centered_x = bounds.x();
+-    const int max_centered_x = bounds.right() - centered_width;
+-    if (ideal_centered_x >= min_centered_x &&
+-        ideal_centered_x <= max_centered_x) {
+-      centered_x = ideal_centered_x;
+-    }
+-  }
+-
+-  bounds.set_x(centered_x);
+-  bounds.set_width(centered_width);
++  // helium-fork r8.3: the address bar has ONE placement and it is left. The
++  // user's ruling, 2026-08-21, after three rounds of chasing a "the panel is in
++  // the wrong place" report that turned out to be this:
++  //
++  //   "我从来没说过，地址栏需要居中设计。helium 原生是居中的，但我很早就已经
++  //    改过，把地址栏靠左设计。地址栏只有一个默认显示模式，就是靠左，不要再有
++  //    居中这种选项."
++  //
++  // It also could not have stayed: the Arc band's standing spec (M3.4, pinned
++  // at acceptance) is that the field is the band's ONLY flexible element and
++  // spans it, and this ran after FlexLayout and overwrote exactly that. With
++  // helium.browser.centered_location_bar on, a 1461pt band came out as a 700pt
++  // field at x=380 -- kCenteredLocationBarMaxWidth, centred -- which is what
++  // the r8 panel then faithfully sat on top of.
++  //
++  // Sealed rather than deleted, the way the retired layouts and the zen
++  // machinery are: CenteredLocationBarLayout and the step table below stay in
++  // the tree so a monthly upstream sync has the same shape to merge into, and
++  // this function is the one-line entry point that is now shut. The pref stays
++  // registered (default false) and is deliberately NOT migrated -- nothing
++  // reads it, so a stale true costs nothing and a migration could.
+   return bounds;
+ }
+ 
++
+ void ToolbarView::OnTouchUiChanged() {
+   if (display_mode_ == DisplayMode::kNormal) {
+     // Update the internal margins for touch layout.
