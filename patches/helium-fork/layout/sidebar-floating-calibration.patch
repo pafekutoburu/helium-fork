@@ -1,0 +1,840 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -380,6 +380,7 @@ static_library("ui") {
+     "helium/arc_card_layout.h",
+     "helium/arc_composer.h",
+     "helium/arc_favorite_accent.h",
++    "helium/arc_floating_sidebar.h",
+     "helium/arc_loading_bar.h",
+     "helium/arc_media_strip.h",
+     "helium/arc_minimal_field_state.h",
+@@ -6046,6 +6047,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_composer_unittest.cc",
+     "helium/arc_favorite_accent.h",
+     "helium/arc_favorite_accent_unittest.cc",
++    "helium/arc_floating_sidebar.h",
++    "helium/arc_floating_sidebar_unittest.cc",
+     "helium/arc_loading_bar.h",
+     "helium/arc_loading_bar_unittest.cc",
+     "helium/arc_media_strip.h",
+@@ -6101,6 +6104,9 @@ test("helium_workspace_unittests") {
+     # helium-fork: same deal for arc_card_layout.h -- gfx::Rect/Insets only,
+     # no //ui/views, so the card's geometry contract is assertable here.
+     "//ui/gfx/geometry",
++    # helium-fork: arc_floating_sidebar.h names its easings (gfx::Tween::Type);
++    # tween.h is header-only but lives in this target.
++    "//ui/gfx/animation",
+     "//url",
+   ]
+ }
+Index: src/chrome/browser/ui/color/chrome_color_id.h
+===================================================================
+--- src.orig/chrome/browser/ui/color/chrome_color_id.h
++++ src/chrome/browser/ui/color/chrome_color_id.h
+@@ -433,6 +433,9 @@
+   /* the magnifier beside it are the same colour there. Dark is */ \
+   /* UNMEASURED and falls back to upstream's dimmed id. */ \
+   E_CPONLY(kColorOmniboxArcComposerHint) \
++  /* helium-fork M3.9d: the floating sidebar card's 1px highlight rim -- */ \
++  /* white at helium::kSidebarFloatingCardRimAlpha{Light,Dark} (Dia: +2 L). */ \
++  E_CPONLY(kColorArcFloatingSidebarRim) \
+   /* helium-fork r8.6: the row action hint ("Hold Cmd to switch") -- */ \
+   /* `Dia:` (187,188,188), one step lighter again. */ \
+   E_CPONLY(kColorOmniboxArcRowActionHint) \
+Index: src/chrome/browser/ui/color/material_chrome_color_mixer.cc
+===================================================================
+--- src.orig/chrome/browser/ui/color/material_chrome_color_mixer.cc
++++ src/chrome/browser/ui/color/material_chrome_color_mixer.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/color/material_chrome_color_mixer.h"
+ 
++#include "base/numerics/safe_conversions.h"
++
+ #include "base/feature_list.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/color/chrome_color_provider_utils.h"
+@@ -503,6 +505,14 @@ void AddMaterialChromeColorMixer(ui::Col
+                 : (use_helium_app_surface
+                        ? ui::ColorTransform(helium::kArcAppSurfaceLight)
+                        : ui::ColorTransform(ui::kColorSysBase))};
++  // helium-fork M3.9d: the floating sidebar card's 1px highlight rim. White
++  // at a contrast-matched alpha (Dia's rim is +2 L over its fill); the
++  // numbers live in helium/arc_sidebar_surface.h.
++  mixer[kColorArcFloatingSidebarRim] = {ui::SetAlpha(
++      SK_ColorWHITE,
++      base::ClampRound<SkAlpha>(
++          255.0 * (dark_mode ? helium::kSidebarFloatingCardRimAlphaDark
++                             : helium::kSidebarFloatingCardRimAlphaLight)))};
+   mixer[kColorToolbarButtonBackgroundHighlightedDefault] = {
+       ui::kColorSysStateHoverOnSubtle};
+   mixer[kColorToolbarButtonBorder] = {ui::kColorSysOutline};
+Index: src/chrome/browser/ui/helium/arc_floating_sidebar.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_floating_sidebar.h
+@@ -0,0 +1,150 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_FLOATING_SIDEBAR_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_FLOATING_SIDEBAR_H_
++
++#include <algorithm>
++
++#include "base/time/time.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "ui/gfx/animation/tween.h"
++
++// helium-fork (M3.9d): every number of the hidden-sidebar hover card -- the
++// floating sidebar that slides out of the window's left edge in the kHidden
++// layout and retracts when the pointer leaves it. Before this header those
++// numbers were upstream zen-mode constants scattered over browser_view.cc,
++// browser_view_tabbed_layout_impl.cc and vertical_tab_strip_region_view.cc;
++// calibrating the card against a reference browser means editing this file
++// only. Dependency-free (base + gfx::Tween) so the lightweight unit-test
++// target can pin the invariants.
++//
++// The reference for this card is Dia (user 2026-08-23: UI details including
++// motion follow Dia's style). Every figure below is either Dia's, measured
++// 2026-08-23 on the user's machine (light theme, 2x; the table with the raw
++// readings is progress/decisions.md「M3.9d 参考物改判 + Dia 实测规格」), or a
++// deliberate departure called out in place.
++namespace helium {
++
++// --- 1. geometry -----------------------------------------------------------
++
++// Gap between the floating card and the window edges (all four sides), in
++// DIPs. Dia: 3 top/bottom, 4 left counting its own 1px window edge line --
++// i.e. the same 3 as ours. The contents card keeps its own inset
++// (MultiContentsView::kContentCardInset, user-ruled 3); the two used to be
++// one alias.
++inline constexpr int kFloatingSidebarGap = 3;
++
++// The card's corner radius: concentric with the system window radius
++// (user-ruled "先走同心"), i.e. the window radius minus the gap. Dia measures
++// 14.0 -- exactly 17 - 3. Never negative: a gap wider than the window radius
++// degrades to square corners.
++inline constexpr int FloatingSidebarCornerRadius(int window_radius) {
++  return std::max(0, window_radius - kFloatingSidebarGap);
++}
++
++// --- 2. rim ----------------------------------------------------------------
++
++// A 1px highlight stroke around the card (views::Separator::kThickness), white
++// over the card's opaque fill. Dia: present on all four edges, 1pt, two
++// levels lighter than its L248 fill (L250) -- barely there. Replicated by
++// *contrast*, not by Dia's absolute alpha (0.29 on a near-white fill): the
++// same +2 L on our L228 fill is white at ~0.08; 0.29 would read as a bright
++// edge Dia does not have. Dark theme unmeasured (Dia's dark mode was not
++// driven); kept at the same faint level.
++// The alphas themselves live next to the other surface colours in
++// arc_sidebar_surface.h (kSidebarFloatingCardRimAlpha{Light,Dark}) because the
++// color mixer that defines kColorArcFloatingSidebarRim compiles that header
++// and must not pull gfx::Tween in.
++inline constexpr bool kFloatingSidebarRimEnabled = true;
++inline constexpr double kFloatingSidebarRimAlphaLight =
++    kSidebarFloatingCardRimAlphaLight;
++inline constexpr double kFloatingSidebarRimAlphaDark =
++    kSidebarFloatingCardRimAlphaDark;
++
++// --- 3. shadow -------------------------------------------------------------
++
++// Self-painted (HeliumCardShadowView, same pass model as the sidebar's row
++// cards). Dia's shadow is a near-isotropic halo: measured right of the card
++// on a L247 page, delta L at d px = 1:-24 2:-23 4:-21 8:-16 12:-11.6 16:-8
++// 24:-3.4 32:-1 40:0, and the same ~-20 in all three window gaps. A single
++// centred gaussian, sigma 8pt / alpha 0.205, reproduces that profile to rms
++// 0.25 -- no hug/drift passes needed. The MD shadow this replaced (elevation
++// 4, key alpha .3) was gone by 5pt; Dia's carries to 16. Dark theme
++// unmeasured; the row cards' convention (black at doubled alpha) applies.
++inline constexpr SidebarCardShadowPass kFloatingSidebarShadowPasses[] = {
++    {/*offset_y=*/0, /*sigma=*/8.0, /*light_alpha=*/0.205,
++     /*dark_alpha=*/0.41, /*inset_h=*/0},
++};
++// The shadow view's overhang past the card on each side: 4 sigma (the tail
++// beyond is sub-1% alpha). The window clips what falls into its 3pt gaps.
++inline constexpr int kFloatingSidebarShadowOutsetH = 32;
++inline constexpr int kFloatingSidebarShadowOutsetV = 32;
++inline constexpr CardShadowSpec kFloatingSidebarShadowSpec{
++    kFloatingSidebarShadowPasses, kFloatingSidebarShadowOutsetH,
++    kFloatingSidebarShadowOutsetV};
++
++// --- 4. motion -------------------------------------------------------------
++
++// Slide-out and slide-back durations and easings. Dia (two cycles each):
++// out ~130ms, back ~120ms, both a plain ease-out (normalized 0.37@28ms,
++// 0.64@53, 0.86@78, 1.0@115 -- gfx::Tween::EASE_OUT fits to rms 8px of 550);
++// the ~1% overshoot Dia's spring adds is not reproduced. Callers wrap the
++// durations in gfx::Animation::RichAnimationDuration() so "reduce motion"
++// still wins.
++inline constexpr base::TimeDelta kFloatingSidebarShowDuration =
++    base::Milliseconds(130);
++inline constexpr base::TimeDelta kFloatingSidebarHideDuration =
++    base::Milliseconds(120);
++inline constexpr gfx::Tween::Type kFloatingSidebarShowTween =
++    gfx::Tween::EASE_OUT;
++inline constexpr gfx::Tween::Type kFloatingSidebarHideTween =
++    gfx::Tween::EASE_OUT;
++
++// --- 5. retract ------------------------------------------------------------
++
++// Dia retracts by *distance*, not by time: a slow exit and a fast one both
++// began sliding back with the pointer ~82-92pt past the card's right edge
++// (92pt after 550ms, 86pt after 265ms), so the band past the card is ~82pt
++// wide and the grace after leaving it is nil (<= 50ms, within the clock's
++// resolution). Vertical leeway was not exercised; the old 8 stays there.
++// The grace when the pointer leaves the window entirely is unmeasured too.
++inline constexpr base::TimeDelta kFloatingSidebarHoverExitGrace =
++    base::Milliseconds(0);
++inline constexpr int kFloatingSidebarHoverLeewayH = 82;
++inline constexpr int kFloatingSidebarHoverLeewayV = 8;
++inline constexpr base::TimeDelta kFloatingSidebarWindowExitGrace =
++    base::Milliseconds(3000);
++
++// --- 6. hot zone -----------------------------------------------------------
++
++// Width in DIPs of the strip along the window edge that reveals the card.
++// Dia: x <= 5 (a pointer parked at x = 5 for 180ms did not count; 4 did; the
++// strip is read as x < 6, the same as ours). The same figure is the
++// horizontal slack past the window edge within which the pointer still counts
++// as inside the window (so a 1px overshoot does not start the window-exit
++// grace).
++inline constexpr int kFloatingSidebarTriggerThickness = 6;
++
++// Dia does not reveal on contact: both cycles started sliding 310ms (+-40ms)
++// after the pointer entered the strip, regardless of whether it kept
++// creeping inside it -- a fixed hover-intent delay. Leaving the strip before
++// it elapses cancels the reveal. 0 means immediate.
++inline constexpr base::TimeDelta kFloatingSidebarRevealDelay =
++    base::Milliseconds(300);
++
++// Whether `x` (BrowserView-local) lies in the reveal strip of a window
++// `width` wide; the strip hugs the left edge, or the right one for a
++// right-aligned sidebar.
++inline constexpr bool IsInFloatingSidebarTrigger(int x,
++                                                 int width,
++                                                 bool right_aligned) {
++  return right_aligned ? (x >= width - kFloatingSidebarTriggerThickness &&
++                          x < width)
++                       : (x >= 0 && x < kFloatingSidebarTriggerThickness);
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_FLOATING_SIDEBAR_H_
+Index: src/chrome/browser/ui/helium/arc_floating_sidebar_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_floating_sidebar_unittest.cc
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_floating_sidebar.h"
++
++#include <cmath>
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++// The card's corners stay concentric with the window: radius = window radius
++// minus the gap, never negative, monotone in the window radius.
++TEST(ArcFloatingSidebarTest, CornerRadiusIsConcentricWithTheWindow) {
++  EXPECT_EQ(17 - kFloatingSidebarGap, FloatingSidebarCornerRadius(17));
++  EXPECT_EQ(12 - kFloatingSidebarGap, FloatingSidebarCornerRadius(12));
++  EXPECT_EQ(0, FloatingSidebarCornerRadius(kFloatingSidebarGap));
++  EXPECT_EQ(0, FloatingSidebarCornerRadius(0));
++  EXPECT_LE(FloatingSidebarCornerRadius(12), FloatingSidebarCornerRadius(17));
++}
++
++// The gap must keep the macOS window controls inside the card's top row: an
++// 8px inset once cut into the traffic lights (layout_impl.cc history), and a
++// zero gap lets the card's corner eat them.
++TEST(ArcFloatingSidebarTest, GapStaysWithinTheTrafficLightBudget) {
++  EXPECT_GE(kFloatingSidebarGap, 1);
++  EXPECT_LE(kFloatingSidebarGap, 7);
++}
++
++// The rim is a highlight by contrast: faint (never a visible bright edge),
++// and present on both themes while the switch is on.
++TEST(ArcFloatingSidebarTest, RimAlphasAreFaintButVisibleWhenEnabled) {
++  EXPECT_GE(kFloatingSidebarRimAlphaLight, 0.0);
++  EXPECT_LE(kFloatingSidebarRimAlphaLight, 0.2);
++  EXPECT_GE(kFloatingSidebarRimAlphaDark, 0.0);
++  EXPECT_LE(kFloatingSidebarRimAlphaDark, 0.2);
++  if (kFloatingSidebarRimEnabled) {
++    EXPECT_GT(kFloatingSidebarRimAlphaLight, 0.0);
++    EXPECT_GT(kFloatingSidebarRimAlphaDark, 0.0);
++  }
++}
++
++// The halo's passes stay paintable (alphas in range, sigma positive) and the
++// shadow view's overhang swallows every pass's practical reach (offset +
++// 3 sigma), so the tail is never cut flat.
++TEST(ArcFloatingSidebarTest, ShadowConstantsHoldTheirShape) {
++  EXPECT_FALSE(kFloatingSidebarShadowSpec.passes.empty());
++  for (const SidebarCardShadowPass& pass : kFloatingSidebarShadowSpec.passes) {
++    EXPECT_GT(pass.sigma, 0.0);
++    EXPECT_GE(pass.light_alpha, 0.0);
++    EXPECT_LE(pass.light_alpha, 1.0);
++    EXPECT_GE(pass.dark_alpha, 0.0);
++    EXPECT_LE(pass.dark_alpha, 1.0);
++    EXPECT_GE(pass.inset_h, 0);
++    EXPECT_GE(kFloatingSidebarShadowSpec.outset_h,
++              3 * pass.sigma - pass.inset_h);
++    EXPECT_GE(kFloatingSidebarShadowSpec.outset_v,
++              3 * pass.sigma + std::abs(pass.offset_y));
++  }
++}
++
++// Motion: both legs finite and non-negative; the retract timings ordered --
++// leaving the card can never wait longer than leaving the window.
++TEST(ArcFloatingSidebarTest, MotionAndRetractTimingsAreOrdered) {
++  EXPECT_GE(kFloatingSidebarShowDuration, base::TimeDelta());
++  EXPECT_GE(kFloatingSidebarHideDuration, base::TimeDelta());
++  EXPECT_LT(kFloatingSidebarShowDuration, base::Seconds(2));
++  EXPECT_LT(kFloatingSidebarHideDuration, base::Seconds(2));
++  EXPECT_GE(kFloatingSidebarHoverExitGrace, base::TimeDelta());
++  EXPECT_LE(kFloatingSidebarHoverExitGrace, kFloatingSidebarWindowExitGrace);
++  EXPECT_GE(kFloatingSidebarHoverLeewayH, 0);
++  EXPECT_GE(kFloatingSidebarHoverLeewayV, 0);
++  EXPECT_GE(kFloatingSidebarRevealDelay, base::TimeDelta());
++  EXPECT_LT(kFloatingSidebarRevealDelay, base::Seconds(1));
++}
++
++// The reveal strip hugs the edge: x = 0 is in, x = thickness is out, and the
++// right-aligned strip mirrors it exactly.
++TEST(ArcFloatingSidebarTest, TriggerStripHugsTheEdge) {
++  constexpr int t = kFloatingSidebarTriggerThickness;
++  constexpr int w = 1000;
++  EXPECT_GE(t, 1);
++  EXPECT_FALSE(IsInFloatingSidebarTrigger(-1, w, false));
++  EXPECT_TRUE(IsInFloatingSidebarTrigger(0, w, false));
++  EXPECT_TRUE(IsInFloatingSidebarTrigger(t - 1, w, false));
++  EXPECT_FALSE(IsInFloatingSidebarTrigger(t, w, false));
++  EXPECT_FALSE(IsInFloatingSidebarTrigger(w - 1, w, false));
++
++  EXPECT_FALSE(IsInFloatingSidebarTrigger(w, w, true));
++  EXPECT_TRUE(IsInFloatingSidebarTrigger(w - 1, w, true));
++  EXPECT_TRUE(IsInFloatingSidebarTrigger(w - t, w, true));
++  EXPECT_FALSE(IsInFloatingSidebarTrigger(w - t - 1, w, true));
++  EXPECT_FALSE(IsInFloatingSidebarTrigger(0, w, true));
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_sidebar_surface.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_sidebar_surface.h
++++ src/chrome/browser/ui/helium/arc_sidebar_surface.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SURFACE_H_
+ #define CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SURFACE_H_
+ 
++#include "base/containers/span.h"
+ #include <algorithm>
+ 
+ #include "third_party/skia/include/core/SkColor.h"
+@@ -182,6 +183,27 @@ inline constexpr SidebarCardShadowPass k
+ inline constexpr int kSidebarCardShadowOutsetH = 8;
+ inline constexpr int kSidebarCardShadowOutsetV = 32;
+ 
++// The floating sidebar card's 1px highlight rim (consumed by the color mixer
++// as kColorArcFloatingSidebarRim; the switch and the rest of that card's
++// numbers are in helium/arc_floating_sidebar.h). Dia 2026-08-23: the rim is
++// two levels lighter than its near-white fill (L250 on L248), so it is
++// replicated by contrast -- white at ~0.08 over our L228 toolbar fill gives
++// the same +2. Dark theme unmeasured; kept equally faint.
++inline constexpr double kSidebarFloatingCardRimAlphaLight = 0.08;
++inline constexpr double kSidebarFloatingCardRimAlphaDark = 0.06;
++
++// A complete shadow recipe for HeliumCardShadowView: the pass table plus the
++// view's overhang past the card. The row cards use the table above; the
++// floating sidebar card (helium/arc_floating_sidebar.h) brings its own.
++struct CardShadowSpec {
++  base::span<const SidebarCardShadowPass> passes;
++  int outset_h;
++  int outset_v;
++};
++inline constexpr CardShadowSpec kSidebarCardShadowSpec{
++    kSidebarCardShadowPasses, kSidebarCardShadowOutsetH,
++    kSidebarCardShadowOutsetV};
++
+ // Whether a card of this size may carry the shadow at all. Purely aesthetic
+ // now (the self-painted shadow has no ninepatch DCHECK to trip, unlike the
+ // ui::Shadow version this floor was born under, probe-hit 2026-08-20): a row
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -105,6 +105,7 @@
+ #include "chrome/browser/ui/helium/arc_band_colors.h"
+ #include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ #include "chrome/browser/ui/helium/arc_caption_opacity.h"
++#include "chrome/browser/ui/helium/arc_floating_sidebar.h"
+ #include "chrome/browser/ui/helium/arc_omnibox_panel.h"
+ #include "chrome/browser/ui/helium/arc_toolbar_host.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -447,14 +448,13 @@ namespace {
+ // The visible height of the shadow above the tabs. Clicks in this area are
+ // treated as clicks to the frame, rather than clicks to the tab.
+ const int kTabShadowSize = 2;
++// helium-fork: these three only serve zen's (sealed) top chrome now. The
++// floating sidebar's reveal strip, hover leeway, slide timings and retract
++// grace periods live in helium/arc_floating_sidebar.h (M3.9d).
+ constexpr int kZenModeRevealTriggerThickness = 6;
+ constexpr int kZenModeChromeHoverLeeway = 8;
+ constexpr base::TimeDelta kZenModeRevealAnimationDuration =
+     base::Milliseconds(200);
+-constexpr base::TimeDelta kZenModeCursorExitGracePeriod =
+-    base::Milliseconds(3000);
+-constexpr base::TimeDelta kZenModeHoverExitGracePeriod =
+-    base::Milliseconds(150);
+ 
+ // helium-fork: how many BeginFrames viz may hold the sidebar-toggle flip
+ // waiting for the renderer's resized frame. Within the hold the previous
+@@ -1089,8 +1089,9 @@ BrowserView::BrowserView(Browser* browse
+   zen_top_chrome_animation_.SetTweenType(gfx::Tween::FAST_OUT_SLOW_IN_3);
+   zen_top_chrome_animation_.Reset(1);
+   zen_side_chrome_animation_.SetSlideDuration(
+-      gfx::Animation::RichAnimationDuration(kZenModeRevealAnimationDuration));
+-  zen_side_chrome_animation_.SetTweenType(gfx::Tween::FAST_OUT_SLOW_IN_3);
++      gfx::Animation::RichAnimationDuration(
++          helium::kFloatingSidebarShowDuration));
++  zen_side_chrome_animation_.SetTweenType(helium::kFloatingSidebarShowTween);
+   zen_side_chrome_animation_.Reset(1);
+ 
+   browser_->tab_strip_model()->AddObserver(this);
+@@ -2088,7 +2089,7 @@ void BrowserView::UpdateZenModeState() {
+       zen_top_chrome_animation_.Show();
+     }
+     if (!zen_side_chrome_animation_.IsShowing()) {
+-      zen_side_chrome_animation_.Show();
++      SlideZenSideChrome(/*show=*/true);
+     }
+   }
+ 
+@@ -2113,7 +2114,13 @@ void BrowserView::UpdateZenModeEventMoni
+ }
+ 
+ void BrowserView::StartZenCollapseTimer(base::TimeDelta delay) {
+-  if (zen_cursor_exit_timer_.IsRunning()) {
++  // helium-fork: earliest deadline wins. A pending window-exit grace (seconds)
++  // must not swallow a later hover-exit request (milliseconds): the pointer
++  // that left the window and came back onto the page would otherwise keep
++  // the card open until the long timer fires.
++  if (zen_cursor_exit_timer_.IsRunning() &&
++      zen_cursor_exit_timer_.desired_run_time() <=
++          base::TimeTicks::Now() + delay) {
+     return;
+   }
+   zen_cursor_exit_timer_.Start(
+@@ -2156,11 +2163,12 @@ void BrowserView::UpdateZenModeRevealFro
+   // Brief cursor excursions outside the window shouldn't collapse
+   // the chrome.
+   gfx::Rect zen_hover_bounds = GetLocalBounds();
+-  zen_hover_bounds.Outset(gfx::Outsets::VH(0, kZenModeRevealTriggerThickness));
++  zen_hover_bounds.Outset(
++      gfx::Outsets::VH(0, helium::kFloatingSidebarTriggerThickness));
+   if (!GetCursorLocationInBrowserView(&cursor) ||
+       !zen_hover_bounds.Contains(cursor)) {
+     zen_last_cursor_.reset();
+-    StartZenCollapseTimer(kZenModeCursorExitGracePeriod);
++    StartZenCollapseTimer(helium::kFloatingSidebarWindowExitGrace);
+     return;
+   }
+ 
+@@ -2179,17 +2187,48 @@ void BrowserView::UpdateZenModeRevealFro
+   // the card shut the moment the cursor touched either.
+   const bool suppress_side_for_top = zen_mode_enabled_ && reveal_top;
+   const bool in_side_trigger = IsPointInZenSideTrigger(cursor);
+-  const bool in_side_chrome = IsPointInZenSideChromeBounds(cursor);
++  // helium-fork: the band around the card only counts while the card is out.
++  // Its horizontal leeway is wide (Dia retracts by distance, ~82pt past the
++  // edge), and the hidden card's bounds sit just off the window's left edge,
++  // so without this gate the band would reach 82pt into the page and reveal
++  // the card on its own.
++  const bool in_side_chrome = zen_side_chrome_animation_.IsShowing() &&
++                              IsPointInZenSideChromeBounds(cursor);
+   const bool moving_out_through_side_gap =
+       previous_cursor && IsLeavingZenSideGap(*previous_cursor, cursor);
+   const bool reveal_side =
+       !suppress_side_for_top && !moving_out_through_side_gap &&
+       (in_side_trigger || in_side_chrome);
+ 
++  // helium-fork M3.9d: Dia does not reveal on contact -- the card slides out
++  // a fixed kFloatingSidebarRevealDelay after the pointer enters the edge
++  // strip, and leaving the strip first cancels it. Only the hidden-sidebar
++  // mode's side reveal waits; zen (sealed) and an already-out card do not.
++  const bool side_reveal_pending =
++      !zen_mode_enabled_ && reveal_side && in_side_trigger &&
++      !zen_side_chrome_animation_.IsShowing() &&
++      helium::kFloatingSidebarRevealDelay.is_positive();
++  if (side_reveal_pending && !floating_sidebar_reveal_delay_elapsed_) {
++    if (!floating_sidebar_reveal_timer_.IsRunning()) {
++      floating_sidebar_reveal_timer_.Start(
++          FROM_HERE, helium::kFloatingSidebarRevealDelay,
++          base::BindOnce(&BrowserView::OnFloatingSidebarRevealDelayElapsed,
++                         base::Unretained(this)));
++    }
++    if (!reveal_top) {
++      return;
++    }
++    UpdateZenModeReveal(reveal_top, /*reveal_side=*/false);
++    return;
++  }
++  if (!in_side_trigger) {
++    floating_sidebar_reveal_timer_.Stop();
++  }
++
+   // Defer the collapse briefly so quick excursions don't cause the
+   // chrome to snap closed.
+   if (!reveal_top && !reveal_side) {
+-    StartZenCollapseTimer(kZenModeHoverExitGracePeriod);
++    StartZenCollapseTimer(helium::kFloatingSidebarHoverExitGrace);
+     return;
+   }
+ 
+@@ -2197,6 +2236,14 @@ void BrowserView::UpdateZenModeRevealFro
+   UpdateZenModeReveal(reveal_top, reveal_side);
+ }
+ 
++void BrowserView::OnFloatingSidebarRevealDelayElapsed() {
++  // Re-evaluate the pointer now that the delay has elapsed: still in the
++  // strip -> reveal; gone -> nothing (the timer was not stopped only because
++  // no mouse event arrived to stop it).
++  base::AutoReset<bool> elapsed(&floating_sidebar_reveal_delay_elapsed_, true);
++  UpdateZenModeRevealFromCursor();
++}
++
+ void BrowserView::UpdateZenModeReveal(bool reveal_top, bool reveal_side) {
+   if (!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) {
+     return;
+@@ -2296,9 +2343,29 @@ void BrowserView::UpdateZenModeReveal(bo
+ 
+   if (reveal_side) {
+     if (!zen_side_chrome_animation_.IsShowing()) {
+-      zen_side_chrome_animation_.Show();
++      SlideZenSideChrome(/*show=*/true);
+     }
+   } else if (zen_side_chrome_animation_.IsShowing()) {
++    SlideZenSideChrome(/*show=*/false);
++  }
++}
++
++void BrowserView::SlideZenSideChrome(bool show) {
++  // helium-fork: each leg of the floating sidebar's slide has its own
++  // duration and easing (helium/arc_floating_sidebar.h). SlideAnimation reads
++  // both when the leg begins, so setting them right before Show()/Hide() is
++  // the supported way to get asymmetric legs; a mid-flight reversal simply
++  // restarts with the new leg's numbers.
++  zen_side_chrome_animation_.SetSlideDuration(
++      gfx::Animation::RichAnimationDuration(
++          show ? helium::kFloatingSidebarShowDuration
++               : helium::kFloatingSidebarHideDuration));
++  zen_side_chrome_animation_.SetTweenType(show
++                                              ? helium::kFloatingSidebarShowTween
++                                              : helium::kFloatingSidebarHideTween);
++  if (show) {
++    zen_side_chrome_animation_.Show();
++  } else {
+     zen_side_chrome_animation_.Hide();
+   }
+ }
+@@ -3241,7 +3308,7 @@ bool BrowserView::MaybeHandleSidebarColl
+     UpdateArcSidebarControlPlacement();
+     DeprecatedLayoutImmediately();
+     DisarmContentsResizeHold();
+-    zen_side_chrome_animation_.Hide();
++    SlideZenSideChrome(/*show=*/false);
+   } else {
+     // SHOW: one atomic flip -- the docked sidebar and the resized contents
+     // land on glass in the same activation, with nothing sliding first. A
+@@ -3351,11 +3418,7 @@ bool BrowserView::IsPointInZenSideTrigge
+   }
+   auto* controller = tabs::VerticalTabStripStateController::From(browser_);
+   const bool right_aligned = controller && controller->IsTabStripRightAligned();
+-  if (right_aligned) {
+-    return point.x() >= width() - kZenModeRevealTriggerThickness &&
+-           point.x() < width();
+-  }
+-  return point.x() >= 0 && point.x() < kZenModeRevealTriggerThickness;
++  return helium::IsInFloatingSidebarTrigger(point.x(), width(), right_aligned);
+ }
+ 
+ namespace {
+@@ -3458,8 +3521,8 @@ bool BrowserView::IsPointInZenSideChrome
+   gfx::Rect bounds = views::View::ConvertRectToTarget(
+       vertical_tab_strip_region_view_->parent(), this,
+       vertical_tab_strip_region_view_->bounds());
+-  bounds.Outset(
+-      gfx::Outsets::VH(kZenModeChromeHoverLeeway, kZenModeChromeHoverLeeway));
++  bounds.Outset(gfx::Outsets::VH(helium::kFloatingSidebarHoverLeewayV,
++                                 helium::kFloatingSidebarHoverLeewayH));
+   return bounds.Contains(point);
+ }
+ 
+@@ -8081,7 +8144,7 @@ void BrowserView::OnEvent(const ui::Even
+       return;
+     }
+     zen_last_cursor_.reset();
+-    StartZenCollapseTimer(kZenModeCursorExitGracePeriod);
++    StartZenCollapseTimer(helium::kFloatingSidebarWindowExitGrace);
+     return;
+   }
+   UpdateZenModeRevealFromCursor();
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -1030,6 +1030,12 @@ class BrowserView : public BrowserWindow
+                            const gfx::Point& point) const;
+   void UpdateZenModeRevealFromCursor();
+   void UpdateZenModeReveal(bool reveal_top, bool reveal_side);
++  // helium-fork: starts one leg of the floating sidebar's slide with that
++  // leg's own duration and easing (helium/arc_floating_sidebar.h).
++  void SlideZenSideChrome(bool show);
++  // helium-fork M3.9d: the hover-intent delay before the hidden sidebar's
++  // card reveals has elapsed; re-reads the pointer.
++  void OnFloatingSidebarRevealDelayElapsed();
+   void RevealZenModeTopChromeImmediately();
+   bool IsZenModeEnabled() const;
+   // helium-fork: true when the vertical tab strip is collapsed outside zen
+@@ -1671,6 +1677,9 @@ class BrowserView : public BrowserWindow
+   gfx::SlideAnimation zen_top_chrome_animation_;
+   gfx::SlideAnimation zen_side_chrome_animation_;
+   base::OneShotTimer zen_cursor_exit_timer_;
++  // helium-fork M3.9d: see OnFloatingSidebarRevealDelayElapsed().
++  base::OneShotTimer floating_sidebar_reveal_timer_;
++  bool floating_sidebar_reveal_delay_elapsed_ = false;
+   std::optional<gfx::Point> zen_last_cursor_;
+   bool zen_mode_enabled_ = false;
+ 
+Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
++++ src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
+@@ -37,11 +37,15 @@ HeliumCardShadowView::~HeliumCardShadowV
+ 
+ void HeliumCardShadowView::SetCardBounds(const gfx::Rect& card_bounds) {
+   gfx::Rect bounds = card_bounds;
+-  bounds.Outset(gfx::Outsets::VH(helium::kSidebarCardShadowOutsetV,
+-                                 helium::kSidebarCardShadowOutsetH));
++  bounds.Outset(gfx::Outsets::VH(spec_.outset_v, spec_.outset_h));
+   SetBoundsRect(bounds);
+ }
+ 
++void HeliumCardShadowView::SetShadowSpec(const helium::CardShadowSpec& spec) {
++  spec_ = spec;
++  SchedulePaint();
++}
++
+ void HeliumCardShadowView::SetShadowOpacity(double opacity) {
+   layer()->SetOpacity(static_cast<float>(opacity));
+ }
+@@ -60,8 +64,7 @@ void HeliumCardShadowView::OnPaint(gfx::
+       provider && color_utils::IsDark(provider->GetColor(kColorToolbar));
+ 
+   gfx::RectF card{gfx::SizeF(size())};
+-  card.Inset(gfx::InsetsF::VH(helium::kSidebarCardShadowOutsetV,
+-                              helium::kSidebarCardShadowOutsetH));
++  card.Inset(gfx::InsetsF::VH(spec_.outset_v, spec_.outset_h));
+   const SkScalar radius = SkIntToScalar(corner_radius_);
+   const SkRRect card_rrect =
+       SkRRect::MakeRectXY(gfx::RectFToSkRect(card), radius, radius);
+@@ -74,8 +77,7 @@ void HeliumCardShadowView::OnPaint(gfx::
+   paint_canvas->clipRRect(card_rrect, SkClipOp::kDifference,
+                           /*do_anti_alias=*/true);
+ 
+-  for (const helium::SidebarCardShadowPass& pass :
+-       helium::kSidebarCardShadowPasses) {
++  for (const helium::SidebarCardShadowPass& pass : spec_.passes) {
+     const double alpha = is_dark ? pass.dark_alpha : pass.light_alpha;
+     gfx::RectF pass_rect = card;
+     pass_rect.Inset(gfx::InsetsF::VH(0, pass.inset_h));
+Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/helium_card_shadow_view.h
++++ src/chrome/browser/ui/views/frame/helium_card_shadow_view.h
+@@ -7,6 +7,7 @@
+ 
+ #include <optional>
+ 
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/views/view.h"
+ 
+@@ -39,12 +40,17 @@ class HeliumCardShadowView : public view
+   // The card's corner radius (the blurred silhouette follows it).
+   void SetShadowCornerRadius(int corner_radius);
+ 
++  // Which recipe to paint; defaults to the sidebar row cards'
++  // (helium::kSidebarCardShadowSpec). Call before SetCardBounds().
++  void SetShadowSpec(const helium::CardShadowSpec& spec);
++
+   // views::View:
+   void OnPaint(gfx::Canvas* canvas) override;
+   void OnThemeChanged() override;
+ 
+  private:
+   int corner_radius_ = 8;
++  helium::CardShadowSpec spec_ = helium::kSidebarCardShadowSpec;
+   std::optional<bool> was_dark_;
+ };
+ 
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -18,6 +18,7 @@
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/helium/arc_card_layout.h"
++#include "chrome/browser/ui/helium/arc_floating_sidebar.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -71,12 +72,15 @@ constexpr int kVerticalTabsGrabHandleSiz
+ // against the frame controls when it is the top-most row.
+ constexpr int kTopToolbarExclusion = 10;
+ 
+-// helium-fork: the floating sidebar card shares the contents card's inset.
++// helium-fork: the floating sidebar card's inset from the window edges. It
++// used to alias the contents card's inset; since M3.9d it is its own number
++// (helium/arc_floating_sidebar.h) so the card can be calibrated against the
++// reference browser while the contents card keeps its user-ruled 3.
+ // The macOS traffic lights are pinned by AppKit (x≈11, vertically centered in
+ // the caption band) and cannot follow the card, so the card must come to
+ // them: with the upstream 8px inset the lights sat 3px from the card edge and
+ // below its top row's reach ("红绿灯差一点点就被左侧切掉").
+-constexpr int kZenModeVTSPadding = MultiContentsView::kContentCardInset;
++constexpr int kZenModeVTSPadding = helium::kFloatingSidebarGap;
+ 
+ struct ZenModeLayoutState {
+   bool enabled = false;
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -54,6 +54,7 @@
+ #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
+ #include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
++#include "chrome/browser/ui/helium/arc_floating_sidebar.h"
+ #include "chrome/browser/ui/helium/arc_media_strip.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h"
+@@ -100,6 +101,9 @@ constexpr int kDefaultWidthSnapDistance
+ 
+ // Shadow is used in expand-on-hover mode. Shadow radius and opacity are dynamic
+ // and set by the layout.
++// helium-fork: no longer shown for the floating sidebar card -- that card's
++// shadow is the self-painted halo below (floating_card_shadow_, numbers in
++// helium/arc_floating_sidebar.h). Left as upstream built it.
+ constexpr int kExpandOnHoverShadowElevation = 4;
+ constexpr ShadowFrameView::ShadowAlpha kExpandOnHoverShadowAlpha(
+     {.light_key = 0.3,
+@@ -272,6 +276,17 @@ VerticalTabStripRegionView::VerticalTabS
+       AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
+   active_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+   active_row_shadow_->SetVisible(false);
++
++  // helium-fork M3.9d: the floating sidebar card's own shadow -- Dia's broad
++  // halo (helium::kFloatingSidebarShadowSpec), which the MD model of
++  // ShadowFrameView cannot shape. Bottom of the stack like the row shadows;
++  // its bounds overhang the card on every side (the region's layer does not
++  // clip), shown only while the card floats.
++  floating_card_shadow_ =
++      AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
++  floating_card_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  floating_card_shadow_->SetShadowSpec(helium::kFloatingSidebarShadowSpec);
++  floating_card_shadow_->SetVisible(false);
+   pinned_row_shadow_ =
+       AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
+   pinned_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+@@ -503,33 +518,38 @@ void VerticalTabStripRegionView::SetZenM
+   if (floating) {
+     CustomCornersBackground::Corner rounded_corner;
+     rounded_corner.type = CustomCornersBackground::CornerType::kRounded;
+-    // helium-fork: the floating card sits kContentCardInset from the window
+-    // edges, so its radius must be concentric with the system window radius --
+-    // the same padded value the contents card uses. The generic 8 visibly
+-    // mismatched the window's corners ("侧边栏的R角和app窗口的R角没有匹配").
+-    rounded_corner.radius = GetPaddedFrameRadius();
++    // helium-fork: the floating card sits kFloatingSidebarGap from the window
++    // edges, so its radius must be concentric with the system window radius
++    // (window radius minus that gap). The generic 8 visibly mismatched the
++    // window's corners ("侧边栏的R角和app窗口的R角没有匹配").
++    rounded_corner.radius =
++        helium::FloatingSidebarCornerRadius(GetSystemWindowRadius());
+     corners[CornerOrientation::kTopLeading] = rounded_corner;
+     corners[CornerOrientation::kTopTrailing] = rounded_corner;
+     corners[CornerOrientation::kBottomLeading] = rounded_corner;
+     corners[CornerOrientation::kBottomTrailing] = rounded_corner;
+   }
+ 
+-  // helium-fork: `outline` stays empty on purpose. The floating card is
+-  // separated from the window by its shadow alone, never by a stroke -- the
+-  // same treatment the contents card gets. A hairline here reads as a second,
+-  // competing edge beside the shadow, and against a light theme it is the one
+-  // thing that makes the card look pasted on rather than lifted off.
++  // helium-fork M3.9d: Dia's floating card carries a 1px highlight rim, two
++  // levels lighter than its fill -- so faint it only registers as the card
++  // having a crisp edge. Replicated at matched contrast
++  // (kColorArcFloatingSidebarRim); the switch is in the header.
++  if (floating && helium::kFloatingSidebarRimEnabled) {
++    outline.color = {.color = kColorArcFloatingSidebarRim, .opacity = 1.0f};
++    outline.top = outline.leading = outline.bottom = outline.trailing = true;
++  }
+   background->SetCorners(corners);
+   background->SetOutline(outline);
+   background->SetPaintWithNativeFrameMaterials(floating);
+ 
+-  // helium-fork: the floating card casts a shadow, like Arc's. ShadowFrameView
+-  // was already built and sized for exactly this (it is the expand-on-hover
+-  // shadow), but SetShadowVisible() had no caller anywhere in the tree, so the
+-  // card read as a flat panel butted against the page.
+-  if (shadow_frame_) {
+-    shadow_frame_->SetShadowCornerRadius(GetPaddedFrameRadius());
+-    shadow_frame_->SetShadowVisible(floating);
++  // helium-fork: the floating card casts a shadow. It used to be the
++  // expand-on-hover ShadowFrameView (MD elevation 4: gone within 5pt); Dia's
++  // is a 16pt halo, which only the self-painted pass model can draw
++  // (M3.9d, helium/arc_floating_sidebar.h).
++  if (floating_card_shadow_) {
++    floating_card_shadow_->SetShadowCornerRadius(
++        helium::FloatingSidebarCornerRadius(GetSystemWindowRadius()));
++    floating_card_shadow_->SetVisible(floating);
+   }
+ }
+ 
+@@ -579,6 +599,9 @@ void VerticalTabStripRegionView::Layout(
+   resize_area_->SetBoundsRect(
+       gfx::Rect(resize_area_x, 0, resize_area_width_, bounds().height()));
+   shadow_frame_->SetBoundsRect(GetLocalBounds());
++  if (floating_card_shadow_) {
++    floating_card_shadow_->SetCardBounds(GetLocalBounds());
++  }
+ 
+   // Lazy injection: TabStripView (and its containers) may not exist yet at
+   // construction time. Re-calling is a cheap resync.
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -329,6 +329,8 @@ class VerticalTabStripRegionView final
+   int MaxMediaPanelHeightFor(const gfx::Rect& anchor, size_t hovered_index) const;
+   raw_ptr<views::ResizeArea> resize_area_ = nullptr;
+   raw_ptr<ShadowFrameView> shadow_frame_ = nullptr;
++  // helium-fork M3.9d: the floating sidebar card's halo shadow.
++  raw_ptr<HeliumCardShadowView> floating_card_shadow_ = nullptr;
+   int resize_area_width_;
+   raw_ptr<views::FlexLayout> flex_layout_ = nullptr;
+ 
