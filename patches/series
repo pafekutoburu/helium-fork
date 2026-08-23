@@ -377,3 +377,4 @@ helium-fork/layout/arc-frame-materials.patch
 helium-fork/layout/arc-left-aligned-location-bar.patch
 helium-fork/layout/arc-new-tab-composer.patch
 helium-fork/layout/arc-suggestion-list-metrics.patch
+helium-fork/workspace/omnibox-workspace-provider.patch

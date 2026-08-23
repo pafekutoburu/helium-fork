@@ -1,0 +1,949 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -392,7 +392,9 @@ static_library("ui") {
+     "helium/helium_tab_switcher_controller.h",
+     "helium_workspace/workspace_entry.cc",
+     "helium_workspace/workspace_entry.h",
++    "helium_workspace/workspace_favicon_image.h",
+     "helium_workspace/workspace_grid_math.h",
++    "helium_workspace/workspace_omnibox_match.h",
+     "helium_workspace/workspace_prefs.cc",
+     "helium_workspace/workspace_prefs.h",
+     "helium_workspace/workspace_service.cc",
+@@ -6062,6 +6064,8 @@ test("helium_workspace_unittests") {
+     "helium_workspace/workspace_entry.h",
+     "helium_workspace/workspace_entry_unittest.cc",
+     "helium_workspace/workspace_grid_math.h",
++    "helium_workspace/workspace_omnibox_match.h",
++    "helium_workspace/workspace_omnibox_match_unittest.cc",
+     "helium_workspace/workspace_prefs.cc",
+     "helium_workspace/workspace_prefs.h",
+     "helium_workspace/workspace_service.cc",
+@@ -6070,6 +6074,9 @@ test("helium_workspace_unittests") {
+   ]
+   deps = [
+     "//base",
++    # helium-fork r8③: workspace_omnibox_match.h case-folds with
++    # base::i18n::ToLower; base::TestSuite initialises ICU for it.
++    "//base:i18n",
+     "//base/test:run_all_unittests",
+     "//base/test:test_support",
+     "//chrome/common:constants",
+Index: src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
+===================================================================
+--- src.orig/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
++++ src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
+@@ -50,6 +50,10 @@
+ #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+ #include "chrome/browser/translate/chrome_translate_client.h"
+ #include "chrome/browser/ui/browser_command_controller.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_omnibox_match.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
+ #include "chrome/browser/ui/omnibox/omnibox_pedal_implementations.h"
+@@ -603,6 +607,27 @@ const TabMatcher& ChromeAutocompleteProv
+   return tab_matcher_;
+ }
+ 
++std::vector<HeliumWorkspaceCandidate>
++ChromeAutocompleteProviderClient::GetHeliumWorkspaceCandidates(
++    const std::u16string& input_text) {
++  std::vector<HeliumWorkspaceCandidate> candidates;
++  // helium-fork r8③: the factory builds no service for incognito / guest
++  // profiles, so those windows simply get no sidebar rows.
++  helium_workspace::WorkspaceService* service =
++      helium_workspace::WorkspaceServiceFactory::GetForProfile(profile_);
++  if (!service) {
++    return candidates;
++  }
++  const std::vector<helium_workspace::WorkspaceEntry>& entries =
++      service->entries();
++  for (const helium_workspace::WorkspaceOmniboxMatch& hit :
++       helium_workspace::MatchWorkspaceEntries(entries, input_text)) {
++    candidates.push_back({.url = entries[hit.index].url,
++                          .title = entries[hit.index].title});
++  }
++  return candidates;
++}
++
+ bool ChromeAutocompleteProviderClient::IsIncognitoModeAvailable() const {
+   return IncognitoModePrefs::IsIncognitoAllowed(profile_);
+ }
+Index: src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
+===================================================================
+--- src.orig/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
++++ src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
+@@ -128,6 +128,9 @@ class ChromeAutocompleteProviderClient :
+   void PrefetchImage(const GURL& url) override;
+   void StartServiceWorker(const GURL& destination_url) override;
+   const TabMatcher& GetTabMatcher() const override;
++  // helium-fork r8③: sidebar favorites / pinned entries matching the input.
++  std::vector<HeliumWorkspaceCandidate> GetHeliumWorkspaceCandidates(
++      const std::u16string& input_text) override;
+   bool IsIncognitoModeAvailable() const override;
+   bool IsSharingHubAvailable() const override;
+   bool IsHistoryEmbeddingsEnabled() const override;
+Index: src/chrome/browser/ui/helium_workspace/workspace_favicon_image.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_favicon_image.h
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_FAVICON_IMAGE_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_FAVICON_IMAGE_H_
++
++#include <string>
++
++#include "base/containers/span.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/favicon_size.h"
++#include "ui/gfx/image/image_skia.h"
++
++namespace helium_workspace {
++
++// helium-fork r8③: decodes an entry's persisted favicon (WorkspaceEntry::
++// favicon_png) into a 16 dip image. The stored PNG carries whatever density
++// the tab had, so the scale is recovered from its pixel width instead of
++// assuming 1x -- otherwise a 32px icon is drawn as 32 dip, and a 16px one is
++// stretched on a Retina display. Dividing by kFaviconSize normalises any
++// source size to the 16 dip both the sidebar row and the omnibox row draw at
++// (the omnibox's GetSizedIcon() DCHECKs on anything larger). Returns a null
++// image when there is nothing usable; callers fall through to their next
++// source.
++inline gfx::ImageSkia DecodeWorkspaceFavicon(const std::string& favicon_png) {
++  if (favicon_png.empty()) {
++    return gfx::ImageSkia();
++  }
++  const SkBitmap bitmap =
++      gfx::PNGCodec::Decode(base::as_byte_span(favicon_png));
++  if (bitmap.isNull() || bitmap.width() <= 0) {
++    return gfx::ImageSkia();
++  }
++  const float scale = static_cast<float>(bitmap.width()) / gfx::kFaviconSize;
++  return gfx::ImageSkia::CreateFromBitmap(bitmap, scale);
++}
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_FAVICON_IMAGE_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
+@@ -0,0 +1,121 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_OMNIBOX_MATCH_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_OMNIBOX_MATCH_H_
++
++#include <stddef.h>
++
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "base/containers/span.h"
++#include "base/i18n/case_conversion.h"
++#include "base/strings/string_split.h"
++#include "base/strings/string_util.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "url/gurl.h"
++
++namespace helium_workspace {
++
++// helium-fork r8③: which sidebar entries the omnibox offers for a typed input,
++// and in what order. This is the single source of truth the omnibox provider
++// (HeliumWorkspaceProvider, components/omnibox) is fed from; it is pure and
++// dependency-free so helium_workspace_unittests can pin the rule.
++//
++// Rule: split the input on whitespace and fold case; every term must be a
++// prefix of some whitespace-separated word of the title, or a substring of the
++// URL haystack (spec without scheme and without a leading "www."). A term is
++// normalised the same way the haystack is -- a leading "http://", "https://"
++// or "www." is dropped -- so typing the URL the way the omnibox shows it
++// ("www.you", "https://you") still finds the entry. Output keeps the order of
++// |entries| -- which WorkspaceService already sorts favorites first, then by
++// position -- and |rank| is dense over the hits only.
++struct WorkspaceOmniboxMatch {
++  size_t index = 0;  // Into the |entries| span that was matched.
++  int rank = 0;      // 0 for the first hit, 1 for the second, ...
++};
++
++// The part of |url| the input is searched in: host (minus a leading "www.")
++// plus path and query, case-folded. Empty for an invalid URL.
++inline std::u16string WorkspaceUrlHaystack(const GURL& url) {
++  if (!url.is_valid()) {
++    return std::u16string();
++  }
++  std::string host(url.host());
++  if (host.starts_with("www.")) {
++    host.erase(0, 4);
++  }
++  return base::i18n::ToLower(base::UTF8ToUTF16(host + url.PathForRequest()));
++}
++
++// Drops the prefixes the haystack never contains, so a term compares like for
++// like. "www." alone (or a bare scheme) becomes empty and then matches nothing.
++inline std::u16string_view NormalizeWorkspaceSearchTerm(
++    std::u16string_view term) {
++  for (std::u16string_view scheme : {u"https://", u"http://"}) {
++    if (term.starts_with(scheme)) {
++      term.remove_prefix(scheme.size());
++      break;
++    }
++  }
++  if (term.starts_with(u"www.")) {
++    term.remove_prefix(4);
++  }
++  return term;
++}
++
++inline std::vector<WorkspaceOmniboxMatch> MatchWorkspaceEntries(
++    base::span<const WorkspaceEntry> entries,
++    std::u16string_view input) {
++  std::vector<WorkspaceOmniboxMatch> hits;
++  const std::u16string lower_input = base::i18n::ToLower(input);
++  std::vector<std::u16string_view> terms = base::SplitStringPiece(
++      lower_input, base::kWhitespaceUTF16, base::TRIM_WHITESPACE,
++      base::SPLIT_WANT_NONEMPTY);
++  for (std::u16string_view& term : terms) {
++    term = NormalizeWorkspaceSearchTerm(term);
++    if (term.empty()) {
++      return hits;
++    }
++  }
++  if (terms.empty()) {
++    return hits;
++  }
++
++  for (size_t i = 0; i < entries.size(); ++i) {
++    const WorkspaceEntry& entry = entries[i];
++    if (!entry.url.is_valid()) {
++      continue;
++    }
++    const std::u16string haystack = WorkspaceUrlHaystack(entry.url);
++    const std::u16string lower_title = base::i18n::ToLower(entry.title);
++    const std::vector<std::u16string_view> title_words =
++        base::SplitStringPiece(lower_title, base::kWhitespaceUTF16,
++                               base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++
++    bool all_terms_hit = true;
++    for (std::u16string_view term : terms) {
++      bool hit = haystack.find(term) != std::u16string::npos;
++      for (size_t w = 0; !hit && w < title_words.size(); ++w) {
++        hit = base::StartsWith(title_words[w], term,
++                               base::CompareCase::SENSITIVE);
++      }
++      if (!hit) {
++        all_terms_hit = false;
++        break;
++      }
++    }
++    if (all_terms_hit) {
++      hits.push_back({.index = i, .rank = static_cast<int>(hits.size())});
++    }
++  }
++  return hits;
++}
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_OMNIBOX_MATCH_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_omnibox_match_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_omnibox_match_unittest.cc
+@@ -0,0 +1,172 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++// helium-fork r8③: pins the sidebar-entries matching rule.
++#include "chrome/browser/ui/helium_workspace/workspace_omnibox_match.h"
++
++#include <string>
++#include <vector>
++
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace helium_workspace {
++namespace {
++
++WorkspaceEntry MakeEntry(WorkspaceEntry::Section section,
++                         const std::string& url,
++                         const std::u16string& title) {
++  WorkspaceEntry entry;
++  entry.id = url;
++  entry.section = section;
++  entry.url = GURL(url);
++  entry.title = title;
++  return entry;
++}
++
++// Favorites first, then pinned -- the order WorkspaceService::entries() keeps.
++std::vector<WorkspaceEntry> Entries() {
++  return {
++      MakeEntry(WorkspaceEntry::Section::kFavorite,
++                "https://www.youtube.com/", u"YouTube - Home"),
++      MakeEntry(WorkspaceEntry::Section::kFavorite,
++                "https://example.com/docs?q=1", u"Project Alpha"),
++      MakeEntry(WorkspaceEntry::Section::kPinned, "https://music.youtube.com/",
++                u"YouTube Music"),
++  };
++}
++
++std::vector<size_t> Indices(const std::vector<WorkspaceOmniboxMatch>& hits) {
++  std::vector<size_t> out;
++  for (const auto& hit : hits) {
++    out.push_back(hit.index);
++  }
++  return out;
++}
++
++TEST(WorkspaceOmniboxMatchTest, EmptyOrWhitespaceInputMatchesNothing) {
++  const auto entries = Entries();
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"").empty());
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"   \t ").empty());
++}
++
++TEST(WorkspaceOmniboxMatchTest, TitleWordPrefixMatchesCaseInsensitively) {
++  const auto entries = Entries();
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"You")),
++            (std::vector<size_t>{0, 2}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"ALPHA")),
++            (std::vector<size_t>{1}));
++}
++
++TEST(WorkspaceOmniboxMatchTest, TitleMidWordDoesNotMatchWhenUrlDoesNot) {
++  const auto entries = Entries();
++  // "pha" is inside "Alpha" but not at a word start, and example.com/docs?q=1
++  // does not contain it either.
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"pha").empty());
++}
++
++TEST(WorkspaceOmniboxMatchTest, UrlHaystackDropsSchemeAndWww) {
++  const auto entries = Entries();
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"http").empty());
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"www").empty());
++  // Mid-host substring: not a title-word prefix, but in the haystack.
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"tube")),
++            (std::vector<size_t>{0, 2}));
++}
++
++TEST(WorkspaceOmniboxMatchTest, TermsDropSchemeAndWwwLikeTheHaystack) {
++  const auto entries = Entries();
++  // Typed the way the omnibox displays or completes a URL. After the prefix
++  // is dropped these are plain substring terms again, so the pinned
++  // music.youtube.com entry matches alongside the favorite.
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"www.you")),
++            (std::vector<size_t>{0, 2}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"https://you")),
++            (std::vector<size_t>{0, 2}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"http://music.you")),
++            (std::vector<size_t>{2}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"https://www.youtube.com")),
++            (std::vector<size_t>{0, 2}));
++  // A bare prefix carries no information: nothing matches.
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"www.").empty());
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"https://").empty());
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"you https://").empty());
++}
++
++TEST(WorkspaceOmniboxMatchTest, UrlPathAndQueryAreSearchable) {
++  const auto entries = Entries();
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"docs")),
++            (std::vector<size_t>{1}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"q=1")),
++            (std::vector<size_t>{1}));
++}
++
++TEST(WorkspaceOmniboxMatchTest, EveryTermMustMatch) {
++  const auto entries = Entries();
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"you home")),
++            (std::vector<size_t>{0}));
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"you xyz").empty());
++}
++
++TEST(WorkspaceOmniboxMatchTest, TermsMaySplitAcrossTitleAndUrl) {
++  const auto entries = Entries();
++  // "tube" only lives in the URL, "home" only in the title.
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"tube home")),
++            (std::vector<size_t>{0}));
++}
++
++TEST(WorkspaceOmniboxMatchTest, OrderIsInputOrderAndRankIsDense) {
++  const auto entries = Entries();
++  const auto hits = MatchWorkspaceEntries(entries, u"youtube");
++  ASSERT_EQ(hits.size(), 2u);
++  EXPECT_EQ(hits[0].index, 0u);
++  EXPECT_EQ(hits[0].rank, 0);
++  // Entry 1 did not match, so the pinned entry is rank 1, not 2.
++  EXPECT_EQ(hits[1].index, 2u);
++  EXPECT_EQ(hits[1].rank, 1);
++}
++
++TEST(WorkspaceOmniboxMatchTest, NonAsciiCaseFoldingAndCjkSubstring) {
++  const std::vector<WorkspaceEntry> entries = {
++      MakeEntry(WorkspaceEntry::Section::kFavorite, "https://uber.example/",
++                u"ÜBER Fahrt"),
++      MakeEntry(WorkspaceEntry::Section::kPinned, "https://bilibili.com/",
++                u"哔哩哔哩 动画"),
++  };
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"über")),
++            (std::vector<size_t>{0}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"动画")),
++            (std::vector<size_t>{1}));
++  // CJK has no word boundary inside a run: a mid-run character is not a
++  // prefix of the word, and the URL does not help.
++  EXPECT_TRUE(MatchWorkspaceEntries(entries, u"哩").empty());
++}
++
++TEST(WorkspaceOmniboxMatchTest, InvalidUrlEntryIsSkipped) {
++  std::vector<WorkspaceEntry> entries = Entries();
++  entries.push_back(MakeEntry(WorkspaceEntry::Section::kFavorite, "not a url",
++                              u"YouTube broken"));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"youtube")),
++            (std::vector<size_t>{0, 2}));
++}
++
++TEST(WorkspaceOmniboxMatchTest, MultipleSpacesAndTabsTokenize) {
++  const auto entries = Entries();
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"  you \t\t home  ")),
++            (std::vector<size_t>{0}));
++}
++
++TEST(WorkspaceOmniboxMatchTest, HaystackHelperExactOutput) {
++  EXPECT_EQ(WorkspaceUrlHaystack(GURL("https://www.YouTube.com/")),
++            u"youtube.com/");
++  EXPECT_EQ(WorkspaceUrlHaystack(GURL("http://example.com/Docs?Q=1#frag")),
++            u"example.com/docs?q=1");
++  EXPECT_EQ(WorkspaceUrlHaystack(GURL("https://wwwhat.example/")),
++            u"wwwhat.example/");
++  EXPECT_EQ(WorkspaceUrlHaystack(GURL("not a url")), u"");
++}
++
++}  // namespace
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
+===================================================================
+--- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
++++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
+@@ -61,6 +61,10 @@
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/hats/hats_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_favicon_image.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/hats/hats_service_factory.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/lens/lens_search_controller.h"
+@@ -736,6 +740,33 @@ void ChromeOmniboxClient::OnResultChange
+ gfx::Image ChromeOmniboxClient::GetFaviconForPageUrl(
+     const GURL& page_url,
+     FaviconFetchedCallback on_favicon_fetched) {
++  // helium-fork r8③: a sidebar entry's own icon first -- the favicon database
++  // has nothing for a favorite whose history was cleared, and the sidebar
++  // already draws from this PNG, so the list and the sidebar agree. The
++  // factory returns null for incognito / guest profiles.
++  if (helium_workspace::WorkspaceService* service =
++          helium_workspace::WorkspaceServiceFactory::GetForProfile(profile_)) {
++    for (const helium_workspace::WorkspaceEntry& entry : service->entries()) {
++      if (entry.url != page_url || entry.favicon_png.empty()) {
++        continue;
++      }
++      auto it = workspace_favicons_.find(entry.id);
++      if (it == workspace_favicons_.end() ||
++          it->second.first != entry.favicon_png.size()) {
++        const gfx::ImageSkia image =
++            helium_workspace::DecodeWorkspaceFavicon(entry.favicon_png);
++        if (image.isNull()) {
++          break;
++        }
++        it = workspace_favicons_
++                 .insert_or_assign(entry.id,
++                                   std::make_pair(entry.favicon_png.size(),
++                                                  gfx::Image(image)))
++                 .first;
++      }
++      return it->second.second;
++    }
++  }
+   return favicon_cache_.GetFaviconForPageUrl(page_url,
+                                              std::move(on_favicon_fetched));
+ }
+Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.h
+===================================================================
+--- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.h
++++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.h
+@@ -5,7 +5,10 @@
+ #ifndef CHROME_BROWSER_UI_OMNIBOX_CHROME_OMNIBOX_CLIENT_H_
+ #define CHROME_BROWSER_UI_OMNIBOX_CHROME_OMNIBOX_CLIENT_H_
+ 
++#include <map>
+ #include <memory>
++#include <string>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/functional/callback_forward.h"
+@@ -182,6 +185,9 @@ class ChromeOmniboxClient final : public
+   std::unique_ptr<ChromeAutocompleteSchemeClassifier> scheme_classifier_;
+   std::vector<BitmapFetcherService::RequestId> request_ids_;
+   FaviconCache favicon_cache_;
++  // helium-fork r8③: decoded sidebar-entry favicons, keyed by entry id and
++  // validated by the PNG's byte length so a re-captured icon is re-decoded.
++  std::map<std::string, std::pair<size_t, gfx::Image>> workspace_favicons_;
+ 
+   base::WeakPtrFactory<ChromeOmniboxClient> weak_factory_{this};
+ };
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+@@ -8,7 +8,6 @@
+ 
+ #include <algorithm>
+ 
+-#include "base/containers/span.h"
+ #include "base/functional/bind.h"
+ #include "base/time/time.h"
+ #include "cc/paint/paint_flags.h"
+@@ -19,6 +18,7 @@
+ #include "chrome/browser/ui/helium/arc_favorite_accent.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_favicon.h"
++#include "chrome/browser/ui/helium_workspace/workspace_favicon_image.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tabs/tab_data.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
+@@ -35,8 +35,6 @@
+ #include "ui/color/color_provider.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/color_utils.h"
+-#include "ui/gfx/codec/png_codec.h"
+-#include "ui/gfx/favicon_size.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/rect_f.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+@@ -532,18 +530,12 @@ void WorkspaceEntryView::ResolveIcon() {
+   // 2. The icon persisted with the entry -- the only one available on a cold
+   // start, before anything has been clicked.
+   if (!favicon_png_.empty()) {
+-    const SkBitmap bitmap =
+-        gfx::PNGCodec::Decode(base::as_byte_span(favicon_png_));
+-    if (!bitmap.isNull() && bitmap.width() > 0) {
+-      // The stored PNG carries whatever density the tab had, so recover the
+-      // scale from its pixel width instead of assuming 1x -- otherwise a 32px
+-      // icon is drawn as 32 dip, and a 16px one is stretched on a Retina
+-      // display. Dividing by kFaviconSize normalises any source size to the
+-      // 16 dip the row draws at.
+-      const float scale =
+-          static_cast<float>(bitmap.width()) / gfx::kFaviconSize;
+-      ApplyIcon(ui::ImageModel::FromImageSkia(
+-          gfx::ImageSkia::CreateFromBitmap(bitmap, scale)));
++    // helium-fork r8③: the decode (and its density recovery) is shared with
++    // the omnibox's favicon lookup, see workspace_favicon_image.h.
++    const gfx::ImageSkia image =
++        helium_workspace::DecodeWorkspaceFavicon(favicon_png_);
++    if (!image.isNull()) {
++      ApplyIcon(ui::ImageModel::FromImageSkia(image));
+       return;
+     }
+   }
+Index: src/components/omnibox/browser/BUILD.gn
+===================================================================
+--- src.orig/components/omnibox/browser/BUILD.gn
++++ src/components/omnibox/browser/BUILD.gn
+@@ -258,6 +258,9 @@ static_library("browser") {
+     "history_quick_provider.h",
+     "history_scoring_signals_annotator.cc",
+     "history_scoring_signals_annotator.h",
++    # helium-fork r8③: sidebar favorites / pinned entries as suggestions.
++    "helium_workspace_provider.cc",
++    "helium_workspace_provider.h",
+     "history_url_provider.cc",
+     "history_url_provider.h",
+     "in_memory_url_index.cc",
+Index: src/components/omnibox/browser/autocomplete_classifier.cc
+===================================================================
+--- src.orig/components/omnibox/browser/autocomplete_classifier.cc
++++ src/components/omnibox/browser/autocomplete_classifier.cc
+@@ -58,6 +58,8 @@ int AutocompleteClassifier::DefaultOmnib
+       // Custom search engines cannot be used on mobile.
+       AutocompleteProvider::TYPE_KEYWORD | AutocompleteProvider::TYPE_OPEN_TAB |
+       AutocompleteProvider::TYPE_FEATURED_SEARCH |
++      // helium-fork r8③: sidebar favorites / pinned entries.
++      AutocompleteProvider::TYPE_HELIUM_WORKSPACE |
+       // Most visited sites for desktop.
+       (omnibox_feature_configs::OmniboxUrlSuggestionsOnFocus::Get().enabled
+            ? AutocompleteProvider::TYPE_MOST_VISITED_SITES
+Index: src/components/omnibox/browser/autocomplete_controller.cc
+===================================================================
+--- src.orig/components/omnibox/browser/autocomplete_controller.cc
++++ src/components/omnibox/browser/autocomplete_controller.cc
+@@ -71,6 +71,7 @@
+ #include "components/omnibox/browser/history_quick_provider.h"
+ #include "components/omnibox/browser/history_scoring_signals_annotator.h"
+ #include "components/omnibox/browser/history_url_provider.h"
++#include "components/omnibox/browser/helium_workspace_provider.h"
+ #include "components/omnibox/browser/keyword_provider.h"
+ #include "components/omnibox/browser/local_history_zero_suggest_provider.h"
+ #include "components/omnibox/browser/most_visited_sites_provider.h"
+@@ -554,7 +555,9 @@ AutocompleteController::AutocompleteCont
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch("omnibox-autocomplete-filtering")) {
+     const std::string flag_value = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("omnibox-autocomplete-filtering");
+     config_.provider_types &= AutocompleteProvider::TYPE_KEYWORD | AutocompleteProvider::TYPE_SEARCH |
+-        AutocompleteProvider::TYPE_HISTORY_URL | AutocompleteProvider::TYPE_BOOKMARK | AutocompleteProvider::TYPE_BUILTIN;
++        AutocompleteProvider::TYPE_HISTORY_URL | AutocompleteProvider::TYPE_BOOKMARK | AutocompleteProvider::TYPE_BUILTIN |
++        // helium-fork r8③: the sidebar's entries are local, keep them under the flag.
++        AutocompleteProvider::TYPE_HELIUM_WORKSPACE;
+     if (!flag_value.contains("bookmarks"))
+       config_.provider_types &= ~AutocompleteProvider::TYPE_BOOKMARK;
+     if (!flag_value.contains("chrome"))
+@@ -1455,6 +1458,11 @@ void AutocompleteController::InitializeS
+     open_tab_provider_ = open_tab_provider.get();
+     providers_.push_back(std::move(open_tab_provider));
+   }
++  if (provider_types & AutocompleteProvider::TYPE_HELIUM_WORKSPACE) {
++    // helium-fork r8③: sidebar favorites / pinned entries, synchronous.
++    providers_.push_back(
++        base::MakeRefCounted<HeliumWorkspaceProvider>(provider_client_.get()));
++  }
+   if (provider_types & AutocompleteProvider::TYPE_FEATURED_SEARCH) {
+     auto featured_search_provider =
+         base::MakeRefCounted<FeaturedSearchProvider>(provider_client_.get(),
+Index: src/components/omnibox/browser/autocomplete_match.cc
+===================================================================
+--- src.orig/components/omnibox/browser/autocomplete_match.cc
++++ src/components/omnibox/browser/autocomplete_match.cc
+@@ -124,6 +124,9 @@ int GetDeduplicationProviderPreferenceSc
+           // last access date.
+           {AutocompleteProvider::TYPE_DOCUMENT, 2},
+           {AutocompleteProvider::TYPE_ENTERPRISE_SEARCH_AGGREGATOR, 2},
++          // helium-fork r8③: a sidebar entry's own title beats the bookmark
++          // copy of the same URL, so the row reads like the sidebar does.
++          {AutocompleteProvider::TYPE_HELIUM_WORKSPACE, 2},
+           // Prefer bookmark suggestions, as:
+           // 1) Their titles may be explicitly set.
+           // 2) They may display enhanced information such as the bookmark
+@@ -1710,6 +1713,14 @@ int AutocompleteMatch::GetSortingOrder()
+       return 7;
+   }
+ 
++  // helium-fork r8③: sidebar entries sit right under the default row, above
++  // search suggestions -- the same slot boosted shortcuts get. Relevance alone
++  // cannot do this on desktop: rows 1..N are stable-sorted by this order.
++  if (provider &&
++      provider->type() == AutocompleteProvider::TYPE_HELIUM_WORKSPACE) {
++    return 2;
++  }
++
+   if (IsSearchType(type)) {
+     return 3;
+   }
+Index: src/components/omnibox/browser/autocomplete_provider.cc
+===================================================================
+--- src.orig/components/omnibox/browser/autocomplete_provider.cc
++++ src/components/omnibox/browser/autocomplete_provider.cc
+@@ -93,6 +93,8 @@ const char* AutocompleteProvider::TypeTo
+       return "TabGroup";
+     case TYPE_CROSS_DEVICE_TAB:
+       return "CrossDeviceTab";
++    case TYPE_HELIUM_WORKSPACE:
++      return "HeliumWorkspace";
+     default:
+       DUMP_WILL_BE_NOTREACHED()
+           << "Unhandled AutocompleteProvider::Type " << type;
+@@ -208,6 +210,9 @@ AutocompleteProvider::AsOmniboxEventProv
+       return metrics::OmniboxEventProto::TAB_GROUP_PROVIDER;
+     case TYPE_CROSS_DEVICE_TAB:
+       return metrics::OmniboxEventProto::CROSS_DEVICE_TAB;
++    case TYPE_HELIUM_WORKSPACE:
++      // helium-fork r8③: no proto value of its own; metrics are off here.
++      return metrics::OmniboxEventProto::UNKNOWN_PROVIDER;
+     default:
+       // TODO(crbug.com/40940012) This was a NOTREACHED that we converted to
+       //   help debug crbug.com/1499235 since NOTREACHED's don't log their
+Index: src/components/omnibox/browser/autocomplete_provider.h
+===================================================================
+--- src.orig/components/omnibox/browser/autocomplete_provider.h
++++ src/components/omnibox/browser/autocomplete_provider.h
+@@ -184,6 +184,8 @@ class AutocompleteProvider
+     TYPE_CONTEXTUAL_SEARCH = 1 << 25,
+     TYPE_TAB_GROUP = 1 << 26,
+     TYPE_CROSS_DEVICE_TAB = 1 << 27,
++    // helium-fork r8③: the sidebar's persistent entries (favorites + pinned).
++    TYPE_HELIUM_WORKSPACE = 1 << 28,
+ 
+     // When adding a value here, also update:
+     // - omnibox_event.proto
+Index: src/components/omnibox/browser/autocomplete_provider_client.cc
+===================================================================
+--- src.orig/components/omnibox/browser/autocomplete_provider_client.cc
++++ src/components/omnibox/browser/autocomplete_provider_client.cc
+@@ -12,6 +12,13 @@ AutocompleteProviderClient::GetHistoryCl
+   return nullptr;
+ }
+ 
++// helium-fork r8③: clients without a sidebar offer nothing.
++std::vector<HeliumWorkspaceCandidate>
++AutocompleteProviderClient::GetHeliumWorkspaceCandidates(
++    const std::u16string& input_text) {
++  return {};
++}
++
+ history_embeddings::HistoryEmbeddingsSearch*
+ AutocompleteProviderClient::GetHistoryEmbeddingsSearch() {
+   return nullptr;
+Index: src/components/omnibox/browser/autocomplete_provider_client.h
+===================================================================
+--- src.orig/components/omnibox/browser/autocomplete_provider_client.h
++++ src/components/omnibox/browser/autocomplete_provider_client.h
+@@ -16,6 +16,7 @@
+ #include "components/omnibox/browser/actions/omnibox_action.h"
+ #include "components/omnibox/browser/lens_suggest_inputs_utils.h"
+ #include "third_party/metrics_proto/omnibox_event.pb.h"
++#include "url/gurl.h"
+ 
+ class AiModeButtonService;
+ class AimEligibilityService;
+@@ -82,6 +83,12 @@ class TabGroupSyncService;
+ 
+ class TemplateURLService;
+ 
++// helium-fork r8③: one sidebar entry offered to HeliumWorkspaceProvider.
++struct HeliumWorkspaceCandidate {
++  GURL url;
++  std::u16string title;
++};
++
+ class AutocompleteProviderClient : public OmniboxAction::Client {
+  public:
+   virtual ~AutocompleteProviderClient() = default;
+@@ -222,6 +229,14 @@ class AutocompleteProviderClient : publi
+   // for a given set of AutocompleteMatches within the current profile.
+   virtual const TabMatcher& GetTabMatcher() const = 0;
+ 
++  // helium-fork r8③: the sidebar's persistent entries (favorites, then pinned)
++  // that match |input_text|, already in the order they should be offered.
++  // The embedder owns the matching rule (chrome/browser/ui/helium_workspace/
++  // workspace_omnibox_match.h); the default is "none" for clients without a
++  // sidebar.
++  virtual std::vector<HeliumWorkspaceCandidate> GetHeliumWorkspaceCandidates(
++      const std::u16string& input_text);
++
+   // Returns whether user is currently allowed to enter incognito mode.
+   virtual bool IsIncognitoModeAvailable() const;
+ 
+Index: src/components/omnibox/browser/helium_workspace_provider.cc
+===================================================================
+--- /dev/null
++++ src/components/omnibox/browser/helium_workspace_provider.cc
+@@ -0,0 +1,139 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++// helium-fork r8③: see the header for the design notes.
++#include "components/omnibox/browser/helium_workspace_provider.h"
++
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/i18n/case_conversion.h"
++#include "base/strings/utf_string_conversions.h"
++#include "components/omnibox/browser/autocomplete_input.h"
++#include "components/omnibox/browser/autocomplete_match.h"
++#include "components/omnibox/browser/autocomplete_match_classification.h"
++#include "components/omnibox/browser/autocomplete_provider_client.h"
++#include "components/omnibox/browser/omnibox_field_trial.h"
++#include "components/omnibox/browser/url_prefix.h"
++#include "components/url_formatter/url_formatter.h"
++#include "url/gurl.h"
++
++namespace {
++
++// Above HistoryQuickProvider's ceiling (kScoreForBestInlineableResult, 1413),
++// so a favorite whose URL the user is typing is the default match rather than
++// the history row it deduplicates with (AutocompleteResult::FindTopMatch picks
++// the highest-relevance default-able row). Rows that cannot be the default
++// only need to stay above the 1300 search verbatim for culling purposes; their
++// on-screen slot is decided by AutocompleteMatch::GetSortingOrder().
++constexpr int kDefaultableRelevance = 1430;
++constexpr int kRelevance = 1390;
++
++}  // namespace
++
++HeliumWorkspaceProvider::HeliumWorkspaceProvider(
++    AutocompleteProviderClient* client)
++    : AutocompleteProvider(AutocompleteProvider::TYPE_HELIUM_WORKSPACE),
++      client_(client) {}
++
++HeliumWorkspaceProvider::~HeliumWorkspaceProvider() = default;
++
++void HeliumWorkspaceProvider::Start(const AutocompleteInput& input,
++                                    bool minimal_changes) {
++  matches_.clear();
++  // Nothing at rest (Dia's blank composer shows no list), nothing inside a
++  // keyword / starter-pack scope, and nothing for `@` inputs, whose only
++  // permitted default is search-what-you-typed.
++  if (input.IsZeroSuggest() || input.text().empty() ||
++      input.in_keyword_mode() || input.text().starts_with(u'@')) {
++    return;
++  }
++
++  const std::vector<HeliumWorkspaceCandidate> candidates =
++      client_->GetHeliumWorkspaceCandidates(input.text());
++  if (candidates.empty()) {
++    return;
++  }
++
++  const std::u16string fixed_up_input = FixupUserInput(input).second;
++  const bool input_has_scheme = input.parts().scheme.is_nonempty();
++  const bool input_has_www =
++      base::i18n::ToLower(input.text()).starts_with(u"www.");
++
++  int rank = 0;
++  for (const HeliumWorkspaceCandidate& candidate : candidates) {
++    const GURL& url = candidate.url;
++    if (!url.is_valid()) {
++      continue;
++    }
++
++    AutocompleteMatch match(this, /*relevance=*/0, /*deletable=*/false,
++                            AutocompleteMatchType::OPEN_TAB);
++    match.destination_url = url;
++
++    // Inline autocompletion, verbatim after
++    // HistoryQuickProvider::QuickMatchToACMatch: the offset is adjusted by the
++    // formatting applied to |fill_into_edit|.
++    size_t inline_autocomplete_offset = URLPrefix::GetInlineAutocompleteOffset(
++        input.text(), fixed_up_input,
++        /*allow_www_prefix_without_scheme=*/false,
++        base::UTF8ToUTF16(url.spec()));
++    auto fill_into_edit_format_types = url_formatter::kFormatUrlOmitDefaults;
++    if (AutocompleteInput::HasHTTPScheme(input.text())) {
++      fill_into_edit_format_types &= ~url_formatter::kFormatUrlOmitHTTP;
++    }
++    match.fill_into_edit =
++        AutocompleteInput::FormattedStringWithEquivalentMeaning(
++            url,
++            url_formatter::FormatUrl(url, fill_into_edit_format_types,
++                                     base::UnescapeRule::SPACES, nullptr,
++                                     nullptr, &inline_autocomplete_offset),
++            client_->GetSchemeClassifier(), &inline_autocomplete_offset);
++
++    match.contents = url_formatter::FormatUrl(
++        url,
++        AutocompleteMatch::GetFormatTypes(
++            /*preserve_scheme=*/input_has_scheme,
++            /*preserve_subdomain=*/input_has_www),
++        base::UnescapeRule::SPACES, nullptr, nullptr, nullptr);
++    const TermMatches contents_terms =
++        FindTermMatches(input.text(), match.contents);
++    match.contents_class = ClassifyTermMatches(
++        contents_terms, match.contents.size(),
++        ACMatchClassification::MATCH | ACMatchClassification::URL,
++        ACMatchClassification::URL);
++
++    match.description = AutocompleteMatch::SanitizeString(candidate.title);
++    const TermMatches description_terms =
++        FindTermMatches(input.text(), match.description);
++    match.description_class = ClassifyTermMatches(
++        description_terms, match.description.size(),
++        ACMatchClassification::MATCH, ACMatchClassification::NONE);
++
++    // Set |inline_autocompletion| and |allowed_to_be_default_match| if
++    // possible; otherwise the row stays a non-default suggestion. (Do not call
++    // SetAllowedToBeDefault() with an empty inline text -- it would allow any
++    // match, whatever the input.)
++    if (match.TryRichAutocompletion(input, match.contents,
++                                    match.description)) {
++      // Rich autocompletion applies; skip the plain alternative below.
++    } else if (inline_autocomplete_offset != std::u16string::npos) {
++      match.inline_autocompletion =
++          match.fill_into_edit.substr(inline_autocomplete_offset);
++      match.SetAllowedToBeDefault(input);
++    }
++
++    match.relevance =
++        (match.allowed_to_be_default_match ? kDefaultableRelevance
++                                           : kRelevance) -
++        rank;
++    match.RecordAdditionalInfo("helium_workspace_rank", rank);
++    matches_.push_back(std::move(match));
++    ++rank;
++  }
++
++  ResizeMatches(provider_max_matches(),
++                OmniboxFieldTrial::IsMlUrlScoringEnabled());
++}
+Index: src/components/omnibox/browser/helium_workspace_provider.h
+===================================================================
+--- /dev/null
++++ src/components/omnibox/browser/helium_workspace_provider.h
+@@ -0,0 +1,47 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef COMPONENTS_OMNIBOX_BROWSER_HELIUM_WORKSPACE_PROVIDER_H_
++#define COMPONENTS_OMNIBOX_BROWSER_HELIUM_WORKSPACE_PROVIDER_H_
++
++#include "base/memory/raw_ptr.h"
++#include "components/omnibox/browser/autocomplete_input.h"
++#include "components/omnibox/browser/autocomplete_provider.h"
++
++class AutocompleteProviderClient;
++
++// helium-fork r8③: offers the sidebar's persistent entries (favorites first,
++// then pinned) as suggestions for typed input -- the sidebar's counterpart of
++// BookmarkProvider. Synchronous: everything is answered inside Start().
++//
++// The candidate list and its order come from
++// AutocompleteProviderClient::GetHeliumWorkspaceCandidates(); this class only
++// turns them into matches. Two deliberate choices:
++//  * The matches are typed OPEN_TAB so they win deduplication against the
++//    history/bookmark rows for the same URL (AutocompleteMatch::
++//    BetterDuplicate prefers OPEN_TAB before anything else); the surviving row
++//    therefore carries this provider, which is what AutocompleteMatch::
++//    GetSortingOrder() keys on to place it above search suggestions.
++//  * Inline autocompletion is computed here, verbatim after
++//    HistoryQuickProvider, because dedup never hands the loser's inline text
++//    to the winner -- without it "you" would stop completing to youtube.com
++//    the moment YouTube became a favorite.
++// Selecting a row navigates like any URL row (no takeover action): the user's
++// 2026-08-22 ruling, matching Chromium and Dia.
++class HeliumWorkspaceProvider : public AutocompleteProvider {
++ public:
++  explicit HeliumWorkspaceProvider(AutocompleteProviderClient* client);
++  HeliumWorkspaceProvider(const HeliumWorkspaceProvider&) = delete;
++  HeliumWorkspaceProvider& operator=(const HeliumWorkspaceProvider&) = delete;
++
++  // AutocompleteProvider:
++  void Start(const AutocompleteInput& input, bool minimal_changes) override;
++
++ private:
++  ~HeliumWorkspaceProvider() override;
++
++  raw_ptr<AutocompleteProviderClient> client_;
++};
++
++#endif  // COMPONENTS_OMNIBOX_BROWSER_HELIUM_WORKSPACE_PROVIDER_H_
