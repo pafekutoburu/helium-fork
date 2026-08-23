@@ -1,0 +1,115 @@
+Index: src/chrome/browser/ui/helium_workspace/workspace_blank_tab.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_blank_tab.h
++++ src/chrome/browser/ui/helium_workspace/workspace_blank_tab.h
+@@ -27,21 +27,32 @@ inline constexpr std::string_view kNewTa
+ inline constexpr std::string_view kNewTabHost = "newtab";
+ inline constexpr std::string_view kNewTabPageHost = "new-tab-page";
+ 
++// Whether |visible_url| is the browser's own new tab page, whatever the tab's
++// history. This is the *shape* question -- the UI asks it to decide that the
++// page gets the centred composer and the band no capsule -- and the page keeps
++// that shape however it was reached: opened fresh, returned to with Back, or
++// restored (helium-fork r8③-fix, user 2026-08-22: "new tab 不论在任何时候，它的
++// 样子都是带中央面板搜索框"; Dia's composer is page content and behaves the same).
++inline bool IsNewTabPageUrl(const GURL& visible_url) {
++  return visible_url.scheme() == kNewTabScheme &&
++         (visible_url.host() == kNewTabHost ||
++          visible_url.host() == kNewTabPageHost);
++}
++
+ // Whether a tab is the browser's own new tab page with nothing behind it.
+ //
+ // This is the state a window is left in when closing its last tab hands the
+ // user a fresh tab instead of taking the window away. Recognising that state
+ // is what lets the *next* close actually close the window, so the rule reads
+ // as "closing the last tab costs you nothing, closing the nothing costs you
+-// the window".
++// the window". It is the *disposability* question, and the only one that may
++// look at history -- do not use it to decide how the page looks.
+ //
+ // |entry_count| is the tab's navigation entry count: zero while the new tab is
+ // still pending, one once it commits. Anything above that means the user has
+ // navigated, and the tab now holds something they could lose.
+ inline bool IsBlankNewTabState(const GURL& visible_url, int entry_count) {
+-  return entry_count <= 1 && visible_url.scheme() == kNewTabScheme &&
+-         (visible_url.host() == kNewTabHost ||
+-          visible_url.host() == kNewTabPageHost);
++  return entry_count <= 1 && IsNewTabPageUrl(visible_url);
+ }
+ 
+ }  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_blank_tab_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_blank_tab_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_blank_tab_unittest.cc
+@@ -51,5 +51,32 @@ TEST(WorkspaceBlankTabTest, MatchingHost
+   EXPECT_FALSE(IsBlankNewTabState(GURL("https://newtab/"), 1));
+ }
+ 
++// The shape question (helium-fork r8③-fix): the new tab page looks like the
++// new tab page however it was reached, so the URL predicate ignores history.
++TEST(WorkspaceBlankTabTest, NewTabPageUrlIsRecognisedOnBothHosts) {
++  EXPECT_TRUE(IsNewTabPageUrl(GURL("chrome://newtab/")));
++  EXPECT_TRUE(IsNewTabPageUrl(GURL("chrome://new-tab-page/")));
++}
++
++TEST(WorkspaceBlankTabTest, NewTabPageUrlIgnoresHistory) {
++  // The same URL that IsBlankNewTabState refuses with history behind it.
++  EXPECT_FALSE(IsBlankNewTabState(GURL("chrome://new-tab-page/"), 2));
++  EXPECT_TRUE(IsNewTabPageUrl(GURL("chrome://new-tab-page/")));
++}
++
++TEST(WorkspaceBlankTabTest, NewTabPageUrlRejectsOtherPages) {
++  EXPECT_FALSE(IsNewTabPageUrl(GURL("https://example.com/")));
++  EXPECT_FALSE(IsNewTabPageUrl(GURL("chrome://settings/")));
++  EXPECT_FALSE(IsNewTabPageUrl(GURL("https://newtab/")));
++  EXPECT_FALSE(IsNewTabPageUrl(GURL()));
++}
++
++// Disposability still requires an empty history: the two questions differ
++// exactly there.
++TEST(WorkspaceBlankTabTest, BlankStateIsNewTabPageUrlPlusEmptyHistory) {
++  EXPECT_TRUE(IsBlankNewTabState(GURL("chrome://newtab/"), 1));
++  EXPECT_FALSE(IsBlankNewTabState(GURL("chrome://newtab/"), 2));
++}
++
+ }  // namespace
+ }  // namespace helium_workspace
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -2381,9 +2381,13 @@ bool ToolbarView::IsArcBlankNewTab() con
+   // URL, because it is the virtual one and it is already set while the tab is
+   // still pending -- so a new tab is recognised on the way in rather than one
+   // layout later, and the capsule never flashes.
+-  return active && helium_workspace::IsBlankNewTabState(
+-                       active->GetVisibleURL(),
+-                       active->GetController().GetEntryCount());
++  //
++  // helium-fork r8③-fix: the URL alone, not IsBlankNewTabState(). That one
++  // also asks for an empty history because it decides whether closing the tab
++  // is free; the page's *shape* must not depend on history, or Back from a
++  // site lands on a new tab page whose composer has gone and whose capsule is
++  // back in the band (user-hit 2026-08-22).
++  return active && helium_workspace::IsNewTabPageUrl(active->GetVisibleURL());
+ }
+ 
+ void ToolbarView::UpdateArcBandFieldVisibility() {
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -293,8 +293,9 @@ class ToolbarView : public views::Access
+   // doing, so the extensions and the menu do not slide left into the gap.
+   void UpdateArcBandFieldVisibility();
+ 
+-  // helium-fork r8: whether the active tab is the browser's own new tab page
+-  // with nothing behind it (helium_workspace::IsBlankNewTabState).
++  // helium-fork r8: whether the active tab shows the browser's own new tab
++  // page (helium_workspace::IsNewTabPageUrl) -- whatever its history, so the
++  // page keeps its composer after Back (r8③-fix).
+   bool IsArcBlankNewTab() const;
+ 
+   // helium-fork r8.3: hand the address field over to the new tab page's
