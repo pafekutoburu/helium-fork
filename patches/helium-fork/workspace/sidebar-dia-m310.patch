@@ -1,0 +1,2379 @@
+--- a/chrome/app/generated_resources.grd
++++ b/chrome/app/generated_resources.grd
+@@ -12217,6 +12217,9 @@ Check your passwords anytime in <ph name
+         <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
+           Remove
+         </message>
++        <message name="IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL" desc="Hint under a pinned sidebar entry's title (and its context menu item) while the pointer is on its favicon and the tab has navigated away from the URL it was pinned at: clicking takes the tab back to that URL.">
++          Back to Pinned URL
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
+         </message>
+@@ -12369,6 +12372,9 @@ Check your passwords anytime in <ph name
+         <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="In Title Case: The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
+           Remove
+         </message>
++        <message name="IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL" desc="In Title Case: Hint under a pinned sidebar entry's title (and its context menu item) while the pointer is on its favicon and the tab has navigated away from the URL it was pinned at: clicking takes the tab back to that URL.">
++          Back to Pinned URL
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="In Title Case: The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute Site} other {Mute Sites}}
+         </message>
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -396,6 +396,8 @@ static_library("ui") {
+     "helium_workspace/workspace_favicon_image.h",
+     "helium_workspace/workspace_grid_math.h",
+     "helium_workspace/workspace_omnibox_match.h",
++    "helium_workspace/workspace_pin_semantics.cc",
++    "helium_workspace/workspace_pin_semantics.h",
+     "helium_workspace/workspace_prefs.cc",
+     "helium_workspace/workspace_prefs.h",
+     "helium_workspace/workspace_service.cc",
+@@ -6069,6 +6071,8 @@ test("helium_workspace_unittests") {
+     "helium_workspace/workspace_grid_math.h",
+     "helium_workspace/workspace_omnibox_match.h",
+     "helium_workspace/workspace_omnibox_match_unittest.cc",
++    "helium_workspace/workspace_pin_semantics.h",
++    "helium_workspace/workspace_pin_semantics_unittest.cc",
+     "helium_workspace/workspace_prefs.cc",
+     "helium_workspace/workspace_prefs.h",
+     "helium_workspace/workspace_service.cc",
+--- a/chrome/browser/ui/helium/arc_sidebar_surface.h
++++ b/chrome/browser/ui/helium/arc_sidebar_surface.h
+@@ -8,7 +8,9 @@
+ #include "base/containers/span.h"
+ #include <algorithm>
+ 
++#include "base/time/time.h"
+ #include "third_party/skia/include/core/SkColor.h"
++#include "ui/gfx/animation/tween.h"
+ #include "ui/gfx/color_utils.h"
+ 
+ // helium-fork: the fill behind the sidebar's own capsules -- the address row
+@@ -57,22 +59,103 @@ inline constexpr SkColor kArcAppSurfaceL
+ // all three (129.2 / 229.9 / 213.9); the contrasting-color model fit only
+ // the dark one and came out twice as heavy on light themes -- which is
+ // exactly what the user reported (r2 shipped it; corrected in r3).
+-// The hovered alpha is fitted to the dark space's L136; neither light space
+-// was measured hovered, so hover keeps the same one-model shape rather than
+-// a second data point.
++// (The hovered half of this model -- a heavier gray -- was retired 2026-08-23
++// for Dia's white hover, see GetSidebarHoverSurfaceColor below.)
+ //
+ // Deliberately not GetBandFieldColor(): the band's field goes the other way
+ // (0.10 at rest, 0.08 hovered) because there the row capsule takes the hover
+ // over. Same shape, opposite intent -- merging them would make each surface's
+ // measurements hostage to the other's.
++// helium-fork M3.10: the fill under the pointer -- white, not more gray.
++//
++// Dia 2026-08-23 (active window, light theme, 2x window screenshots, pointer
++// moved by tools/mousemove): a favorites card goes from L215 at rest to
++// **L242** under the pointer on an L225 sidebar, and a Today row lights a
++// white capsule at **L243** on L228 (6pt in from either edge, 33.5pt tall).
++// Both are white at ~0.57 over the sidebar, so one constant serves every
++// sidebar row: favorites card, pinned row, Today row, folder header. Arc's
++// "hover = a heavier gray wash" (0.30, measured 2026-08-19) is what the user
++// pointed at when asking for Dia's 变亮 instead; the resting wash stays.
++//
++// Dia's hover has no tween at all: sckrec at 120fps shows the first changed
++// frame already at the final value, entering and leaving alike. Rows paint
++// straight from their hovered bit; only the address row keeps its 200ms
++// (its extension icons fade on the same tween, M3.9c-pre-r2/r3).
++//
++// ⚠ Dia's dark theme was not measured (switching themes means driving the
++// app). Dark sidebars take a small white lift instead -- 0.16 lands an L116
++// sidebar at L138, a shade above the Arc dark hover this replaces (L136).
++inline constexpr float kSidebarHoverWhiteAlphaLight = 0.57f;
++inline constexpr float kSidebarHoverWhiteAlphaDark = 0.16f;
++
++inline SkColor GetSidebarHoverSurfaceColor(SkColor sidebar) {
++  return color_utils::AlphaBlend(SK_ColorWHITE, sidebar,
++                                 color_utils::IsDark(sidebar)
++                                     ? kSidebarHoverWhiteAlphaDark
++                                     : kSidebarHoverWhiteAlphaLight);
++}
++
++// helium-fork M3.10-r1: a capsule that carries a resting fill lifts from
++// *that fill*, not from the bare sidebar.
++//
++// The two recipes used to blend over the same base, and in a dark theme they
++// collided: the resting gray wash lifts an RGB(30,32,32) sidebar all the way
++// to L61 while white at 0.16 over that same sidebar only reaches L66. Six
++// levels apart -- what the user reported 2026-08-23 as "几乎看不出来", and
++// what their screenshot measures to the digit. A light theme hid the flaw
++// because white saturates there: L219 -> L243.
++//
++// Stacking the hover on the resting fill couples the two in either theme, and
++// the alphas are then solved per theme:
++//   light 0.67 puts the L216 rest of Dia's own L225 sidebar at **L242** --
++//         their measured hover, to the digit. (decisions 2026-08-23 solved
++//         the same number off the live window: "叠静息则 α0.675".)
++//   dark  0.108 puts an L60 rest at **L81**, the alpha whose CIE L* step
++//         equals the light theme's (86.3 -> 95.5 = +9.2; 25.4 -> 34.6 = +9.2).
++//
++// ⚠ Dia's dark theme is still unmeasured -- switching its theme means driving
++// the user's browser. The dark number is derived, not observed; the user chose
++// that over waiting for a screenshot, so it is the acceptance knob: too bright
++// or too dim, kSidebarCardHoverWhiteAlphaDark alone moves.
++//
++// Deliberately not applied to GetSidebarHoverSurfaceColor above. That one
++// fills pinned rows, Today rows and the folder header, none of which carry a
++// resting fill, so it blends over the sidebar by construction and is already
++// a visible step in either theme (dark: L30 -> L66).
++inline constexpr float kSidebarCardHoverWhiteAlphaLight = 0.67f;
++inline constexpr float kSidebarCardHoverWhiteAlphaDark = 0.108f;
++
+ inline SkColor GetSidebarSurfaceColor(SkColor sidebar, bool hovered) {
+   // L182: solve the three resting measurements above for one overlay color;
+   // they agree on ~181.5 at alpha 0.20.
+   constexpr SkColor kWash = SkColorSetRGB(0xB6, 0xB6, 0xB6);
+   constexpr float kRestAlpha = 0.20f;
+-  constexpr float kHoveredAlpha = 0.30f;
+-  return color_utils::AlphaBlend(kWash, sidebar,
+-                                 hovered ? kHoveredAlpha : kRestAlpha);
++  const SkColor rest = color_utils::AlphaBlend(kWash, sidebar, kRestAlpha);
++  if (!hovered) {
++    return rest;
++  }
++  return color_utils::AlphaBlend(SK_ColorWHITE, rest,
++                                 color_utils::IsDark(sidebar)
++                                     ? kSidebarCardHoverWhiteAlphaDark
++                                     : kSidebarCardHoverWhiteAlphaLight);
++}
++
++// helium-fork M3.10: the fill behind a pinned row's favicon while the pointer
++// is on it and the row has wandered off its pinned URL (the "Back to Pinned
++// URL" affordance).
++//
++// M3.10-r1: now measured, off the user's Dia recording 2026-08-23 (534x98
++// @2x, 281 frames) rather than guessed off a photo. Dia does not box the icon
++// at all -- it darkens **the whole left end of the row**: from the card's left
++// edge out to 29.5pt, the full 33pt card height, the card's own radius on the
++// left two corners and a straight vertical edge on the right. The fill is
++// L235 on an L247 card, i.e. -12, which is this wash at 0.18. The first pass
++// read the photo as a small rounded square and came out twice as heavy over a
++// quarter of the area, which is exactly what the user pointed at.
++inline SkColor GetSidebarIconHoverColor(SkColor surface) {
++  constexpr SkColor kWash = SkColorSetRGB(0xB6, 0xB6, 0xB6);
++  constexpr float kAlpha = 0.18f;
++  return color_utils::AlphaBlend(kWash, surface, kAlpha);
+ }
+ 
+ // The selected favorites card, before its favicon wash goes on top.
+@@ -233,6 +316,64 @@ inline SkColor GetSidebarSurfaceColorAt(
+                                  static_cast<float>(progress));
+ }
+ 
++// helium-fork M3.10-r1: how the sidebar's own states move.
++//
++// Two motions, both measured off the user's Dia recordings 2026-08-23 by
++// fitting (duration, start) for each gfx::Tween curve against the per-frame
++// traces -- ffmpeg for the frames, ffprobe for their timestamps.
++//
++// 1. The drifted row's "Back to Pinned URL" morph: the title sliding up, the
++//    hint and the favicon's fill coming in. A joint fit over three traces --
++//    the fill's 12 luminance steps, the title's 14px rise, and that rise in
++//    reverse on the way out -- lands on EASE_IN_OUT at 186ms. 180 and 190 tie
++//    with it, 200 is barely worse, every other curve is clearly worse.
++//    ⚠ This does not contradict "sidebar hover is instant": that rule is
++//    about the row capsule's *fill*, which Dia still snaps (re-confirmed this
++//    round -- a neighbouring row's hover capsule appears at its final L230 in
++//    one frame). This tween is the drift affordance changing shape, which is
++//    a different event.
++// 2. The folder opening and closing. Three cycles fit independently to a
++//    cubic ease-out at 126 / 130 / 132ms; of the curves Chromium ships,
++//    FAST_OUT_SLOW_IN at 150ms is closest (rms 0.009 of full travel), then
++//    EASE_OUT at 100ms (0.011) -- EASE_OUT at 130ms is visibly slow off the
++//    mark (0.045). The rows themselves do not travel: opening puts them at
++//    their final places, fully opaque, on the very first frame; closing fades
++//    them where they stand in ~90ms, near-linear, while everything below
++//    them slides.
++inline constexpr base::TimeDelta kSidebarHintDuration = base::Milliseconds(180);
++inline constexpr gfx::Tween::Type kSidebarHintTween = gfx::Tween::EASE_IN_OUT;
++
++// How far the title rises to make room for the hint (Dia: 14px @2x = 7pt),
++// and how far below the title's baseline the hint's is asked to sit (Dia:
++// 27.5px = 13.75pt).
++//
++// Dia holds the row's height *fixed* through all of this: its card measured
++// y=16..81 on every one of the 281 frames, resting and hovered alike. So the
++// hint costs the row no height and moves nothing below it -- it is paid for
++// by the title moving up inside the row it already had.
++//
++// ⚠ The gap is a request, not a guarantee: views::Label::GetBaseline() is
++// insets + FontList::GetBaseline(), which over-reports the smaller derived
++// hint font against where RenderText actually puts the line, so 14 lands the
++// painted baselines 16pt apart (probe 2026-08-23). Left at 14 deliberately:
++// what matters is where the two lines sit in the card, and at 14 they land
++// 10px/8px from its top/bottom against Dia's 10.5/9.5 -- asking for 12 to
++// force the nominal gap would push the hint 1.75pt *away* from Dia instead.
++inline constexpr int kSidebarHintTitleRise = 7;
++inline constexpr int kSidebarHintBaselineGap = 14;
++
++// How far the favicon's fill reaches past the icon's own box: 22 + 6 + 2 puts
++// its right edge at 30pt on a 34pt row, Dia's 29.5 on 33.
++inline constexpr int kSidebarIconHoverBoxTrailing = 2;
++
++inline constexpr base::TimeDelta kSidebarFolderDuration =
++    base::Milliseconds(150);
++inline constexpr gfx::Tween::Type kSidebarFolderTween =
++    gfx::Tween::FAST_OUT_SLOW_IN;
++// The closing folder's rows fade out over the first 90ms of the 150ms tween,
++// not over all of it (Dia).
++inline constexpr double kSidebarFolderFadeFraction = 0.6;
++
+ }  // namespace helium
+ 
+ #endif  // CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SURFACE_H_
+--- a/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
++++ b/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
+@@ -21,18 +21,15 @@ int Luminance(SkColor color) {
+   return (SkColorGetR(color) + SkColorGetG(color) + SkColorGetB(color)) / 3;
+ }
+ 
+-// Arc 2026-08-19, three spaces: dark L116 -> L129 rest / L136 hovered, light
+-// L242 -> L230, light L222 -> L212.5. One gray at one alpha has to hit all
+-// three -- the contrast-color model fit only the dark space and shipped twice
+-// as heavy on light themes (r2, user-reported). ⚠ Neither light space was
+-// measured hovered, so only the dark hover value is pinned.
+-TEST(ArcSidebarSurfaceTest, MatchesTheMeasuredArcValues) {
++// Arc 2026-08-19, three spaces at rest: dark L116 -> L129, light L242 ->
++// L230, light L222 -> L212.5. One gray at one alpha has to hit all three --
++// the contrast-color model fit only the dark space and shipped twice as
++// heavy on light themes (r2, user-reported). The resting wash is still Arc's;
++// the hover is Dia's now (next test).
++TEST(ArcSidebarSurfaceTest, RestMatchesTheMeasuredArcValues) {
+   EXPECT_NEAR(129, Luminance(GetSidebarSurfaceColor(kDarkSidebar,
+                                                     /*hovered=*/false)),
+               1);
+-  EXPECT_NEAR(136, Luminance(GetSidebarSurfaceColor(kDarkSidebar,
+-                                                    /*hovered=*/true)),
+-              1);
+   EXPECT_NEAR(230, Luminance(GetSidebarSurfaceColor(kLightSidebar,
+                                                     /*hovered=*/false)),
+               1);
+@@ -41,30 +38,92 @@ TEST(ArcSidebarSurfaceTest, MatchesTheMe
+               2);
+ }
+ 
+-// The wash is a fixed mid-gray, so a light theme darkens where a dark one
+-// lightens. A hard-coded white would make the light theme's capsule
+-// invisible.
+-TEST(ArcSidebarSurfaceTest, ALightSidebarDarkensInstead) {
+-  for (const bool hovered : {false, true}) {
+-    EXPECT_GT(Luminance(GetSidebarSurfaceColor(kDarkSidebar, hovered)),
+-              Luminance(kDarkSidebar));
+-    EXPECT_LT(Luminance(GetSidebarSurfaceColor(kLightSidebar, hovered)),
+-              Luminance(kLightSidebar));
++// Dia 2026-08-23 (active window, light theme): a favorites card L215 at rest
++// on an L225 sidebar, **L242** under the pointer; a Today row hovered lights
++// **L243** on L228. M3.10-r1 split the two recipes -- a card lifts from its
++// own resting fill, a row from the bare sidebar -- so they are no longer the
++// same SkColor, but both still have to land on the numbers Dia was measured
++// at.
++TEST(ArcSidebarSurfaceTest, HoverMatchesTheMeasuredDiaValues) {
++  constexpr SkColor kDiaGridSidebar = SkColorSetRGB(0xE1, 0xE1, 0xE1);  // L225
++  constexpr SkColor kDiaRowSidebar = SkColorSetRGB(0xE4, 0xE4, 0xE4);   // L228
++  EXPECT_NEAR(242, Luminance(GetSidebarSurfaceColor(kDiaGridSidebar,
++                                                    /*hovered=*/true)),
++              1);
++  EXPECT_NEAR(243, Luminance(GetSidebarHoverSurfaceColor(kDiaRowSidebar)), 1);
++}
++
++// The bug the user reported 2026-08-23: in a dark theme a hovered favorites
++// card and a resting one were six levels apart and read as the same capsule.
++//
++// The sidebar and both measurements are their screenshot's, to the digit --
++// sidebar RGB(30,32,32), rest L61, hover L68. The fix stacks the hover on the
++// resting fill, and the dark alpha is solved so the CIE L* step equals the
++// light theme's (+9.1), which puts the hover at L82. ⚠ Derived, not measured:
++// Dia's dark theme cannot be sampled without driving the user's browser, and
++// the user chose the derivation over waiting. This is the knob.
++TEST(ArcSidebarSurfaceTest, TheDarkThemeHoverIsAVisibleStep) {
++  constexpr SkColor kUserDarkSidebar = SkColorSetRGB(30, 32, 32);
++  const int rest = Luminance(GetSidebarSurfaceColor(kUserDarkSidebar,
++                                                    /*hovered=*/false));
++  const int hovered = Luminance(GetSidebarSurfaceColor(kUserDarkSidebar,
++                                                       /*hovered=*/true));
++  EXPECT_NEAR(61, rest, 2);
++  EXPECT_NEAR(81, hovered, 2);
++  // The shipped-and-rejected version had this at 7.
++  EXPECT_GE(hovered - rest, 16);
++}
++
++// A card's hover is a lift off its own resting fill in *either* theme -- the
++// relation the split was made to hold. Comparing against the bare sidebar
++// instead is what let the dark theme drift.
++TEST(ArcSidebarSurfaceTest, ACardAlwaysLiftsOffItsOwnRestingFill) {
++  for (const SkColor sidebar : {kDarkSidebar, kLightSidebar, kGraySidebar,
++                                SkColorSetRGB(30, 32, 32)}) {
++    EXPECT_GT(Luminance(GetSidebarSurfaceColor(sidebar, /*hovered=*/true)),
++              Luminance(GetSidebarSurfaceColor(sidebar, /*hovered=*/false)));
+   }
+ }
+ 
+-// Hover is always the stronger of the two, whichever direction the wash goes.
+-TEST(ArcSidebarSurfaceTest, HoverIsAlwaysFartherFromTheSidebar) {
++// The resting wash is a fixed mid-gray, so a light theme darkens where a
++// dark one lightens. A hard-coded white would make the light theme's resting
++// capsule invisible.
++TEST(ArcSidebarSurfaceTest, ALightSidebarDarkensAtRest) {
++  EXPECT_GT(Luminance(GetSidebarSurfaceColor(kDarkSidebar, /*hovered=*/false)),
++            Luminance(kDarkSidebar));
++  EXPECT_LT(Luminance(GetSidebarSurfaceColor(kLightSidebar,
++                                             /*hovered=*/false)),
++            Luminance(kLightSidebar));
++}
++
++// Hover is a lift in either theme: lighter than the sidebar and lighter than
++// the resting card, whichever way the resting wash went. ⚠ Dia's dark theme
++// is unmeasured; the dark lift is pinned only by this relation.
++TEST(ArcSidebarSurfaceTest, HoverIsAlwaysLighterThanRest) {
+   for (const SkColor sidebar : {kDarkSidebar, kLightSidebar, kGraySidebar}) {
+-    const int base = Luminance(sidebar);
+     const int rest = Luminance(GetSidebarSurfaceColor(sidebar,
+                                                       /*hovered=*/false));
+-    const int hovered = Luminance(GetSidebarSurfaceColor(sidebar,
+-                                                         /*hovered=*/true));
+-    EXPECT_GT(std::abs(hovered - base), std::abs(rest - base));
++    const int hovered = Luminance(GetSidebarHoverSurfaceColor(sidebar));
++    EXPECT_GT(hovered, rest);
++    EXPECT_GT(hovered, Luminance(sidebar));
++    EXPECT_LE(hovered, 255);
+   }
+ }
+ 
++// The favicon's fill on a drifted pinned row's white card. Dia 2026-08-23
++// (recording, 281 frames): L235 on an L247 card, a step of -12. Ours sits on
++// a pure-white card, so the same step means ~243 -- close enough that the
++// tolerance here is the step, not the absolute.
++TEST(ArcSidebarSurfaceTest, TheIconHoverFillMatchesTheMeasuredDiaStep) {
++  constexpr SkColor kDiaCard = SkColorSetRGB(0xF7, 0xF7, 0xF7);  // L247
++  EXPECT_NEAR(235, Luminance(GetSidebarIconHoverColor(kDiaCard)), 1);
++  const int on_white = Luminance(GetSidebarIconHoverColor(SK_ColorWHITE));
++  EXPECT_LT(on_white, 255);
++  EXPECT_NEAR(14, 255 - on_white, 2);
++  EXPECT_LT(Luminance(GetSidebarIconHoverColor(kGraySidebar)),
++            Luminance(kGraySidebar));
++}
++
+ // Arc 2026-08-19, both of the user's spaces: dark sidebar L116 -> card L167,
+ // light sidebar L242 -> card L247. Two very different steps, one rule.
+ TEST(ArcSidebarSurfaceTest, TheSelectedCardMatchesTheMeasuredArcValues) {
+@@ -82,8 +141,8 @@ TEST(ArcSidebarSurfaceTest, TheSelectedC
+   }
+ }
+ 
+-// ...and it is the odd one out: the unselected fills step toward the fixed
+-// gray, so on a light sidebar they go the other way.
++// ...and at rest it is the odd one out: the unselected resting fill steps
++// toward the fixed gray, so on a light sidebar it goes the other way.
+ TEST(ArcSidebarSurfaceTest, TheUnselectedFillsStepTowardTheGray) {
+   EXPECT_LT(Luminance(GetSidebarSurfaceColor(kLightSidebar,
+                                              /*hovered=*/false)),
+--- /dev/null
++++ b/chrome/browser/ui/helium_workspace/workspace_pin_semantics.cc
+@@ -0,0 +1,55 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_pin_semantics.h"
++
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/web_contents.h"
++
++namespace helium_workspace {
++
++bool IsTabAtPinnedUrl(const tabs::TabInterface* tab, const GURL& pinned_url) {
++  if (!tab) {
++    return false;
++  }
++  content::WebContents* contents = tab->GetContents();
++  if (!contents) {
++    return false;
++  }
++  content::NavigationEntry* entry =
++      contents->GetController().GetLastCommittedEntry();
++  base::span<const GURL> chain;
++  if (entry) {
++    chain = entry->GetRedirectChain();
++  }
++  return IsAtPinnedUrl(contents->GetLastCommittedURL(), pinned_url, chain);
++}
++
++bool IsTabDriftedFromPinnedUrl(const tabs::TabInterface* tab,
++                               const GURL& pinned_url) {
++  if (!tab) {
++    return false;
++  }
++  content::WebContents* contents = tab->GetContents();
++  if (!contents) {
++    return false;
++  }
++  // GetLastCommittedEntry() never returns null once the FrameTree exists: a
++  // tab that has committed nothing still reports the synthetic *initial*
++  // entry. IsInitialEntry() is the only way to tell that apart from a real
++  // commit, and it is exactly the state a freshly opened pinned tab is in.
++  const content::NavigationEntry* entry =
++      contents->GetController().GetLastCommittedEntry();
++  base::span<const GURL> chain;
++  if (entry) {
++    chain = entry->GetRedirectChain();
++  }
++  return IsDriftedFromPinnedUrl(entry && !entry->IsInitialEntry(),
++                                contents->GetLastCommittedURL(), pinned_url,
++                                chain);
++}
++
++}  // namespace helium_workspace
+--- /dev/null
++++ b/chrome/browser/ui/helium_workspace/workspace_pin_semantics.h
+@@ -0,0 +1,76 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_PIN_SEMANTICS_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_PIN_SEMANTICS_H_
++
++#include "base/containers/span.h"
++#include "url/gurl.h"
++
++namespace tabs {
++class TabInterface;
++}  // namespace tabs
++
++namespace helium_workspace {
++
++// helium-fork M3.10: whether a tab bound to an entry is *at home* -- still on
++// the URL the entry was pinned at (Arc/Dia's "pinned URL"). Two things hang
++// off the answer (user 2026-08-23, Dia photo "Back to Pinned URL"):
++//   - the entry's persisted title and favicon follow the tab only while it is
++//     at home, so closing a drifted tab leaves the entry describing the
++//     pinned page, not wherever the user ended up;
++//   - a drifted row shows the "/" drift mark and, with the pointer on its
++//     favicon, the "Back to Pinned URL" hint; clicking the favicon navigates
++//     the tab back.
++//
++// |tab_url| is the tab's last committed URL, |pinned_url| the entry's, and
++// |redirect_chain| the last committed navigation's chain, whose first element
++// is the URL that navigation was started with. The chain is what keeps a
++// server redirect at home: an entry pinned at https://site/ that always
++// lands on https://site/home would otherwise never count as home again.
++inline bool IsAtPinnedUrl(const GURL& tab_url,
++                          const GURL& pinned_url,
++                          base::span<const GURL> redirect_chain) {
++  if (!pinned_url.is_valid()) {
++    return false;
++  }
++  if (tab_url == pinned_url) {
++    return true;
++  }
++  return !redirect_chain.empty() && redirect_chain.front() == pinned_url;
++}
++
++// The same question asked of a live tab: its last committed URL and its last
++// committed entry's redirect chain. A tab with no contents, or nothing
++// committed yet (the entry's own first load is still in flight), is not at
++// home -- there is nothing to write back from it anyway.
++bool IsTabAtPinnedUrl(const tabs::TabInterface* tab, const GURL& pinned_url);
++
++// helium-fork M3.10-r2: whether a bound row wears the "/" drift mark and
++// offers "Back to Pinned URL". Deliberately *not* !IsAtPinnedUrl(): a tab
++// whose first navigation has not committed yet has no URL to compare, and
++// what it is loading is the pinned URL itself, so reading it as drifted
++// flashes a "/" beside the favicon every time the user opens a pinned page
++// (user 2026-08-24: 「第一次打开网页的时候，加载的就是最开始 pin 过的 URL，
++// 不应该出现这个符号」). |has_committed_navigation| is false until the tab's
++// first main-frame navigation commits.
++//
++// The write-back gate keeps asking IsAtPinnedUrl instead: "we do not know
++// where this tab is yet" must block writing the entry's title and favicon,
++// but must not accuse the row of having drifted.
++inline bool IsDriftedFromPinnedUrl(bool has_committed_navigation,
++                                   const GURL& tab_url,
++                                   const GURL& pinned_url,
++                                   base::span<const GURL> redirect_chain) {
++  return has_committed_navigation &&
++         !IsAtPinnedUrl(tab_url, pinned_url, redirect_chain);
++}
++
++// The same question asked of a live tab.
++bool IsTabDriftedFromPinnedUrl(const tabs::TabInterface* tab,
++                               const GURL& pinned_url);
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_PIN_SEMANTICS_H_
+--- /dev/null
++++ b/chrome/browser/ui/helium_workspace/workspace_pin_semantics_unittest.cc
+@@ -0,0 +1,92 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_pin_semantics.h"
++
++#include <vector>
++
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace helium_workspace {
++namespace {
++
++const GURL kPinned("https://example.com/");
++
++// The ordinary case: the tab is exactly where it was pinned.
++TEST(WorkspacePinSemanticsTest, TheSameUrlIsHome) {
++  const std::vector<GURL> chain = {kPinned};
++  EXPECT_TRUE(IsAtPinnedUrl(kPinned, kPinned, chain));
++  // A chain is not required for the exact match.
++  EXPECT_TRUE(IsAtPinnedUrl(kPinned, kPinned, {}));
++}
++
++// Pinned at the root, served a redirect to /home: the navigation *started*
++// at the pinned URL, so this is still the pinned page.
++TEST(WorkspacePinSemanticsTest, AServerRedirectFromThePinnedUrlIsHome) {
++  const std::vector<GURL> chain = {kPinned, GURL("https://example.com/home")};
++  EXPECT_TRUE(
++      IsAtPinnedUrl(GURL("https://example.com/home"), kPinned, chain));
++}
++
++// Clicking around the site leaves home, same origin or not.
++TEST(WorkspacePinSemanticsTest, NavigatingAwayIsNotHome) {
++  const GURL away("https://example.com/settings");
++  EXPECT_FALSE(IsAtPinnedUrl(away, kPinned, std::vector<GURL>{away}));
++  EXPECT_FALSE(IsAtPinnedUrl(GURL("https://other.test/"), kPinned,
++                             std::vector<GURL>{GURL("https://other.test/")}));
++  EXPECT_FALSE(IsAtPinnedUrl(away, kPinned, {}));
++}
++
++// A redirect that merely *ends* somewhere is not a redirect *from* home.
++TEST(WorkspacePinSemanticsTest, ARedirectEndingAtThePinnedUrlIsOnlyHomeByUrl) {
++  const std::vector<GURL> chain = {GURL("https://example.com/login"), kPinned};
++  // Ends at the pinned URL: home by the URL test.
++  EXPECT_TRUE(IsAtPinnedUrl(kPinned, kPinned, chain));
++  // Ends elsewhere and did not start at home: drifted.
++  EXPECT_FALSE(IsAtPinnedUrl(GURL("https://example.com/dash"), kPinned,
++                             std::vector<GURL>{GURL("https://example.com/login"),
++                                               GURL("https://example.com/dash")}));
++}
++
++// Nothing committed yet, or an entry with no usable URL, is never home.
++TEST(WorkspacePinSemanticsTest, EmptyAndInvalidUrlsAreNotHome) {
++  EXPECT_FALSE(IsAtPinnedUrl(GURL(), kPinned, {}));
++  EXPECT_FALSE(IsAtPinnedUrl(kPinned, GURL(), std::vector<GURL>{kPinned}));
++}
++
++// helium-fork M3.10-r2. The row the user just clicked has committed nothing
++// yet, and the load in flight is the pinned URL: it must not wear the "/".
++// This is the whole reason drift is its own predicate rather than the
++// negation of home.
++TEST(WorkspacePinSemanticsTest, ATabThatHasCommittedNothingHasNotDrifted) {
++  EXPECT_FALSE(IsDriftedFromPinnedUrl(/*has_committed_navigation=*/false,
++                                      GURL(), kPinned, {}));
++  // Not even if some stale URL is still readable off the tab.
++  EXPECT_FALSE(IsDriftedFromPinnedUrl(
++      /*has_committed_navigation=*/false, GURL("https://example.com/settings"),
++      kPinned, {}));
++  // And "not home" is still true for the same inputs -- the write-back gate
++  // and the drift mark deliberately disagree here.
++  EXPECT_FALSE(IsAtPinnedUrl(GURL(), kPinned, {}));
++}
++
++// Once something has committed, drift is exactly "not home".
++TEST(WorkspacePinSemanticsTest, DriftIsNotHomeOnceSomethingCommitted) {
++  const std::vector<GURL> chain = {kPinned};
++  EXPECT_FALSE(IsDriftedFromPinnedUrl(/*has_committed_navigation=*/true,
++                                      kPinned, kPinned, chain));
++  const GURL away("https://example.com/settings");
++  EXPECT_TRUE(IsDriftedFromPinnedUrl(/*has_committed_navigation=*/true, away,
++                                     kPinned, std::vector<GURL>{away}));
++  // A server redirect off the pinned URL is still home, so still no mark.
++  const std::vector<GURL> redirected = {kPinned,
++                                        GURL("https://example.com/home")};
++  EXPECT_FALSE(IsDriftedFromPinnedUrl(/*has_committed_navigation=*/true,
++                                      GURL("https://example.com/home"),
++                                      kPinned, redirected));
++}
++
++}  // namespace
++}  // namespace helium_workspace
+--- a/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ b/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -17,12 +17,17 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_favicon.h"
++#include "chrome/browser/ui/helium_workspace/workspace_pin_semantics.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ #include "chrome/browser/ui/tabs/tab_data.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/common/referrer.h"
++#include "ui/base/page_transition_types.h"
+ #include "ui/gfx/codec/png_codec.h"
+ #include "ui/gfx/image/image_skia.h"
+ #include "ui/gfx/image/image_skia_rep.h"
+@@ -187,6 +192,53 @@ void WorkspaceTabController::OpenEntry(c
+   pending_bind_entry_id_.clear();
+ }
+ 
++void WorkspaceTabController::CloseEntryTab(const std::string& entry_id) {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  if (!model) {
++    return;
++  }
++  tabs::TabInterface* tab =
++      service_->FindTabForEntryInWindow(entry_id, browser_window_).Get();
++  if (!tab) {
++    return;
++  }
++  const int index = model->GetIndexOfTab(tab);
++  if (index < 0) {
++    return;
++  }
++  // The same close a Today row's ✕ performs (TabStripCollectionController::
++  // CloseTab). kRemoved then unbinds the tab; the entry is untouched.
++  model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_USER_GESTURE |
++                                       TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++}
++
++void WorkspaceTabController::ResetEntryTab(const std::string& entry_id) {
++  TabStripModel* model = browser_window_->GetTabStripModel();
++  const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
++  if (!model || !entry) {
++    return;
++  }
++  tabs::TabInterface* tab =
++      service_->FindTabForEntryInWindow(entry_id, browser_window_).Get();
++  content::WebContents* contents = tab ? tab->GetContents() : nullptr;
++  if (!contents) {
++    OpenEntry(entry_id);
++    return;
++  }
++  // A bookmark-like transition: the user asked for "the page I pinned", not
++  // for a link the page offered. The title and icon write-back resumes on
++  // its own once this commits (OnTabChangedAt sees the tab at home again).
++  contents->GetController().LoadURL(entry->url, content::Referrer(),
++                                    ui::PAGE_TRANSITION_AUTO_BOOKMARK,
++                                    std::string());
++  const int index = model->GetIndexOfTab(tab);
++  if (index >= 0) {
++    model->ActivateTabAt(
++        index, TabStripUserGestureDetails(
++                   TabStripUserGestureDetails::GestureType::kOther));
++  }
++}
++
+ void WorkspaceTabController::AdoptTabsInWindow() {
+   TabStripModel* model = browser_window_->GetTabStripModel();
+   if (!model) {
+@@ -254,6 +306,14 @@ void WorkspaceTabController::CaptureFavi
+   if (!tab || entry_id.empty() || !TabHasRealFavicon(tab)) {
+     return;
+   }
++  // helium-fork M3.10: the stored icon is the *pinned page's*. A tab that has
++  // wandered off its pinned URL (a same-origin adoption, or just the user
++  // clicking around) shows its own icon live in the row, and the row falls
++  // back to this one when the tab closes -- so this one must not follow it.
++  const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
++  if (!entry || !IsTabAtPinnedUrl(tab, entry->url)) {
++    return;
++  }
+   const ui::ImageModel favicon =
+       tabs::TabData::FromTabInterface(tab).favicon;
+   if (!favicon.IsImage()) {
+@@ -374,9 +434,17 @@ void WorkspaceTabController::OnTabChange
+     return;
+   }
+ 
+-  // The entry's URL stays the one it was pinned at, but its title and icon
+-  // follow the page: an entry with no tab has to be recognisable after a
+-  // restart, and the last thing the user saw is what they will recognise.
++  // The entry's URL stays the one it was pinned at, and so do its title and
++  // icon: they follow the page only while the tab is *at* that URL. A tab
++  // that has navigated away shows its live title in the row (the sidebar
++  // reads it straight off the tab), and when it closes the row goes back to
++  // describing the pinned page -- "关闭网页的时候，网页的标题应该回到我最初 Pin
++  // 的那个 URL 的最新标题" (user 2026-08-23). Before M3.10 every navigation
++  // overwrote both, so a closed entry wore whatever page was last open.
++  const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
++  if (!entry || !IsTabAtPinnedUrl(tab, entry->url)) {
++    return;
++  }
+   const tabs::TabData data = tabs::TabData::FromTabInterface(tab);
+   service_->SetEntryTitle(entry_id, data.title);
+ 
+--- a/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ b/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -65,6 +65,18 @@ class WorkspaceTabController : public Ta
+   // URL. Each window keeps its own tab for an entry.
+   void OpenEntry(const std::string& entry_id);
+ 
++  // helium-fork M3.10: closes this window's tab for |entry_id|; the entry
++  // stays. The sidebar's ✕ on a pinned row means "close the page", never
++  // "remove" (user 2026-08-23 -- Dia's ✕ removes, ours deliberately does
++  // not). No-op when the entry has no tab here.
++  void CloseEntryTab(const std::string& entry_id);
++
++  // helium-fork M3.10: "Back to Pinned URL". Navigates this window's tab for
++  // |entry_id| back to the entry URL and activates it; with no tab open here
++  // it is the same as OpenEntry(). Unlike OpenEntry() it *does* navigate a
++  // live tab -- that is the whole point.
++  void ResetEntryTab(const std::string& entry_id);
++
+   // Puts the tab at |index| straight into Favorites: records (or adopts) the
+   // entry and binds the tab to it. Arc lets an ordinary tab become a favorite
+   // in one step; promoting an existing Pinned entry is
+--- a/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -612,8 +612,21 @@ void TabView::PaintTabBackgroundFill(
+                                     hovered)) {
+     cc::PaintFlags flags;
+     flags.setAntiAlias(true);
+-    if (ShouldUseNativeFrameMaterials() &&
+-        selection_state != TabStyle::TabSelectionState::kActive) {
++    if (hovered_ && !split_ &&
++        selection_state == TabStyle::TabSelectionState::kInactive) {
++      // helium-fork M3.10: a hovered row is Dia's white capsule (L243 on an
++      // L228 sidebar, 2026-08-23), painted straight from the hovered bit: Dia
++      // has no fade (sckrec at 120fps, first changed frame is the final
++      // value), and neither the glow tween nor the native-materials tint
++      // below ever reached a color this sidebar could show (the hover token
++      // is the sidebar's own color at 0.45 over itself; the glass tint is
++      // fainter still). Ahead of the materials branch on purpose: with the
++      // glass on by default, that branch used to win and the hover vanished.
++      // Selected-but-inactive rows keep upstream's blend.
++      flags.setColor(helium::GetSidebarHoverSurfaceColor(
++          GetColorProvider()->GetColor(kColorToolbar)));
++    } else if (ShouldUseNativeFrameMaterials() &&
++               selection_state != TabStyle::TabSelectionState::kActive) {
+       flags.setColor(
+           GetNativeFrameMaterialTabBackgroundColor(selection_state));
+     } else if (selection_state == TabStyle::TabSelectionState::kActive) {
+@@ -646,8 +659,10 @@ bool TabView::ShouldPaintTabBackgroundCo
+     bool has_custom_background,
+     bool hovered) const {
+   if (ShouldUseNativeFrameMaterials()) {
++    // helium-fork M3.10: `hovered_` as well as the tween value -- the capsule
++    // must be there on the very frame the pointer arrives, not 50ms later.
+     return selection_state == TabStyle::TabSelectionState::kActive ||
+-           GetHoverAnimationValue() > 0.0;
++           hovered_ || GetHoverAnimationValue() > 0.0;
+   }
+ 
+   if (selection_state == TabStyle::TabSelectionState::kActive) {
+@@ -830,7 +845,11 @@ bool TabView::IsChildVisible(const views
+                          (close_button_ && close_button_->HasFocus()));
+     }
+ 
+-    return active_ || hovered_ || HasFocus() ||
++    // helium-fork M3.10: the close button is a hover affordance on every row,
++    // the active one included -- Dia 2026-08-23: the active card shows its
++    // ✕ only under the pointer (user: 「鼠标移开的时候是不显示的」). Upstream
++    // kept it permanently on the active tab.
++    return hovered_ || HasFocus() ||
+            (close_button_ && close_button_->HasFocus());
+   }
+ 
+--- a/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
++++ b/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+@@ -9,7 +9,8 @@
+ #include <algorithm>
+ 
+ #include "base/functional/bind.h"
+-#include "base/time/time.h"
++#include "base/functional/callback_helpers.h"
++#include "base/numerics/safe_conversions.h"
+ #include "cc/paint/paint_flags.h"
+ #include "cc/paint/paint_shader.h"
+ #include "chrome/browser/favicon/favicon_service_factory.h"
+@@ -21,11 +22,15 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_favicon_image.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tabs/tab_data.h"
++#include "chrome/browser/ui/tabs/tab_style.h"
++#include "chrome/browser/ui/views/tabs/tab/tab_close_button.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_icon.h"
+ #include "chrome/browser/ui/views/tabs/tab/tab_title.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/favicon/core/favicon_service.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "third_party/skia/include/core/SkRRect.h"
++#include "ui/compositor/layer.h"
+ #include "ui/base/clipboard/scoped_clipboard_writer.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/accessibility/ax_enums.mojom-shared.h"
+@@ -42,6 +47,9 @@
+ #include "ui/gfx/image/image_skia.h"
+ #include "ui/gfx/image/image_skia_rep.h"
+ #include "ui/gfx/skia_paint_util.h"
++#include "ui/gfx/font_list.h"
++#include "ui/gfx/text_constants.h"
++#include "ui/views/controls/label.h"
+ #include "ui/views/controls/menu/menu_runner.h"
+ #include "ui/views/accessibility/view_accessibility.h"
+ #include "ui/views/style/typography.h"
+@@ -55,6 +63,7 @@ enum EntryMenuCommand {
+   kToggleFavorite,
+   kCopyAddress,
+   kRemove,
++  kReset,
+ };
+ 
+ // Row metrics. The capsule/row heights and radii are the ones the tab strip
+@@ -72,6 +81,35 @@ constexpr int kTitleSpacing = 6;
+ constexpr int kTitleTrailingInset = 8;
+ constexpr int kActiveOutlineThickness = 2;
+ 
++// helium-fork M3.10 (Dia 2026-08-23):
++// - the ✕ sits 9pt in from the row's right edge, the inset a Today row gives
++//   its own (tab_view.cc kHorizontalInset), which centres the 16pt glyph 17pt
++//   from the edge -- Dia's measured 17;
++// - the "/" drift mark follows the favicon box by 2pt and the title follows
++//   it by 4 (Dia: slash at x51, title at x59, favicon's right edge at 46.5);
++// - the hint line is one size down.
++//
++// M3.10-r1: everything about *where* the hint goes now comes from the
++// recording instead (arc_sidebar_surface.h kSidebarHint*): the row keeps its
++// height, the title rises 7pt, and the hint's baseline sits 14pt under the
++// title's. The favicon's fill is no longer a box round the icon either.
++constexpr int kCloseButtonTrailingInset = 9;
++constexpr int kDriftMarkLeadingSpacing = 2;
++constexpr int kDriftMarkTrailingSpacing = 4;
++constexpr int kHintFontSizeDelta = -2;
++
++// Where a label's baseline lands given where its box starts, and the inverse:
++// where the box has to start for the baseline to land on `baseline`. Label
++// reports its own baseline (insets included), and both boxes here are set to
++// the label's preferred height, so nothing re-centres underneath.
++int BaselineOf(const views::Label& label, int top) {
++  return top + label.GetBaseline();
++}
++
++int TopForBaseline(const views::Label& label, int baseline) {
++  return baseline - label.GetBaseline();
++}
++
+ // helium-fork: how coarse the selected card's blurred favicon is. Three cells
+ // across is what makes the wash a smooth field with a bright middle rather
+ // than a recognisable thumbnail -- the sole knob for how "blurred" it reads.
+@@ -188,12 +226,60 @@ WorkspaceEntryView::WorkspaceEntryView(D
+       profile_(profile) {
+   icon_ = AddChildView(std::make_unique<TabIcon>());
+   icon_->SetCanProcessEventsWithinSubtree(false);
++
++  // helium-fork M3.10: the drift mark -- Dia draws a thin gray "/" between
++  // the favicon and the title of a pinned tab that has left its pinned URL.
++  slash_label_ = AddChildView(std::make_unique<views::Label>(
++      u"/", views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
++  slash_label_->SetSkipSubpixelRenderingOpacityCheck(true);
++  slash_label_->SetCanProcessEventsWithinSubtree(false);
++  slash_label_->SetVisible(false);
++  // Both drift labels cross-fade into the row's own fill, so they have to be
++  // allowed to reach it: auto color readability blends any colour it thinks
++  // is too close to the background back toward legible, which pins the fade
++  // a quarter of the way in (probe 2026-08-23: the "/" only reached L118 of
++  // the L255 card it was fading into).
++  slash_label_->SetAutoColorReadabilityEnabled(false);
++
+   title_label_ = AddChildView(std::make_unique<TabTitle>());
+ 
+-  // helium-fork: 200ms, the same tween the sidebar's address row uses. The two
+-  // capsules carry the identical fill, so a pointer crossing from one to the
+-  // other must not make them look like different materials.
+-  hover_animation_.SetSlideDuration(base::Milliseconds(200));
++  // helium-fork M3.10: "Back to Pinned URL", one size down from the title;
++  // app copy, so secondary (the sidebar's rule for everything that is not a
++  // user's own tab title, user 2026-08-21).
++  hint_label_ = AddChildView(std::make_unique<views::Label>(
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL),
++      views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
++  hint_label_->SetFontList(
++      hint_label_->font_list().DeriveWithSizeDelta(kHintFontSizeDelta));
++  hint_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  hint_label_->SetElideBehavior(gfx::ELIDE_TAIL);
++  hint_label_->SetSkipSubpixelRenderingOpacityCheck(true);
++  hint_label_->SetCanProcessEventsWithinSubtree(false);
++  hint_label_->SetVisible(false);
++  hint_label_->SetAutoColorReadabilityEnabled(false);
++
++  // helium-fork M3.10: the same ✕ a Today row carries. Hidden until the row
++  // is both bound and under the pointer (UpdateCloseButton).
++  close_button_ = AddChildView(std::make_unique<TabCloseButton>(
++      base::BindRepeating(&WorkspaceEntryView::OnCloseButtonPressed,
++                          base::Unretained(this)),
++      base::DoNothingAs<void(views::View*, const ui::MouseEvent&)>()));
++  close_button_->SetVisible(false);
++
++  // The pointer moving onto the ✕ must not read as leaving the row, or the
++  // button would vanish from under it (TabView does the same).
++  SetNotifyEnterExitOnChild(true);
++
++  // Hover is instant: Dia's capsule snaps (sckrec at 120fps, 2026-08-23 --
++  // first changed frame is the final value, entering and leaving alike), and
++  // the user asked for Dia's feel down to the animations. The address row
++  // keeps its 200ms because its extension icons fade on that same tween.
++  //
++  // The one exception is the "Back to Pinned URL" morph, which is a change of
++  // shape rather than a hover fill: Dia runs it on ~180ms ease-in-out, fitted
++  // off their recording (arc_sidebar_surface.h).
++  hint_animation_.SetSlideDuration(helium::kSidebarHintDuration);
++  hint_animation_.SetTweenType(helium::kSidebarHintTween);
+ 
+   set_context_menu_controller(this);
+   GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+@@ -212,7 +298,7 @@ void WorkspaceEntryView::SetEntry(
+ 
+   if (title_ != entry.title) {
+     title_ = entry.title;
+-    title_label_->SetText(title_);
++    UpdateTitleText();
+     UpdateAccessibleState();
+   }
+   if (icon_changed) {
+@@ -222,6 +308,8 @@ void WorkspaceEntryView::SetEntry(
+   if (section_changed) {
+     // Capsules hide their title and are a different height entirely.
+     title_label_->SetVisible(!renders_as_capsule());
++    UpdateCloseButton();
++    UpdateDriftMarks();
+     InvalidateLayout();
+     SchedulePaint();
+   }
+@@ -234,6 +322,17 @@ void WorkspaceEntryView::SetBoundTab(tab
+   }
+   bound_tab_ = tab ? tab->GetWeakPtr() : nullptr;
+   ResolveIcon();
++  if (!bound_tab_) {
++    // Back to describing the pinned page: the live title and the drift state
++    // belonged to the tab that just went away (user 2026-08-23: the title
++    // must return to the pinned URL's, not stay on the page last visited).
++    live_title_.clear();
++    drifted_ = false;
++    SetIconHovered(false);
++  }
++  UpdateTitleText();
++  UpdateDriftMarks();
++  UpdateCloseButton();
+   if (was_bound != !!bound_tab_) {
+     // An unbound entry is drawn faded: it is a place the user can go, not a
+     // page that is open.
+@@ -251,14 +350,13 @@ void WorkspaceEntryView::SetActive(bool
+   }
+   active_ = active;
+   icon_->SetActiveState(active_);
++  UpdateCloseButtonColors();
+   SchedulePaint();
+ }
+ 
+ gfx::Size WorkspaceEntryView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
+-  const int height = GetLayoutConstant(
+-      renders_as_capsule() ? LayoutConstant::kVerticalTabFavoriteHeight
+-                           : LayoutConstant::kVerticalTabHeight);
++  const int height = RowHeight();
+   const int min_width = GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
+   const int width = available_size.width().is_bounded()
+                         ? std::max(min_width, available_size.width().value())
+@@ -268,7 +366,15 @@ gfx::Size WorkspaceEntryView::CalculateP
+ 
+ void WorkspaceEntryView::Layout(PassKey) {
+   const gfx::Size icon_size = icon_->GetPreferredSize();
+-  const int icon_y = (height() - icon_size.height()) / 2;
++  // The row is one height in every state (RowHeight), so the favicon, the "/"
++  // and the ✕ are simply centred in it and never move -- which matters here
++  // more than anywhere else, because the hint appears *because* the pointer
++  // is on the favicon (probe 2026-08-23: an earlier draft grew the row and
++  // shifted the icon 9pt out from under the pointer).
++  const int row_height =
++      renders_as_capsule() ? height()
++                           : GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
++  const int icon_y = (row_height - icon_size.height()) / 2;
+ 
+   if (renders_as_capsule()) {
+     // Centred icon, no text -- Arc's favorites grid.
+@@ -283,11 +389,91 @@ void WorkspaceEntryView::Layout(PassKey)
+   const int icon_x = kIconLeadingInset;
+   icon_->SetBounds(icon_x, icon_y, icon_size.width(), icon_size.height());
+ 
+-  const int title_x = icon_->bounds().right() + kTitleSpacing;
+-  const int title_width = std::max(0, width() - title_x - kTitleTrailingInset);
++  // The text column: [ "/" ] title, with the ✕ taking the right end when it
++  // is showing (Dia truncates the title under the ✕ rather than overlap it).
++  int text_x = icon_->bounds().right() + kTitleSpacing;
++  if (slash_label_->GetVisible()) {
++    const gfx::Size slash_size = slash_label_->GetPreferredSize();
++    const int slash_x = icon_->bounds().right() + kDriftMarkLeadingSpacing;
++    slash_label_->SetBounds(slash_x,
++                            (row_height - slash_size.height()) / 2,
++                            slash_size.width(), slash_size.height());
++    text_x = slash_label_->bounds().right() + kDriftMarkTrailingSpacing;
++  }
++  int text_right = width() - kTitleTrailingInset;
++  if (close_button_->GetVisible()) {
++    const gfx::Size close_size = close_button_->GetPreferredSize();
++    const int close_x =
++        width() - kCloseButtonTrailingInset - close_size.width();
++    close_button_->SetBounds(close_x,
++                             (row_height - close_size.height()) / 2,
++                             close_size.width(), close_size.height());
++    text_right = close_x - kTitleSpacing;
++  }
++  const int text_width = std::max(0, text_right - text_x);
++
++  // helium-fork M3.10-r1: the hint is paid for by the title moving up inside
++  // the row, not by the row growing (Dia: the card is y=16..81 in every one
++  // of the recording's 281 frames, and the title's ink moves 14px = 7pt).
+   const int title_height = title_label_->GetPreferredSize().height();
+-  title_label_->SetBounds(title_x, (height() - title_height) / 2, title_width,
+-                          title_height);
++  const int title_y =
++      (row_height - title_height) / 2 -
++      base::ClampRound(helium::kSidebarHintTitleRise * HintProgress());
++  title_label_->SetBounds(text_x, title_y, text_width, title_height);
++  if (HintVisible()) {
++    // Placed by baseline rather than by stacking preferred heights: two label
++    // boxes add up to more than the 34pt row, and what Dia actually spaces is
++    // the baselines (measured 27.5px @2x = 14pt apart).
++    const int hint_height = hint_label_->GetPreferredSize().height();
++    const int hint_y = TopForBaseline(
++        *hint_label_, BaselineOf(*title_label_, title_y) +
++                          helium::kSidebarHintBaselineGap);
++    hint_label_->SetBounds(text_x, hint_y, text_width, hint_height);
++  }
++}
++
++void WorkspaceEntryView::SetFolderMotion(bool in_motion, float opacity) {
++  if (folder_in_motion_ == in_motion && fade_opacity_ == opacity) {
++    return;
++  }
++  folder_in_motion_ = in_motion;
++  fade_opacity_ = opacity;
++  // The layer does two jobs, both only for the ~150ms the folder is moving:
++  //
++  //  - it is the only way to fade a whole subtree (the fill is ours, but the
++  //    favicon and both labels are child views);
++  //  - it takes the row out from under View::Paint's clip to its parent's
++  //    bounds. The sidebar's bounds are what the tween animates, so a
++  //    non-layered row is cut off at the opening folder's edge -- the rows
++  //    wipe in from the top and the active row's shadow (region-owned, never
++  //    clipped) is left hanging on its own. Dia clips nothing: its rows are
++  //    at their final places from the first frame and whatever is below
++  //    slides out from under them.
++  //
++  // A permanent layer would cost a texture per row and put every row above
++  // its non-layered siblings, so it goes again the moment the tween stops.
++  if (!in_motion && opacity >= 1.0f) {
++    if (layer()) {
++      DestroyLayer();
++    }
++    return;
++  }
++  if (!layer()) {
++    SetPaintToLayer();
++    layer()->SetFillsBoundsOpaquely(false);
++  }
++  layer()->SetOpacity(opacity);
++}
++
++int WorkspaceEntryView::RowHeight() const {
++  if (renders_as_capsule()) {
++    return GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
++  }
++  // One height in every state. M3.10 grew the row by a line for the hint and
++  // pushed everything below it down; Dia does not -- its card measured
++  // y=16..81 on all 281 frames of the 2026-08-23 recording, resting and
++  // hovered alike. The title moves up inside the row instead (Layout).
++  return GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
+ }
+ 
+ void WorkspaceEntryView::OnPaint(gfx::Canvas* canvas) {
+@@ -308,15 +494,15 @@ void WorkspaceEntryView::OnPaint(gfx::Ca
+ 
+   if (renders_as_capsule()) {
+     // helium-fork: a favorites card carries a fill at every moment, and the
+-    // sidebar's address row carries the identical one -- Arc draws both with
+-    // the same value (measured 2026-08-19: L129 on an L116 sidebar, L136 under
+-    // the pointer, and the selected card well clear of both at L167). Rest is
+-    // the state the user sees nearly always, so it is the one that had to stop
+-    // being "paint nothing".
++    // sidebar's address row carries the identical resting one -- Arc draws
++    // both with the same value (measured 2026-08-19: L129 on an L116 sidebar,
++    // and the selected card well clear of it at L167). Rest is the state the
++    // user sees nearly always, so it is the one that had to stop being "paint
++    // nothing". Under the pointer the card lifts toward white instead (Dia
++    // 2026-08-23, L215 -> L242), and it snaps there: no tween.
+     const SkColor sidebar = colors->GetColor(kColorToolbar);
+     fill.setColor(active_ ? helium::GetSidebarSelectedSurfaceColor(sidebar)
+-                          : helium::GetSidebarSurfaceColorAt(
+-                                sidebar, hover_animation_.GetCurrentValue()));
++                          : helium::GetSidebarSurfaceColor(sidebar, hovered_));
+     canvas->DrawRoundRect(bounds, radius, fill);
+     // The site's own color, blurred across the card. Only the selected one
+     // takes it: on every card at once the grid would read as wallpaper.
+@@ -333,10 +519,50 @@ void WorkspaceEntryView::OnPaint(gfx::Ca
+         colors->GetColor(kColorToolbar)));
+     canvas->DrawRoundRect(bounds, radius, fill);
+   } else if (hovered_) {
+-    fill.setColor(colors->GetColor(kColorTabBackgroundInactiveHoverFrameActive));
++    // helium-fork M3.10: Dia's hovered row is a white capsule (L243 on an
++    // L228 sidebar), the same fill a hovered favorites card gets, and it
++    // snaps -- Dia has no tween. The old token here was the sidebar's own
++    // color at 0.45 over itself: a hover nobody could see.
++    fill.setColor(helium::GetSidebarHoverSurfaceColor(
++        colors->GetColor(kColorToolbar)));
+     canvas->DrawRoundRect(bounds, radius, fill);
+   }
+ 
++  // helium-fork M3.10-r1: the fill under the favicon while the pointer rests
++  // on it and the row has drifted -- the "Back to Pinned URL" affordance.
++  //
++  // Dia does not box the icon: it darkens the whole left end of the row, from
++  // the row's left edge out past the favicon, the full row height, the row's
++  // own radius on the left two corners and a straight edge on the right
++  // (measured 2026-08-23; the first pass read a photo as a small rounded
++  // square, which is what the user pointed at). Painted here, under the
++  // children, so the icon sits on it.
++  const double hint_progress = HintProgress();
++  if (hint_progress > 0.0 && drifted_ && !renders_as_capsule()) {
++    const SkColor surface = RowSurfaceColor(colors);
++    cc::PaintFlags box;
++    box.setStyle(cc::PaintFlags::kFill_Style);
++    box.setAntiAlias(true);
++    // Fading toward the surface rather than by lowering the alpha: the row is
++    // one flat fill, so the box has to disappear into *it*, not into whatever
++    // happens to be behind the sidebar.
++    box.setColor(color_utils::AlphaBlend(
++        helium::GetSidebarIconHoverColor(surface), surface,
++        static_cast<float>(hint_progress)));
++    const gfx::RectF box_bounds(
++        0, 0,
++        icon_->bounds().right() + helium::kSidebarIconHoverBoxTrailing,
++        height());
++    const SkScalar r = static_cast<SkScalar>(radius);
++    // Top-left, top-right, bottom-right, bottom-left: only the two that meet
++    // the row's own left corners are rounded, so the fill ends on a straight
++    // vertical edge the way Dia's does.
++    const SkVector radii[4] = {{r, r}, {0, 0}, {0, 0}, {r, r}};
++    SkRRect rrect;
++    rrect.setRectRadii(gfx::RectFToSkRect(box_bounds), radii);
++    canvas->sk_canvas()->drawRRect(rrect, box);
++  }
++
+   // The selected capsule's ring. Unselected ones used to carry a hairline so
+   // an empty grid slot still read as a slot; the resting fill above does that
+   // job now, and Arc draws no outline on them either.
+@@ -423,26 +649,185 @@ bool WorkspaceEntryView::OnMousePressed(
+ }
+ 
+ void WorkspaceEntryView::OnMouseReleased(const ui::MouseEvent& event) {
+-  if (event.IsOnlyLeftMouseButton() && HitTestPoint(event.location()) &&
+-      delegate_) {
+-    delegate_->OnEntryActivated(entry_id_);
++  if (!event.IsOnlyLeftMouseButton() || !HitTestPoint(event.location()) ||
++      !delegate_) {
++    return;
+   }
++  // helium-fork M3.10: on a drifted row the favicon is the "Back to Pinned
++  // URL" button (Dia); everywhere else the row activates as before. A row at
++  // home treats its favicon like any other point -- Dia shows no affordance
++  // there either (measured 2026-08-23).
++  if (drifted_ && !renders_as_capsule() &&
++      icon_->bounds().Contains(event.location())) {
++    delegate_->OnEntryResetRequested(entry_id_);
++    return;
++  }
++  delegate_->OnEntryActivated(entry_id_);
++}
++
++void WorkspaceEntryView::OnMouseMoved(const ui::MouseEvent& event) {
++  SetIconHovered(drifted_ && !renders_as_capsule() &&
++                 icon_->bounds().Contains(event.location()));
+ }
+ 
+ void WorkspaceEntryView::OnMouseEntered(const ui::MouseEvent& event) {
+   hovered_ = true;
+-  hover_animation_.Show();
++  UpdateCloseButton();
++  UpdateCloseButtonColors();
++  SchedulePaint();
+ }
+ 
+ void WorkspaceEntryView::OnMouseExited(const ui::MouseEvent& event) {
+   hovered_ = false;
+-  hover_animation_.Hide();
++  SetIconHovered(false);
++  UpdateCloseButton();
++  UpdateCloseButtonColors();
++  SchedulePaint();
+ }
+ 
+-void WorkspaceEntryView::AnimationProgressed(const gfx::Animation* animation) {
++void WorkspaceEntryView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  UpdateCloseButtonColors();
++  // The hint and the "/" carry concrete colors (they cross-fade against the
++  // row's fill), so nothing refreshes them on a theme change but this.
++  UpdateDriftLabelColors();
++}
++
++void WorkspaceEntryView::SetLiveState(const std::u16string& live_title,
++                                      bool drifted) {
++  if (!bound_tab_) {
++    return;
++  }
++  const bool title_changed = live_title_ != live_title;
++  if (!title_changed && drifted_ == drifted) {
++    return;
++  }
++  live_title_ = live_title;
++  drifted_ = drifted;
++  if (title_changed) {
++    UpdateTitleText();
++  }
++  if (!drifted_) {
++    SetIconHovered(false);
++  }
++  UpdateDriftMarks();
++}
++
++void WorkspaceEntryView::UpdateTitleText() {
++  // A bound tab that has no title yet (still loading) keeps the entry's own
++  // rather than flashing blank.
++  const std::u16string& text =
++      (bound_tab_ && !live_title_.empty()) ? live_title_ : title_;
++  if (title_label_->GetText() != text) {
++    title_label_->SetText(text);
++  }
++}
++
++void WorkspaceEntryView::UpdateCloseButton() {
++  // Only a row with a page to close, and only under the pointer (user
++  // 2026-08-23: 「只有被打开的标签才有这个 X」).
++  const bool show = !renders_as_capsule() && bound_tab_ && hovered_;
++  if (close_button_->GetVisible() != show) {
++    close_button_->SetVisible(show);
++    // The title gives up its right end to the button.
++    InvalidateLayout();
++  }
++}
++
++void WorkspaceEntryView::UpdateCloseButtonColors() {
++  const ui::ColorProvider* colors = GetColorProvider();
++  if (!colors || !close_button_) {
++    return;
++  }
++  close_button_->SetColors(TabStyle::Get()->CalculateTargetColors(
++      active_ ? TabStyle::TabSelectionState::kActive
++              : TabStyle::TabSelectionState::kInactive,
++      active_, hovered_, /*frame_active=*/true, colors));
++}
++
++void WorkspaceEntryView::OnCloseButtonPressed(const ui::Event& event) {
++  if (delegate_) {
++    delegate_->OnEntryCloseRequested(entry_id_);
++  }
++}
++
++void WorkspaceEntryView::UpdateDriftMarks() {
++  const bool drifted = drifted_ && bound_tab_ && !renders_as_capsule();
++  // The "/" keeps its slot for as long as the row is drifted and only
++  // cross-fades out under the pointer. That is what holds the title's x
++  // still through the morph -- Dia's title is at the same x in both states.
++  slash_label_->SetVisible(drifted);
++  if (drifted && icon_hovered_) {
++    hint_animation_.Show();
++  } else {
++    hint_animation_.Hide();
++  }
++  ApplyHintProgress();
++}
++
++void WorkspaceEntryView::SetIconHovered(bool icon_hovered) {
++  if (icon_hovered_ == icon_hovered) {
++    return;
++  }
++  icon_hovered_ = icon_hovered;
++  UpdateDriftMarks();
++}
++
++// Everything the morph touches, re-read off the one tween value.
++void WorkspaceEntryView::ApplyHintProgress() {
++  hint_label_->SetVisible(HintProgress() > 0.0);
++  UpdateDriftLabelColors();
++  InvalidateLayout();
+   SchedulePaint();
+ }
+ 
++void WorkspaceEntryView::AnimationProgressed(const gfx::Animation* animation) {
++  if (animation == &hint_animation_) {
++    ApplyHintProgress();
++  }
++}
++
++void WorkspaceEntryView::AnimationEnded(const gfx::Animation* animation) {
++  if (animation == &hint_animation_) {
++    ApplyHintProgress();
++  }
++}
++
++SkColor WorkspaceEntryView::RowSurfaceColor(
++    const ui::ColorProvider* colors) const {
++  const SkColor sidebar = colors->GetColor(kColorToolbar);
++  if (renders_as_capsule()) {
++    return active_ ? helium::GetSidebarSelectedSurfaceColor(sidebar)
++                   : helium::GetSidebarSurfaceColor(sidebar, hovered_);
++  }
++  if (active_) {
++    return helium::GetSidebarFloatingCardColor(sidebar);
++  }
++  // A plain row paints no fill of its own at rest -- the sidebar shows.
++  return hovered_ ? helium::GetSidebarHoverSurfaceColor(sidebar) : sidebar;
++}
++
++void WorkspaceEntryView::UpdateDriftLabelColors() {
++  const ui::ColorProvider* colors = GetColorProvider();
++  if (!colors) {
++    return;
++  }
++  const SkColor surface = RowSurfaceColor(colors);
++  const SkColor ink = colors->GetColor(ui::kColorLabelForegroundSecondary);
++  const float progress = static_cast<float>(HintProgress());
++  hint_label_->SetEnabledColor(color_utils::AlphaBlend(ink, surface, progress));
++  slash_label_->SetEnabledColor(
++      color_utils::AlphaBlend(ink, surface, 1.0f - progress));
++}
++
++double WorkspaceEntryView::HintProgress() const {
++  return hint_animation_.GetCurrentValue();
++}
++
++bool WorkspaceEntryView::HintVisible() const {
++  return HintProgress() > 0.0;
++}
++
+ void WorkspaceEntryView::ShowContextMenuForViewImpl(
+     views::View* source,
+     const gfx::Point& point,
+@@ -450,6 +835,10 @@ void WorkspaceEntryView::ShowContextMenu
+   menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
+   menu_model_->AddItemWithStringId(EntryMenuCommand::kOpen,
+                                    IDS_HELIUM_WS_ENTRY_MENU_OPEN);
++  // helium-fork M3.10: the same action as clicking a drifted row's favicon,
++  // with a label (user 2026-08-23); disabled while the row is at home.
++  menu_model_->AddItemWithStringId(EntryMenuCommand::kReset,
++                                   IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL);
+   menu_model_->AddItemWithStringId(
+       EntryMenuCommand::kToggleFavorite,
+       renders_as_capsule() ? IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES
+@@ -469,6 +858,9 @@ void WorkspaceEntryView::ShowContextMenu
+ }
+ 
+ bool WorkspaceEntryView::IsCommandIdEnabled(int command_id) const {
++  if (command_id == EntryMenuCommand::kReset) {
++    return drifted_ && bound_tab_ && !renders_as_capsule();
++  }
+   if (command_id == EntryMenuCommand::kToggleFavorite &&
+       !renders_as_capsule()) {
+     return delegate_ && delegate_->CanEntryBecomeFavorite(entry_id_);
+@@ -496,6 +888,9 @@ void WorkspaceEntryView::ExecuteCommand(
+       // Leaves any open tab alone; it simply becomes an ordinary tab again.
+       delegate_->OnEntryRemoved(entry_id_);
+       break;
++    case EntryMenuCommand::kReset:
++      delegate_->OnEntryResetRequested(entry_id_);
++      break;
+     default:
+       break;
+   }
+--- a/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
++++ b/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+@@ -15,13 +15,14 @@
+ #include "components/favicon_base/favicon_types.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/gfx/animation/slide_animation.h"
++#include "ui/views/animation/animation_delegate_views.h"
+ #include "ui/gfx/image/image_skia.h"
+ #include "ui/menus/simple_menu_model.h"
+-#include "ui/views/animation/animation_delegate_views.h"
+ #include "ui/views/context_menu_controller.h"
+ #include "ui/views/view.h"
+ 
+ class Profile;
++class TabCloseButton;
+ class TabIcon;
+ class TabTitle;
+ 
+@@ -29,7 +30,13 @@ namespace tabs {
+ class TabInterface;
+ }  // namespace tabs
+ 
++namespace ui {
++class ColorProvider;
++class Event;
++}  // namespace ui
++
+ namespace views {
++class Label;
+ class MenuRunner;
+ }  // namespace views
+ 
+@@ -40,12 +47,22 @@ class MenuRunner;
+ //
+ // Two presentations, matching Arc: Favorites are a fixed-height capsule with
+ // a centred icon and no text, Pinned entries are a full-width row with icon
+-// and title. Only TabIcon and TabTitle are reused from the tab strip;
+-// TabView::OnPaint is deliberately not, because it pulls in TabStyle,
+-// GlowHoverController, theme-image lookups and the drag plumbing.
++// and title. Only TabIcon, TabTitle and TabCloseButton are reused from the
++// tab strip; TabView::OnPaint is deliberately not, because it pulls in
++// TabStyle, GlowHoverController, theme-image lookups and the drag plumbing.
++//
++// helium-fork M3.10 (Dia, 2026-08-23): hover is instant (Dia has no tween),
++// a bound row shows its ✕ only under the pointer, and a row whose tab has
++// left its pinned URL wears a "/" after the favicon and offers "Back to
++// Pinned URL" when the pointer rests on that favicon.
++//
++// M3.10-r1: that last one is the row's only motion. Dia morphs into it over
++// 180ms -- the title rises, the hint and the favicon's fill come in, the "/"
++// goes out, all on one tween (arc_sidebar_surface.h) -- while the row's
++// height never changes. The capsule fill underneath still snaps.
+ class WorkspaceEntryView : public views::View,
+-                           public views::AnimationDelegateViews,
+                            public views::ContextMenuController,
++                           public views::AnimationDelegateViews,
+                            public ui::SimpleMenuModel::Delegate {
+   METADATA_HEADER(WorkspaceEntryView, views::View)
+ 
+@@ -55,6 +72,10 @@ class WorkspaceEntryView : public views:
+     virtual void OnEntryActivated(const std::string& entry_id) = 0;
+     virtual void OnEntryToggleFavorite(const std::string& entry_id) = 0;
+     virtual void OnEntryRemoved(const std::string& entry_id) = 0;
++    // The row's ✕: close the entry's tab in this window, keep the entry.
++    virtual void OnEntryCloseRequested(const std::string& entry_id) = 0;
++    // "Back to Pinned URL": navigate the entry's tab back to the entry URL.
++    virtual void OnEntryResetRequested(const std::string& entry_id) = 0;
+     // False when promoting would exceed the favorites cap.
+     virtual bool CanEntryBecomeFavorite(const std::string& entry_id) const = 0;
+ 
+@@ -73,23 +94,53 @@ class WorkspaceEntryView : public views:
+   void SetBoundTab(tabs::TabInterface* tab);
+   // Whether this window's active tab is the entry's tab.
+   void SetActive(bool active);
++  // What the bound tab shows right now: its title, and whether it has drifted
++  // off the entry's pinned URL. Ignored while unbound (the row then describes
++  // the pinned page from the entry's own title). The sidebar calls this on
++  // every tab change, so it must stay cheap when nothing moved.
++  // |drifted| is helium_workspace::IsTabDriftedFromPinnedUrl(), *not*
++  // !IsTabAtPinnedUrl(): a tab still loading its first page has not drifted.
++  void SetLiveState(const std::u16string& live_title, bool drifted);
+ 
+   const std::string& entry_id() const { return entry_id_; }
++  const GURL& url() const { return url_; }
++  tabs::TabInterface* bound_tab() const { return bound_tab_.get(); }
+   bool active() const { return active_; }
+   bool renders_as_capsule() const {
+     return section_ == helium_workspace::WorkspaceEntry::Section::kFavorite;
+   }
++  // helium-fork M3.10-r1: what the folder's tween is doing to this row --
++  // whether it is running at all, and how opaque to paint the row while it
++  // does (a row the folder is closing over fades where it stands, Dia). Both
++  // are carried by a layer that exists only for those ~150ms: the opacity
++  // needs one, and so does staying visible at all, because View::Paint clips
++  // children to the sidebar's own bounds and those are what the tween is
++  // animating. Without it, opening the folder wipes its rows in from the top
++  // instead of showing them at their final places at once.
++  void SetFolderMotion(bool in_motion, float opacity);
++
++  // The height the sidebar should give this row. One value per section, and
++  // nothing moves it: the "Back to Pinned URL" hint is paid for by the title
++  // rising inside the row the way Dia does it, so no row above or below ever
++  // shifts for it.
++  int RowHeight() const;
+ 
+   // views::View:
+   gfx::Size CalculatePreferredSize(
+       const views::SizeBounds& available_size) const override;
+   void Layout(PassKey) override;
+   void OnPaint(gfx::Canvas* canvas) override;
++  void OnThemeChanged() override;
+   bool OnMousePressed(const ui::MouseEvent& event) override;
+   void OnMouseReleased(const ui::MouseEvent& event) override;
++  void OnMouseMoved(const ui::MouseEvent& event) override;
+   void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
+ 
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
+   // views::ContextMenuController:
+   void ShowContextMenuForViewImpl(
+       views::View* source,
+@@ -100,9 +151,6 @@ class WorkspaceEntryView : public views:
+   bool IsCommandIdEnabled(int command_id) const override;
+   void ExecuteCommand(int command_id, int event_flags) override;
+ 
+-  // gfx::AnimationDelegate:
+-  void AnimationProgressed(const gfx::Animation* animation) override;
+-
+  private:
+   // Live tab -> stored PNG -> favicon service -> default globe. The last step
+   // is not optional: TabIcon paints nothing for an empty ImageModel.
+@@ -111,6 +159,29 @@ class WorkspaceEntryView : public views:
+   void ApplyIcon(const ui::ImageModel& favicon);
+   void UpdateAccessibleState();
+ 
++  // The title label shows the live tab's title while bound, the entry's own
++  // (pinned-page) title otherwise.
++  void UpdateTitleText();
++  // The ✕ exists only for a bound row under the pointer.
++  void UpdateCloseButton();
++  void UpdateCloseButtonColors();
++  void OnCloseButtonPressed(const ui::Event& event);
++  // The "/" after the favicon (drifted) and the hint line (drifted + pointer
++  // on the favicon). Relayouts the sidebar when the hint comes or goes.
++  void UpdateDriftMarks();
++  void SetIconHovered(bool icon_hovered);
++  // 0 at rest, 1 with the hint fully in, and every value between while the
++  // morph runs. Everything the morph touches reads this one number.
++  double HintProgress() const;
++  bool HintVisible() const;
++  // Re-reads that number into every element it drives.
++  void ApplyHintProgress();
++  // The hint and the "/" cross-fade against whatever the row is painted with,
++  // which is why they are set as concrete colors rather than color ids and
++  // have to be refreshed on a theme change.
++  SkColor RowSurfaceColor(const ui::ColorProvider* colors) const;
++  void UpdateDriftLabelColors();
++
+   // helium-fork: keeps the selected capsule's accent in step with the icon.
+   // Every path that reaches TabIcon comes through here first, so a card can
+   // never end up wearing the previous site's colors.
+@@ -133,11 +204,16 @@ class WorkspaceEntryView : public views:
+       helium_workspace::WorkspaceEntry::Section::kPinned;
+ 
+   base::WeakPtr<tabs::TabInterface> bound_tab_;
++  // What the bound tab currently shows; empty / false while unbound.
++  std::u16string live_title_;
++  bool drifted_ = false;
++
+   bool active_ = false;
+   bool hovered_ = false;
+-  // helium-fork: the hover fill fades rather than snapping, at the same 200ms
+-  // as the address row's capsule -- one pointer move, one visual change.
+-  gfx::SlideAnimation hover_animation_{this};
++  bool folder_in_motion_ = false;
++  float fade_opacity_ = 1.0f;
++  // The pointer is on the favicon of a drifted row.
++  bool icon_hovered_ = false;
+   // helium-fork: the favicon boxed down to a few pixels, which is what a heavy
+   // blur of it amounts to; scaled back up under the capsule it reproduces
+   // Arc's soft color field. Empty when the icon has no color worth taking, and
+@@ -150,7 +226,13 @@ class WorkspaceEntryView : public views:
+   gfx::ImageSkia ring_accent_;
+ 
+   raw_ptr<TabIcon> icon_ = nullptr;
++  raw_ptr<views::Label> slash_label_ = nullptr;
+   raw_ptr<TabTitle> title_label_ = nullptr;
++  raw_ptr<views::Label> hint_label_ = nullptr;
++  raw_ptr<TabCloseButton> close_button_ = nullptr;
++
++  // The "Back to Pinned URL" morph. Not the capsule's hover, which snaps.
++  gfx::SlideAnimation hint_animation_{this};
+ 
+   std::unique_ptr<ui::SimpleMenuModel> menu_model_;
+   std::unique_ptr<views::MenuRunner> menu_runner_;
+--- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -10,6 +10,7 @@
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
++#include "base/numerics/safe_conversions.h"
+ #include "cc/paint/paint_flags.h"
+ #include "cc/paint/path_effect.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -17,6 +18,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_grid_math.h"
++#include "chrome/browser/ui/helium_workspace/workspace_pin_semantics.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+@@ -31,10 +33,12 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/vector_icons/vector_icons.h"
++#include "content/public/browser/web_contents.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/models/image_model.h"
+ #include "ui/gfx/canvas.h"
++#include "ui/gfx/scoped_canvas.h"
+ #include "ui/views/controls/image_view.h"
+ #include "ui/views/controls/label.h"
+ #include "ui/views/layout/box_layout.h"
+@@ -64,11 +68,29 @@ int FavoriteGridGap() {
+   return GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteGridGap);
+ }
+ 
+-// Arc space header row metrics.
+-constexpr int kSpaceHeaderHeight = 28;
++// helium-fork M3.10: the space header is the pinned rows' folder head, laid
++// out like Dia's (measured 2026-08-23, live window): the folder's icon sits
++// in the same column as a Today row's favicon and its name in the same column
++// as a row's title (Dia: emoji x14.5, name x38.5 -- the top-level items
++// share one grid), the chevron follows the name rather than hugging the
++// right edge, and the row is as tall as a tab row so its hover capsule is
++// the same shape. The pinned rows inside are indented one step (Dia's
++// children: card from x22, favicon x31, title x51 on a header whose emoji
++// is at x14.5 -- a 16pt step).
++//
++// 9 = a row's visual favicon x (kIconLeadingInset 6 + TabIcon's 3pt border);
++// 34 = a row's title x (9 + 16 + 9).
++constexpr int kSpaceHeaderIconSize = 16;
++constexpr int kSpaceHeaderIconLeadingInset = 9;
++constexpr int kSpaceHeaderTitleX = 34;
+ constexpr int kSpaceHeaderChevronSize = 16;
+ constexpr int kSpaceHeaderInnerSpacing = 4;
+-constexpr int kSpaceHeaderHorizontalInset = 6;
++constexpr int kSpaceHeaderTrailingInset = 8;
++constexpr int kFolderChildIndent = 16;
++
++int SpaceHeaderHeight() {
++  return GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
++}
+ 
+ int GridPerRowMax(int available_width, int min_child_width) {
+   const int gap = FavoriteGridGap();
+@@ -142,51 +164,151 @@ class FavoritesEmptyPlaceholder : public
+ BEGIN_METADATA(FavoritesEmptyPlaceholder)
+ END_METADATA
+ 
++// helium-fork M3.10-r1: the folder's chevron.
++//
++// Dia turns it rather than swapping it, on the same curve as the folder
++// itself (recording 2026-08-23), so it paints one icon under a rotation
++// instead of being an ImageView with two images.
++class WorkspaceFolderChevron : public views::View {
++  METADATA_HEADER(WorkspaceFolderChevron, views::View)
++
++ public:
++  WorkspaceFolderChevron() { SetCanProcessEventsWithinSubtree(false); }
++
++  // 0 is open (the chevron points down), 1 is closed (it points right), and
++  // the folder tween drives everything in between.
++  void SetProgress(double progress) {
++    if (progress_ == progress) {
++      return;
++    }
++    progress_ = progress;
++    SchedulePaint();
++  }
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override {
++    const ui::ColorProvider* colors = GetColorProvider();
++    if (!colors) {
++      return;
++    }
++    const gfx::ImageSkia icon =
++        ui::ImageModel::FromVectorIcon(
++            vector_icons::kKeyboardArrowRightFlippableIcon,
++            ui::kColorLabelForegroundSecondary, kSpaceHeaderChevronSize)
++            .Rasterize(colors);
++    gfx::ScopedCanvas scoped(canvas);
++    canvas->Translate(gfx::Vector2d(width() / 2, height() / 2));
++    // The right-pointing glyph turned a quarter turn clockwise is the
++    // down-pointing one, so "open" is a full 90 degrees from where the
++    // asset starts.
++    canvas->sk_canvas()->rotate(90.0f * (1.0f - progress_));
++    canvas->DrawImageInt(icon, -icon.width() / 2, -icon.height() / 2);
++  }
++
++ private:
++  double progress_ = 0.0;
++};
++
++BEGIN_METADATA(WorkspaceFolderChevron)
++END_METADATA
++
+ // Arc's space name row, which always sits between the Favorites grid and the
+ // full-row pinned section. It is permanent even when the section below it is
+ // empty, so the pinned section always has a visible upper edge. Clicking
+ // anywhere on the row collapses/expands the rows below.
++//
++// helium-fork M3.10: the user treats this row as the pinned rows' folder
++// ("现在暂时就把 untitled 当做一个文件夹", 2026-08-23; real folders come later),
++// so it wears Dia's folder-head layout -- icon, name, chevron after the name
++// -- and the same white hover capsule as a tab row. Dia itself hovers a
++// folder head in a *darker* gray with a hairline; the user explicitly asked
++// for the row treatment instead.
+ class WorkspaceSpaceHeader : public views::View {
+   METADATA_HEADER(WorkspaceSpaceHeader, views::View)
+ 
+  public:
+   explicit WorkspaceSpaceHeader(base::RepeatingClosure on_toggled)
+       : on_toggled_(std::move(on_toggled)) {
+-    auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
+-        views::BoxLayout::Orientation::kHorizontal,
+-        gfx::Insets::VH(0, kSpaceHeaderHorizontalInset),
+-        kSpaceHeaderInnerSpacing));
+-    layout->set_cross_axis_alignment(
+-        views::BoxLayout::CrossAxisAlignment::kCenter);
++    icon_ = AddChildView(std::make_unique<views::ImageView>());
++    icon_->SetImage(ui::ImageModel::FromVectorIcon(
++        vector_icons::kFolderFlippableIcon, ui::kColorLabelForegroundSecondary,
++        kSpaceHeaderIconSize));
++    icon_->SetCanProcessEventsWithinSubtree(false);
+ 
+-    chevron_ = AddChildView(std::make_unique<views::ImageView>());
+-
+-    auto* title = AddChildView(std::make_unique<views::Label>(
++    title_ = AddChildView(std::make_unique<views::Label>(
+         l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DEFAULT_NAME),
+         views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
+-    title->SetSkipSubpixelRenderingOpacityCheck(true);
+-    title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+-    layout->SetFlexForView(title, 1);
++    title_->SetSkipSubpixelRenderingOpacityCheck(true);
++    title_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    title_->SetElideBehavior(gfx::ELIDE_TAIL);
++    title_->SetCanProcessEventsWithinSubtree(false);
++
++    chevron_ = AddChildView(std::make_unique<WorkspaceFolderChevron>());
+ 
+     GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+     GetViewAccessibility().SetName(
+         l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DEFAULT_NAME));
++  }
+ 
+-    UpdateChevron();
++  // 0 open, 1 closed -- the folder tween's own value, so the chevron turns
++  // with the rows rather than flipping at one end of it.
++  void SetCollapsedProgress(double collapsed) {
++    chevron_->SetProgress(collapsed);
+   }
+ 
+-  void SetCollapsed(bool collapsed) {
+-    if (collapsed_ == collapsed) {
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override {
++    const int width = available_size.width().is_bounded()
++                          ? available_size.width().value()
++                          : GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
++    return gfx::Size(width, SpaceHeaderHeight());
++  }
++
++  void Layout(PassKey) override {
++    icon_->SetBounds(kSpaceHeaderIconLeadingInset,
++                     (height() - kSpaceHeaderIconSize) / 2,
++                     kSpaceHeaderIconSize, kSpaceHeaderIconSize);
++    // The name takes only what it needs so the chevron can follow it; what
++    // it may take stops short of the chevron and the trailing inset.
++    const gfx::Size title_size = title_->GetPreferredSize();
++    const int title_max = std::max(
++        0, width() - kSpaceHeaderTitleX - kSpaceHeaderInnerSpacing -
++               kSpaceHeaderChevronSize - kSpaceHeaderTrailingInset);
++    const int title_width = std::min(title_size.width(), title_max);
++    title_->SetBounds(kSpaceHeaderTitleX, (height() - title_size.height()) / 2,
++                      title_width, title_size.height());
++    chevron_->SetBounds(title_->bounds().right() + kSpaceHeaderInnerSpacing,
++                        (height() - kSpaceHeaderChevronSize) / 2,
++                        kSpaceHeaderChevronSize, kSpaceHeaderChevronSize);
++  }
++
++  void OnPaint(gfx::Canvas* canvas) override {
++    views::View::OnPaint(canvas);
++    const ui::ColorProvider* colors = GetColorProvider();
++    if (!hovered_ || !colors) {
+       return;
+     }
+-    collapsed_ = collapsed;
+-    UpdateChevron();
++    // The row capsule, same fill and radius as a hovered pinned row; instant
++    // like every other sidebar hover (Dia has no tween).
++    cc::PaintFlags fill;
++    fill.setStyle(cc::PaintFlags::kFill_Style);
++    fill.setAntiAlias(true);
++    fill.setColor(helium::GetSidebarHoverSurfaceColor(
++        colors->GetColor(kColorToolbar)));
++    canvas->DrawRoundRect(
++        gfx::RectF(GetLocalBounds()),
++        GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius), fill);
+   }
+ 
+-  // views::View:
+-  void OnThemeChanged() override {
+-    views::View::OnThemeChanged();
+-    UpdateChevron();
++  void OnMouseEntered(const ui::MouseEvent& event) override {
++    hovered_ = true;
++    SchedulePaint();
++  }
++
++  void OnMouseExited(const ui::MouseEvent& event) override {
++    hovered_ = false;
++    SchedulePaint();
+   }
+ 
+   bool OnMousePressed(const ui::MouseEvent& event) override {
+@@ -200,16 +322,11 @@ class WorkspaceSpaceHeader : public view
+   }
+ 
+  private:
+-  void UpdateChevron() {
+-    chevron_->SetImage(ui::ImageModel::FromVectorIcon(
+-        collapsed_ ? vector_icons::kKeyboardArrowRightFlippableIcon
+-                   : vector_icons::kKeyboardArrowDownIcon,
+-        ui::kColorLabelForegroundSecondary, kSpaceHeaderChevronSize));
+-  }
+-
+   const base::RepeatingClosure on_toggled_;
+-  raw_ptr<views::ImageView> chevron_ = nullptr;
+-  bool collapsed_ = false;
++  raw_ptr<views::ImageView> icon_ = nullptr;
++  raw_ptr<views::Label> title_ = nullptr;
++  raw_ptr<WorkspaceFolderChevron> chevron_ = nullptr;
++  bool hovered_ = false;
+ };
+ 
+ BEGIN_METADATA(WorkspaceSpaceHeader)
+@@ -217,7 +334,19 @@ END_METADATA
+ 
+ }  // namespace
+ 
+-WorkspaceSidebarView::WorkspaceSidebarView() {
++WorkspaceSidebarView::WorkspaceSidebarView()
++    : views::AnimationDelegateViews(this) {
++  // helium-fork M3.10-r1: the folder's motion. Both numbers are Dia's, fitted
++  // off the user's 2026-08-23 recording (arc_sidebar_surface.h): 150ms for
++  // the open/close itself, and a shorter linear 90ms for the rows the close
++  // is taking away, which Dia fades where they stand.
++  folder_animation_.SetSlideDuration(helium::kSidebarFolderDuration);
++  folder_animation_.SetTweenType(helium::kSidebarFolderTween);
++  folder_fade_animation_.SetSlideDuration(
++      helium::kSidebarFolderDuration * helium::kSidebarFolderFadeFraction);
++  folder_fade_animation_.SetTweenType(gfx::Tween::LINEAR);
++  folder_fade_animation_.Reset(1.0);
++
+   placeholder_ = AddChildView(std::make_unique<FavoritesEmptyPlaceholder>());
+   space_header_ = AddChildView(std::make_unique<WorkspaceSpaceHeader>(
+       base::BindRepeating(&WorkspaceSidebarView::ToggleSpaceCollapsed,
+@@ -290,25 +419,101 @@ void WorkspaceSidebarView::LoadSpaceColl
+     return;
+   }
+   space_collapsed_ = collapsed;
++  // Restoring a pref is not a toggle: no tween, and the chevron starts where
++  // it belongs.
++  folder_animation_.Reset(1.0);
++  folder_prev_layout_valid_ = false;
+   if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
+-    header->SetCollapsed(space_collapsed_);
++    header->SetCollapsedProgress(space_collapsed_ ? 1.0 : 0.0);
+   }
+   InvalidateLayout();
+ }
+ 
+ void WorkspaceSidebarView::ToggleSpaceCollapsed() {
++  // The state being left has to be snapshotted before anything else moves:
++  // SyncBindings() below rewrites surfaced_entry_ids_, so recomputing the old
++  // layout afterwards would give a different -- and one row shorter -- answer
++  // than what is on screen, and the animation would start with a jump.
++  folder_prev_layout_ = ComputeLayout(width(), space_collapsed_);
++  folder_prev_layout_valid_ = true;
++
+   space_collapsed_ = !space_collapsed_;
+-  if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
+-    header->SetCollapsed(space_collapsed_);
+-  }
+   if (PrefService* prefs = GetProfilePrefs()) {
+     prefs->SetBoolean(helium_workspace::prefs::kWorkspaceSpaceCollapsed,
+                       space_collapsed_);
+   }
++  // Collapsing surfaces the active row; opening clears the surfaced set.
++  SyncBindings();
++
++  // Always driven 0 -> 1, "the state we left" -> "the state we are going to",
++  // so the curve is the same in both directions the way Dia's is.
++  folder_animation_.Reset(0.0);
++  folder_animation_.Show();
++  // Opening puts every row at its final place, fully opaque, on the first
++  // frame -- Dia does not fade them in. Closing is the only direction with a
++  // fade.
++  folder_fade_animation_.Reset(1.0);
++  if (space_collapsed_) {
++    folder_fade_animation_.Hide();
++  }
++
++  PreferredSizeChanged();
++  InvalidateLayout();
++}
++
++void WorkspaceSidebarView::AnimationProgressed(const gfx::Animation* animation) {
++  if (animation != &folder_animation_ &&
++      animation != &folder_fade_animation_) {
++    return;
++  }
++  if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
++    // The tween runs from the state we left, so "how closed the folder is"
++    // is the value itself when closing and its complement when opening.
++    const double t = folder_animation_.GetCurrentValue();
++    header->SetCollapsedProgress(space_collapsed_ ? t : 1.0 - t);
++  }
++  // The height is what actually moves, and it is this view's preferred size:
++  // asking for it again on every frame is what slides everything below the
++  // sidebar.
+   PreferredSizeChanged();
+   InvalidateLayout();
+ }
+ 
++void WorkspaceSidebarView::AnimationEnded(const gfx::Animation* animation) {
++  if (animation == &folder_animation_) {
++    folder_prev_layout_valid_ = false;
++  }
++  AnimationProgressed(animation);
++}
++
++void WorkspaceSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
++                                          int index,
++                                          TabChangeType change_type) {
++  if (!tab) {
++    return;
++  }
++  for (WorkspaceEntryView* view : ordered_entries_) {
++    if (view->bound_tab() == tab) {
++      PushLiveState(view, tab);
++      return;
++    }
++  }
++}
++
++void WorkspaceSidebarView::PushLiveState(WorkspaceEntryView* view,
++                                         tabs::TabInterface* tab) {
++  // Read the WebContents, not TabData: the latter dereferences TabUIHelper,
++  // which is already gone for a tab mid-removal (see the controller's
++  // kRemoved note). A bound tab's contents are alive by construction.
++  content::WebContents* contents = tab ? tab->GetContents() : nullptr;
++  if (!contents) {
++    return;
++  }
++  view->SetLiveState(
++      contents->GetTitle(),
++      helium_workspace::IsTabDriftedFromPinnedUrl(tab, view->url()));
++}
++
+ void WorkspaceSidebarView::OnWorkspaceEntriesChanged() {
+   SyncEntryViews();
+ }
+@@ -343,6 +548,7 @@ void WorkspaceSidebarView::SyncEntryView
+   for (const std::string& id : stale) {
+     RemoveChildViewT(entry_views_[id].get());
+     entry_views_.erase(id);
++    surfaced_entry_ids_.erase(id);
+   }
+ 
+   // Create or update the rest, and rebuild the model order.
+@@ -409,10 +615,54 @@ void WorkspaceSidebarView::SyncBindings(
+     tabs::TabInterface* tab = handle.Get();
+     view->SetBoundTab(tab);
+     view->SetActive(tab && tab == active_tab);
++    if (tab) {
++      PushLiveState(view, tab);
++    }
++  }
++
++  // helium-fork M3.10: the rows that show under a collapsed folder head. The
++  // active entry joins (at collapse time or whenever it becomes active while
++  // collapsed); an entry leaves only when its tab is gone -- switching away
++  // keeps it listed, just without the white card (user 2026-08-23: "切到别
++  // 的标签，白色胶囊条就没有了，这个标签页就放在那儿就可以"; closing it is what
++  // folds it back, unlike Dia where it stays). Opening the folder forgets
++  // the set.
++  bool surfaced_changed = false;
++  if (space_collapsed_) {
++    for (WorkspaceEntryView* view : ordered_entries_) {
++      if (view->renders_as_capsule()) {
++        continue;
++      }
++      if (view->active()) {
++        surfaced_changed |= surfaced_entry_ids_.insert(view->entry_id()).second;
++      } else if (!view->bound_tab()) {
++        surfaced_changed |= surfaced_entry_ids_.erase(view->entry_id()) > 0;
++      }
++    }
++  } else if (!surfaced_entry_ids_.empty()) {
++    surfaced_entry_ids_.clear();
++    surfaced_changed = true;
++  }
++  if (surfaced_changed) {
++    PreferredSizeChanged();
++    InvalidateLayout();
+   }
+   UpdateCardShadow();
+ }
+ 
++bool WorkspaceSidebarView::IsPinnedRowVisible(const WorkspaceEntryView* view,
++                                             bool as_collapsed) const {
++  return !as_collapsed || surfaced_entry_ids_.contains(view->entry_id());
++}
++
++void WorkspaceSidebarView::ChildPreferredSizeChanged(views::View* child) {
++  // Rows are a fixed height in every state now (M3.10-r1: the hint is paid
++  // for inside the row), so this is really the empty-Favorites placeholder
++  // re-measuring itself against a new width or new strings.
++  PreferredSizeChanged();
++  InvalidateLayout();
++}
++
+ int WorkspaceSidebarView::FavoritesPlaceholderHeight(int width) const {
+   // The stack of labels decides, not a constant -- see
+   // kFavoritesPlaceholderMinHeight. The floor keeps the empty state from
+@@ -423,9 +673,12 @@ int WorkspaceSidebarView::FavoritesPlace
+ }
+ 
+ WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::ComputeLayout(
+-    int width) const {
++    int width,
++    bool as_collapsed) const {
+   SidebarLayout out;
+   out.entry_bounds.resize(ordered_entries_.size());
++  out.entry_visible.assign(ordered_entries_.size(), false);
++  out.entry_fade.assign(ordered_entries_.size(), 1.0f);
+ 
+   const int min_child_width =
+       GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
+@@ -470,6 +723,7 @@ WorkspaceSidebarView::SidebarLayout Work
+         const int capsule_width = base_width + (col < remainder ? 1 : 0);
+         out.entry_bounds[index] =
+             gfx::Rect(x, y, capsule_width, capsule_height);
++        out.entry_visible[index] = true;
+         x += capsule_width + gap;
+       }
+       y += capsule_height;
+@@ -480,28 +734,92 @@ WorkspaceSidebarView::SidebarLayout Work
+   }
+ 
+   y += FavoriteGridGap();
+-  out.header_bounds = gfx::Rect(0, y, row_width, kSpaceHeaderHeight);
+-  y += kSpaceHeaderHeight;
++  out.header_bounds = gfx::Rect(0, y, row_width, SpaceHeaderHeight());
++  y += SpaceHeaderHeight();
+ 
+-  const int row_height = GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
+-  if (!space_collapsed_) {
+-    for (size_t i = favorite_count_; i < ordered_entries_.size(); ++i) {
+-      y += kTabPadding;
+-      out.entry_bounds[i] = gfx::Rect(0, y, row_width, row_height);
+-      y += row_height;
+-    }
++  // helium-fork M3.10: the rows are the folder's children -- indented one
++  // step from the header (Dia), each as tall as it asks to be (a row showing
++  // its hint is two lines), and laid out only while they are visible.
++  const int child_width = std::max(0, row_width - kFolderChildIndent);
++  for (size_t i = favorite_count_; i < ordered_entries_.size(); ++i) {
++    const WorkspaceEntryView* view = ordered_entries_[i].get();
++    if (!IsPinnedRowVisible(view, as_collapsed)) {
++      continue;
++    }
++    const int row_height = view->RowHeight();
++    y += kTabPadding;
++    out.entry_bounds[i] =
++        gfx::Rect(kFolderChildIndent, y, child_width, row_height);
++    out.entry_visible[i] = true;
++    y += row_height;
+   }
+ 
+   out.height = y;
+   return out;
+ }
+ 
++namespace {
++
++int LerpInt(int from, int to, double t) {
++  return from + base::ClampRound((to - from) * t);
++}
++
++gfx::Rect LerpRect(const gfx::Rect& from, const gfx::Rect& to, double t) {
++  return gfx::Rect(LerpInt(from.x(), to.x(), t), LerpInt(from.y(), to.y(), t),
++                   LerpInt(from.width(), to.width(), t),
++                   LerpInt(from.height(), to.height(), t));
++}
++
++}  // namespace
++
++WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::CurrentLayout(
++    int width) const {
++  SidebarLayout target = ComputeLayout(width, space_collapsed_);
++  if (!folder_animation_.is_animating() || !folder_prev_layout_valid_ ||
++      folder_prev_layout_.entry_bounds.size() != target.entry_bounds.size()) {
++    // The size guard is for an entry arriving or leaving mid-tween: the two
++    // layouts stop being about the same rows, so there is nothing to blend.
++    return target;
++  }
++
++  const double t = folder_animation_.GetCurrentValue();
++  const float fade = static_cast<float>(folder_fade_animation_.GetCurrentValue());
++  SidebarLayout out = target;
++  out.height = LerpInt(folder_prev_layout_.height, target.height, t);
++  out.header_bounds =
++      LerpRect(folder_prev_layout_.header_bounds, target.header_bounds, t);
++  out.placeholder_bounds = LerpRect(folder_prev_layout_.placeholder_bounds,
++                                    target.placeholder_bounds, t);
++
++  for (size_t i = 0; i < out.entry_bounds.size(); ++i) {
++    const bool was = folder_prev_layout_.entry_visible[i];
++    const bool will = target.entry_visible[i];
++    if (was && will) {
++      // A row both states keep -- a favorites capsule, or the row the
++      // collapsed header surfaces. It travels with the tween rather than
++      // jumping to its new slot.
++      out.entry_bounds[i] =
++          LerpRect(folder_prev_layout_.entry_bounds[i], target.entry_bounds[i],
++                   t);
++    } else if (was) {
++      // The folder is closing over it: Dia leaves it where it stands and
++      // fades it, which is why it keeps the bounds it had.
++      out.entry_bounds[i] = folder_prev_layout_.entry_bounds[i];
++      out.entry_visible[i] = true;
++      out.entry_fade[i] = fade;
++    }
++    // Otherwise the folder is opening onto it, and it is already at its
++    // final place at full strength -- Dia's rows do not fade in.
++  }
++  return out;
++}
++
+ gfx::Size WorkspaceSidebarView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
+   const int width = available_size.width().is_bounded()
+                         ? available_size.width().value()
+                         : GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
+-  return gfx::Size(width, ComputeLayout(width).height);
++  return gfx::Size(width, CurrentLayout(width).height);
+ }
+ 
+ gfx::Size WorkspaceSidebarView::GetMinimumSize() const {
+@@ -511,12 +829,13 @@ gfx::Size WorkspaceSidebarView::GetMinim
+   // actually needs is the space header (permanent -- it is the pinned
+   // section's visible edge), the empty-state placeholder while the grid is
+   // empty, and one row's worth of content.
+-  int height = kSpaceHeaderHeight + FavoriteGridGap();
++  int height = SpaceHeaderHeight() + FavoriteGridGap();
+   height += favorite_count_ == 0
+                 ? FavoritesPlaceholderHeight(
+                       GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth))
+                 : GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
+-  if (ordered_entries_.size() > favorite_count_ && !space_collapsed_) {
++  if (ordered_entries_.size() > favorite_count_ &&
++      (!space_collapsed_ || !surfaced_entry_ids_.empty())) {
+     height +=
+         kTabPadding + GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
+   }
+@@ -525,7 +844,21 @@ gfx::Size WorkspaceSidebarView::GetMinim
+ }
+ 
+ void WorkspaceSidebarView::Layout(PassKey) {
+-  const SidebarLayout layout = ComputeLayout(width());
++  const SidebarLayout layout = CurrentLayout(width());
++
++  // helium-fork M3.10-r2: this view's own bounds can trail the layout it is
++  // drawing. PinnedTabContainerView runs a
++  // TabCollectionAnimatingLayoutManager, and its 200ms EASE_IN_OUT re-aims at
++  // a fresh target on every frame of the folder's 150ms tween, so the height
++  // it hands this view lags behind -- while the pinned scroll viewport, which
++  // asks for the *preferred* size, is already at the new one. Rows are out
++  // from under View::Paint's clip to those trailing bounds only for as long
++  // as they hold the tween's layer, so a row that has one keeps it until the
++  // bounds catch up. Dropping it on the tween's last frame is what blinked
++  // the bottom row(s) out for ~2 frames at the end of every open (user
++  // 2026-08-24 recording: last row gone at t=150ms and t=167ms, back at
++  // t=183ms).
++  const bool bounds_trail_layout = layout.height > height();
+ 
+   if (placeholder_) {
+     placeholder_->SetVisible(layout.placeholder_visible);
+@@ -538,7 +871,15 @@ void WorkspaceSidebarView::Layout(PassKe
+   }
+   for (size_t i = 0; i < ordered_entries_.size(); ++i) {
+     WorkspaceEntryView* view = ordered_entries_[i].get();
+-    const bool visible = i < favorite_count_ || !space_collapsed_;
++    const bool visible = layout.entry_visible[i];
++    // Cleared before hiding, so a row never keeps the layer the folder's
++    // tween gave it. The trailing-bounds clause only *holds* a layer, never
++    // creates one: the tween is the sole place rows acquire one, and at a
++    // window's first layout (height() still 0) there is nothing to hold.
++    const bool needs_layer = folder_animation_.is_animating() ||
++                             (bounds_trail_layout && view->layer());
++    view->SetFolderMotion(visible && needs_layer,
++                          visible ? layout.entry_fade[i] : 1.0f);
+     view->SetVisible(visible);
+     if (visible) {
+       view->SetBoundsRect(layout.entry_bounds[i]);
+@@ -645,6 +986,20 @@ void WorkspaceSidebarView::OnEntryRemove
+   }
+ }
+ 
++void WorkspaceSidebarView::OnEntryCloseRequested(const std::string& entry_id) {
++  if (auto* controller =
++          helium_workspace::WorkspaceTabController::From(GetBrowserWindow())) {
++    controller->CloseEntryTab(entry_id);
++  }
++}
++
++void WorkspaceSidebarView::OnEntryResetRequested(const std::string& entry_id) {
++  if (auto* controller =
++          helium_workspace::WorkspaceTabController::From(GetBrowserWindow())) {
++    controller->ResetEntryTab(entry_id);
++  }
++}
++
+ bool WorkspaceSidebarView::CanEntryBecomeFavorite(
+     const std::string& entry_id) const {
+   if (!service_) {
+--- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SIDEBAR_VIEW_H_
+ 
+ #include <map>
++#include <set>
+ #include <string>
+ #include <vector>
+ 
+@@ -16,6 +17,8 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "chrome/browser/ui/views/tabs/common/workspace_entry_view.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/animation/slide_animation.h"
++#include "ui/views/animation/animation_delegate_views.h"
+ #include "ui/views/view.h"
+ 
+ class BrowserWindowInterface;
+@@ -25,7 +28,8 @@ class Profile;
+ class TabStripModel;
+ 
+ // The whole workspace sidebar: the Favorites capsule grid, the collapsible
+-// space header, and the full-row Pinned entries. It renders
++// space header (which the user treats as the pinned rows' folder, M3.10),
++// and the full-row Pinned entries. It renders
+ // WorkspaceService::entries() -- profile data -- rather than the window's
+ // pinned tab collection, which is why a new window shows a complete sidebar
+ // on its first frame.
+@@ -34,7 +38,14 @@ class TabStripModel;
+ // because pinned_tab_container_view.h belongs to the "common" source_set,
+ // whose dependencies cannot reach //chrome/browser/ui, and observing the
+ // service needs the complete WorkspaceService type in a header.
++//
++// helium-fork M3.10-r1: the folder opens and closes over 150ms (Dia, fitted
++// off the user's recording -- arc_sidebar_surface.h). What moves is this
++// view's own height, so everything below the sidebar slides; the rows do not
++// travel. Opening puts them at their final places on the first frame;
++// closing fades them where they stand.
+ class WorkspaceSidebarView : public views::View,
++                             public views::AnimationDelegateViews,
+                              public helium_workspace::WorkspaceService::Observer,
+                              public TabStripModelObserver,
+                              public WorkspaceEntryView::Delegate {
+@@ -53,6 +64,11 @@ class WorkspaceSidebarView : public view
+       const views::SizeBounds& available_size) const override;
+   gfx::Size GetMinimumSize() const override;
+   void Layout(PassKey) override;
++  void ChildPreferredSizeChanged(views::View* child) override;
++
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
+ 
+   // helium_workspace::WorkspaceService::Observer:
+   void OnWorkspaceEntriesChanged() override;
+@@ -62,6 +78,11 @@ class WorkspaceSidebarView : public view
+       TabStripModel* tab_strip_model,
+       const TabStripModelChange& change,
+       const TabStripSelectionChange& selection) override;
++  // helium-fork M3.10: feeds a bound row its tab's live title and whether
++  // the tab is still at the entry's pinned URL.
++  void OnTabChangedAt(tabs::TabInterface* tab,
++                      int index,
++                      TabChangeType change_type) override;
+ 
+   // helium-fork: aims the pinned rows' floating-card shadow at the active
+   // full-width row. Same contract as UnpinnedTabContainerView: the shadow
+@@ -74,6 +95,8 @@ class WorkspaceSidebarView : public view
+   void OnEntryActivated(const std::string& entry_id) override;
+   void OnEntryToggleFavorite(const std::string& entry_id) override;
+   void OnEntryRemoved(const std::string& entry_id) override;
++  void OnEntryCloseRequested(const std::string& entry_id) override;
++  void OnEntryResetRequested(const std::string& entry_id) override;
+   bool CanEntryBecomeFavorite(const std::string& entry_id) const override;
+ 
+  private:
+@@ -82,6 +105,9 @@ class WorkspaceSidebarView : public view
+   struct SidebarLayout {
+     int height = 0;
+     std::vector<gfx::Rect> entry_bounds;  // Parallel to |ordered_entries_|.
++    std::vector<bool> entry_visible;      // Ditto.
++    // Ditto: 1 except for a row the closing folder is fading out.
++    std::vector<float> entry_fade;
+     gfx::Rect placeholder_bounds;
+     gfx::Rect header_bounds;
+     bool placeholder_visible = false;
+@@ -102,7 +128,18 @@ class WorkspaceSidebarView : public view
+   // active) onto the rows.
+   void SyncBindings();
+ 
+-  SidebarLayout ComputeLayout(int width) const;
++  // The layout of one settled state. |as_collapsed| is asked for rather than
++  // read off space_collapsed_ so the folder animation can have both.
++  SidebarLayout ComputeLayout(int width, bool as_collapsed) const;
++  // What to actually lay out right now: the settled target, or -- while the
++  // folder animates -- that blended with the state it is leaving.
++  SidebarLayout CurrentLayout(int width) const;
++  // helium-fork M3.10: whether a pinned row is laid out at all -- every row
++  // while the folder is open, only the surfaced ones while it is collapsed.
++  bool IsPinnedRowVisible(const WorkspaceEntryView* view,
++                          bool as_collapsed) const;
++  // Pushes |tab|'s title and at-home state onto |view|.
++  void PushLiveState(WorkspaceEntryView* view, tabs::TabInterface* tab);
+ 
+   // Re-aims the card shadow at the active pinned row (or hides it). Called
+   // wherever the answer can change: bindings sync, layout, scroll.
+@@ -120,6 +157,23 @@ class WorkspaceSidebarView : public view
+   raw_ptr<views::View> placeholder_ = nullptr;
+   raw_ptr<views::View> space_header_ = nullptr;
+   bool space_collapsed_ = false;
++  // helium-fork M3.10-r1: the folder's open/close. Always driven 0 -> 1, from
++  // |folder_prev_layout_| (the state being left, snapshotted at the toggle
++  // because SyncBindings rewrites surfaced_entry_ids_ underneath us) to the
++  // target ComputeLayout gives for space_collapsed_. |folder_fade_animation_|
++  // is the shorter, linear one that takes the leaving rows out.
++  gfx::SlideAnimation folder_animation_{this};
++  gfx::SlideAnimation folder_fade_animation_{this};
++  SidebarLayout folder_prev_layout_;
++  bool folder_prev_layout_valid_ = false;
++  // helium-fork M3.10: the rows that stay listed under the collapsed header
++  // (Dia: collapsing a folder leaves its active tab showing beneath it).
++  // Entry ids; runtime and per window, like the tab bindings. Membership:
++  // the active entry at the moment of collapse, plus any entry that becomes
++  // active while collapsed; an entry leaves only when its tab closes
++  // (switching away keeps it, just without the white card -- user
++  // 2026-08-23); opening the folder clears the set.
++  std::set<std::string> surfaced_entry_ids_;
+ 
+   // Entry id -> row, plus the model order the layout walks.
+   std::map<std::string, raw_ptr<WorkspaceEntryView>> entry_views_;
