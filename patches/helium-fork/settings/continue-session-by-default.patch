@@ -1,0 +1,18 @@
+Index: src/chrome/browser/prefs/session_startup_pref.cc
+===================================================================
+--- src.orig/chrome/browser/prefs/session_startup_pref.cc
++++ src/chrome/browser/prefs/session_startup_pref.cc
+@@ -75,7 +75,12 @@ SessionStartupPref::Type SessionStartupP
+     return SessionStartupPref::LAST;
+   }
+ #endif
+-  return SessionStartupPref::DEFAULT;
++  // helium-fork M3.11-r1 (user 2026-08-24): was SessionStartupPref::DEFAULT,
++  // i.e. a fresh New Tab page. The sidebar's Today section is nothing but
++  // this window's ordinary tabs, so Chromium's default emptied it on every
++  // restart. Only the default moves; Settings > On startup still offers all
++  // three of Chromium's choices and a profile that has picked one keeps it.
++  return SessionStartupPref::LAST;
+ #endif
+ }
+ 

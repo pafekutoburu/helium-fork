@@ -381,3 +381,5 @@ helium-fork/workspace/omnibox-workspace-provider.patch
 helium-fork/layout/arc-new-tab-page-shape.patch
 helium-fork/layout/sidebar-floating-calibration.patch
 helium-fork/workspace/sidebar-dia-m310.patch
+helium-fork/workspace/entry-drag-m311.patch
+helium-fork/settings/continue-session-by-default.patch
