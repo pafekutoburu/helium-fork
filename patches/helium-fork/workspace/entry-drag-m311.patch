@@ -655,15 +655,25 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -44,6 +44,7 @@
+@@ -12,6 +12,7 @@
+ #include "base/check_is_test.h"
+ #include "base/containers/adapters.h"
+ #include "base/functional/bind.h"
++#include "base/trace_event/trace_event.h"
+ #include "base/i18n/number_formatting.h"
+ #include "base/i18n/rtl.h"
+ #include "base/metrics/histogram_functions.h"
+@@ -44,6 +45,9 @@
  #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
  #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
  #include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_data.h"
++#include "ui/base/dragdrop/drag_drop_types.h"
  #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
  #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
-@@ -287,6 +288,17 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -287,6 +291,17 @@ VerticalTabStripRegionView::VerticalTabS
    floating_card_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
    floating_card_shadow_->SetShadowSpec(helium::kFloatingSidebarShadowSpec);
    floating_card_shadow_->SetVisible(false);
@@ -681,7 +691,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    pinned_row_shadow_ =
        AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
    pinned_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
-@@ -441,7 +453,8 @@ bool VerticalTabStripRegionView::IsPosit
+@@ -441,7 +456,8 @@ bool VerticalTabStripRegionView::IsPosit
      // treating them as UI here would eat the window-drag area around every
      // floating card.
      if (views::IsViewClass<HeliumCardShadowView>(child) ||
@@ -691,11 +701,144 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
        continue;
      }
  
-@@ -617,6 +630,7 @@ void VerticalTabStripRegionView::Layout(
+@@ -588,6 +604,124 @@ void VerticalTabStripRegionView::OnWidge
+   }
+ }
+ 
++// ---- helium-fork M3.11 轮3: the dead space under Today ----
++//
++// ⚠ These all have a base implementation: BaseTabStripRegionView routes the
++// *link* drop (drag a URL onto the strip to open it) through the very same
++// five methods. Every one of them must fall through when the payload is not
++// a workspace entry, or link drops onto the sidebar quietly stop working --
++// there is nothing in the entry drag that would ever tell you.
++
++UnpinnedTabContainerView* VerticalTabStripRegionView::TodayDropContainer()
++    const {
++  return tab_strip_view_ ? tab_strip_view_->GetUnpinnedTabsContainer()
++                         : nullptr;
++}
++
++WorkspaceSidebarView* VerticalTabStripRegionView::WorkspaceDragSidebar()
++    const {
++  PinnedTabContainerView* const pinned =
++      tab_strip_view_ ? tab_strip_view_->GetPinnedTabsContainer() : nullptr;
++  return pinned ? pinned->workspace_view() : nullptr;
++}
++
++bool VerticalTabStripRegionView::HasWorkspaceEntryDragSession() const {
++  WorkspaceSidebarView* const sidebar = WorkspaceDragSidebar();
++  return sidebar && sidebar->HasEntryDragSession();
++}
++
++bool VerticalTabStripRegionView::IsWorkspaceEntryDrag(
++    const ui::OSExchangeData& data) const {
++  // Session first: reading the payload means unpickling the OSExchangeData,
++  // which on mac is a trip through NSPasteboard. Cheap enough once, far too
++  // expensive on **every** drag update -- that per-frame read is what made
++  // crossing feel like the app stuttered (user 2026-08-25).
++  WorkspaceSidebarView* const sidebar = WorkspaceDragSidebar();
++  return sidebar && sidebar->HasEntryDragSession() &&
++         sidebar->IsDraggingThisEntry(data);
++}
++
++bool VerticalTabStripRegionView::GetDropFormats(
++    int* formats,
++    std::set<ui::ClipboardFormatType>* format_types) {
++  const bool base_wants =
++      BaseTabStripRegionView::GetDropFormats(formats, format_types);
++  format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
++  return base_wants || true;
++}
++
++bool VerticalTabStripRegionView::AreDropTypesRequired() {
++  return true;
++}
++
++bool VerticalTabStripRegionView::CanDrop(const ui::OSExchangeData& data) {
++  return IsWorkspaceEntryDrag(data) || BaseTabStripRegionView::CanDrop(data);
++}
++
++void VerticalTabStripRegionView::OnDragEntered(
++    const ui::DropTargetEvent& event) {
++  if (!HasWorkspaceEntryDragSession()) {
++    BaseTabStripRegionView::OnDragEntered(event);
++    return;
++  }
++  OnDragUpdated(event);
++}
++
++int VerticalTabStripRegionView::OnDragUpdated(
++    const ui::DropTargetEvent& event) {
++  TRACE_EVENT0("ui", "VerticalTabStripRegionView::OnDragUpdated");
++  // Only the session is consulted here, never the payload: a live entry
++  // session and a link drag cannot both be in flight, so this tells the two
++  // apart without touching the pasteboard once per frame.
++  if (!HasWorkspaceEntryDragSession()) {
++    return BaseTabStripRegionView::OnDragUpdated(event);
++  }
++  UnpinnedTabContainerView* const today = TodayDropContainer();
++  PinnedTabContainerView* const pinned =
++      tab_strip_view_ ? tab_strip_view_->GetPinnedTabsContainer() : nullptr;
++  WorkspaceSidebarView* const sidebar =
++      pinned ? pinned->workspace_view() : nullptr;
++  if (!today || !sidebar) {
++    return ui::DragDropTypes::DRAG_NONE;
++  }
++  // Everything below the sidebar belongs to Today -- including the band the
++  // separator sits in, which is inside neither container. The handover is
++  // pinned to the sidebar's *own* bottom edge so the two sides share one
++  // boundary with no gap: measured against the pinned container's bottom
++  // instead, the pointer spent ~90ms in between where nobody held a slot and
++  // nobody moved the card, which is exactly the snag the crossing had
++  // (user 2026-08-25).
++  gfx::Point sidebar_bottom(0, sidebar->GetLocalBounds().bottom());
++  views::View::ConvertPointToTarget(sidebar, this, &sidebar_bottom);
++  if (event.location().y() < sidebar_bottom.y()) {
++    today->OnDragExited();
++    return ui::DragDropTypes::DRAG_NONE;
++  }
++  gfx::Point point = event.location();
++  views::View::ConvertPointToTarget(this, today, &point);
++  // Handed over unclamped -- Today clamps only what the row lookup needs.
++  return today->HandleWorkspaceEntryDragAt(point);
++}
++
++void VerticalTabStripRegionView::OnDragExited() {
++  // No data to test here, so both run: the entry side is a no-op when no
++  // session is open, and the base side only clears the link drop arrow.
++  if (UnpinnedTabContainerView* const today = TodayDropContainer()) {
++    today->OnDragExited();
++  }
++  BaseTabStripRegionView::OnDragExited();
++}
++
++views::View::DropCallback VerticalTabStripRegionView::GetDropCallback(
++    const ui::DropTargetEvent& event) {
++  // Once per gesture -- the full check is fine here.
++  if (!IsWorkspaceEntryDrag(event.data())) {
++    return BaseTabStripRegionView::GetDropCallback(event);
++  }
++  UnpinnedTabContainerView* const today = TodayDropContainer();
++  return today ? today->GetWorkspaceEntryDropCallback() : base::NullCallback();
++}
++
+ void VerticalTabStripRegionView::Layout(PassKey) {
+   LayoutSuperclass<views::AccessiblePaneView>(this);
+ 
+@@ -617,6 +751,15 @@ void VerticalTabStripRegionView::Layout(
        if (WorkspaceSidebarView* const sidebar =
                pinned_container->workspace_view()) {
          sidebar->SetCardShadowFrame(pinned_row_shadow_);
 +        sidebar->SetDragOverlay(entry_drag_overlay_);
++        // M3.11 轮3: the two halves of the entry drag introduced to each
++        // other. This is the only view that owns both, and the injection is
++        // as lazy as the shadows' above for the same reason.
++        if (UnpinnedTabContainerView* const unpinned_container =
++                tab_strip_view_->GetUnpinnedTabsContainer()) {
++          sidebar->SetTodayContainer(unpinned_container);
++          unpinned_container->SetWorkspaceDragHost(sidebar);
++        }
        }
      }
    }
@@ -711,7 +854,48 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class ShadowFrameView;
  
  namespace tabs {
-@@ -331,6 +332,10 @@ class VerticalTabStripRegionView final
+@@ -55,6 +56,9 @@ class FlexLayout;
+ 
+ // Container for the vertical tabstrip and the other views sharing space with
+ // it, excluding the caption buttons.
++class UnpinnedTabContainerView;
++class WorkspaceSidebarView;
++
+ class VerticalTabStripRegionView final
+     : public BaseTabStripRegionView,
+       public views::ResizeAreaDelegate,
+@@ -118,6 +122,30 @@ class VerticalTabStripRegionView final
+   void AddedToWidget() override;
+   void RemovedFromWidget() override;
+   void Layout(PassKey) override;
++  // helium-fork M3.11 轮3: the third drop target of the sidebar entry drag.
++  // Today's scroll view is only as tall as its rows, so the empty space
++  // below it -- most of the target area when Today holds a tab or two --
++  // belongs to this view. Everything is forwarded straight to the Today
++  // container; nothing about the drag is decided here.
++  bool GetDropFormats(int* formats,
++                      std::set<ui::ClipboardFormatType>* format_types) override;
++  bool AreDropTypesRequired() override;
++  bool CanDrop(const ui::OSExchangeData& data) override;
++  void OnDragEntered(const ui::DropTargetEvent& event) override;
++  int OnDragUpdated(const ui::DropTargetEvent& event) override;
++  void OnDragExited() override;
++  views::View::DropCallback GetDropCallback(
++      const ui::DropTargetEvent& event) override;
++
++ private:
++  UnpinnedTabContainerView* TodayDropContainer() const;
++  WorkspaceSidebarView* WorkspaceDragSidebar() const;
++  // Cheap per-frame discriminator; IsWorkspaceEntryDrag() additionally reads
++  // the payload and is only for the once-per-gesture calls.
++  bool HasWorkspaceEntryDragSession() const;
++  bool IsWorkspaceEntryDrag(const ui::OSExchangeData& data) const;
++
++ public:
+   views::View* GetDefaultFocusableChild() override;
+   gfx::Size GetMinimumSize() const override;
+   gfx::Size CalculatePreferredSize(
+@@ -331,6 +359,10 @@ class VerticalTabStripRegionView final
    raw_ptr<ShadowFrameView> shadow_frame_ = nullptr;
    // helium-fork M3.9d: the floating sidebar card's halo shadow.
    raw_ptr<HeliumCardShadowView> floating_card_shadow_ = nullptr;
@@ -830,7 +1014,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,346 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -850,6 +1034,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
 +#include "ui/gfx/animation/tween.h"
 +#include "ui/gfx/canvas.h"
 +#include "ui/gfx/geometry/rect_f.h"
++#include "ui/gfx/geometry/transform.h"
 +#include "ui/gfx/image/image_skia.h"
 +#include "ui/views/style/typography.h"
 +#include "ui/views/style/typography_provider.h"
@@ -907,6 +1092,9 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
 +  morph_animation_.Reset(0.0);
 +  settle_animation_.Reset(0.0);
 +  settle_done_.Reset();
++  // -1 is not a morph value, so the first ApplyBounds always paints.
++  painted_morph_ = -1.0;
++  card_rect_ = gfx::Rect();
 +  SetVisible(true);
 +  // Layers, not view order: the tab strip below paints into one of its own
 +  // (it masks to bounds), and a sibling without a layer is painted under it
@@ -923,13 +1111,41 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
 +}
 +
 +void WorkspaceEntryDragOverlay::StackLayersOnTop() {
-+  // Shadow first, then the card, so the card ends up above its own shadow.
-+  if (shadow_ && shadow_->layer() && shadow_->layer()->parent()) {
-+    shadow_->layer()->parent()->StackAtTop(shadow_->layer());
++  ui::Layer* const card = layer();
++  ui::Layer* const parent = card ? card->parent() : nullptr;
++  if (!parent) {
++    return;
 +  }
-+  if (layer() && layer()->parent()) {
-+    layer()->parent()->StackAtTop(layer());
++  ui::Layer* shadow = shadow_ ? shadow_->layer() : nullptr;
++  if (shadow && shadow->parent() != parent) {
++    // Not siblings after all: fall back to putting each at the top of its own
++    // parent, which is all the ordering that can be asserted there.
++    shadow->parent()->StackAtTop(shadow);
++    shadow = nullptr;
 +  }
++  // ⛔ Every restack is a cc::Layer::InsertChild, and that is a
++  // SetNeedsFullTreeSync() -- property_trees()->set_needs_rebuild(true) plus
++  // a full sync of the *whole window's* layer tree (cc/layers/layer.cc,
++  // cc/trees/layer_tree_host.cc:1906). Asking unconditionally, as this did,
++  // cost two of those on every pointer frame -- and four whenever an
++  // animation was also calling ApplyBounds -- because each StackAtTop pushed
++  // the other layer off the top, so ui::Layer's own "already in front"
++  // early-out could never fire. That is a per-frame cost that grows with the
++  // page's layer count, which is why the jank was uneven and showed up in
++  // plain in-sidebar drags too (user 2026-08-25). Ask only when the order is
++  // actually wrong: after the first frame it never is.
++  const auto& children = parent->children();
++  const size_t n = children.size();
++  if (shadow) {
++    if (n >= 2 && children[n - 1] == card && children[n - 2] == shadow) {
++      return;
++    }
++    // Shadow first, then the card, so the card ends up above its own shadow.
++    parent->StackAtTop(shadow);
++  } else if (n >= 1 && children[n - 1] == card) {
++    return;
++  }
++  parent->StackAtTop(card);
 +}
 +
 +void WorkspaceEntryDragOverlay::SetPointer(const gfx::Point& point_in_parent) {
@@ -972,7 +1188,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
 +    std::move(done).Run();
 +    return;
 +  }
-+  settle_from_ = bounds();
++  settle_from_ = card_rect_;
 +  settle_to_ = target;
 +  settle_done_ = std::move(done);
 +  if (settle_from_ == settle_to_ || settle_from_.IsEmpty() ||
@@ -990,6 +1206,12 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
 +
 +void WorkspaceEntryDragOverlay::Stop() {
 +  active_ = false;
++  // Identity first: SetTransform is what holds the layer alive for the
++  // transform, and DestroyLayer below should not race that.
++  SetTransform(gfx::Transform());
++  if (shadow_) {
++    shadow_->SetTransform(gfx::Transform());
++  }
 +  // A layer per row is exactly what M3.10-r1 warned against keeping around;
 +  // these two exist only while the card is in the air.
 +  DestroyLayer();
@@ -1029,18 +1251,48 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
 +
 +void WorkspaceEntryDragOverlay::ApplyBounds() {
 +  const gfx::Rect rect = CurrentRect();
-+  SetBoundsRect(rect);
++  card_rect_ = rect;
++  // Size through bounds, position through the transform. A ui::Layer
++  // *position* change is a cc::Layer::SetPosition, which on a layer with no
++  // transform node ends in SetPropertyTreesNeedRebuild(); a pure translation
++  // is 2d-axis-aligned, so cc updates the existing transform node in place
++  // instead (cc/layers/layer.cc).
++  // ⚠ Worth what it is worth and no more: LayerTreeHost::DoUpdateLayers()
++  // rebuilds the property trees *unconditionally* anyway (see
++  // cc/trees/property_tree_layer_tree_delegate.cc), so this does not remove
++  // the rebuild -- it only stops making it dirtier. Measured by interleaved
++  // A/B in one session, 3 rounds: late frames 27.4% -> 24.8%, frames
++  // produced +3.6%. Real, small, and not the headline fix (that is the
++  // yield tween no longer invalidating up -- see AnimationProgressed).
++  if (size() != rect.size()) {
++    SetBoundsRect(gfx::Rect(rect.size()));
++  }
++  SetTransform(gfx::Transform::MakeTranslation(static_cast<float>(rect.x()),
++                                               static_cast<float>(rect.y())));
 +  StackLayersOnTop();
 +  if (shadow_) {
 +    const int radius =
 +        GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius);
 +    shadow_->SetShadowCornerRadius(radius);
-+    shadow_->SetCardBounds(rect);
++    shadow_->SetCardBoundsByTransform(rect);
 +    shadow_->SetVisible(
 +        active_ && helium::CanShowCardShadow(rect.width(), rect.height(),
 +                                             radius));
 +  }
-+  SchedulePaint();
++  // ⛔ Only when what is *painted* changed. The card owns a layer, so a pure
++  // translation needs no repaint at all -- the compositor moves the layer --
++  // and View::SetBoundsRect already schedules one by itself when the size
++  // changes. What OnPaint actually reads is the size and the morph value
++  // (icon column, title alpha), so those are the whole trigger. Repainting
++  // unconditionally re-recorded a round rect, a Rasterize() and a text run on
++  // every pointer frame for nothing (user 2026-08-25: dropped frames).
++  const double morph = settle_animation_.is_animating()
++                           ? (as_capsule_ ? 1.0 : 0.0)
++                           : morph_animation_.GetCurrentValue();
++  if (morph != painted_morph_) {
++    painted_morph_ = morph;
++    SchedulePaint();
++  }
 +}
 +
 +void WorkspaceEntryDragOverlay::OnPaint(gfx::Canvas* canvas) {
@@ -1065,10 +1317,17 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
 +  const int icon_capsule_x = (width() - kIconSize) / 2;
 +  const gfx::Rect icon_rect(LerpInt(icon_row_x, icon_capsule_x, morph),
 +                            (height() - kIconSize) / 2, kIconSize, kIconSize);
-+  if (!favicon_.IsEmpty() && favicon_.IsImage()) {
-+    canvas->DrawImageInt(favicon_.GetImage().AsImageSkia(), 0, 0, kIconSize,
-+                         kIconSize, icon_rect.x(), icon_rect.y(), kIconSize,
-+                         kIconSize, /*filter=*/true);
++  // ⚠ Rasterize(), never IsImage(). `ui::ImageModel::IsImage()` is true only
++  // for the gfx::Image variant, and a row whose entry has a *live tab* carries
++  // its favicon as ImageModel::FromImageSkia (workspace_entry_view.cc) -- so
++  // the old `IsImage()` guard silently painted no icon at all for exactly the
++  // entries the user is most likely to drag (M3.11 轮3-r1, user 2026-08-25).
++  // Rasterize also covers the vector-icon fallback (the globe).
++  const gfx::ImageSkia icon = favicon_.Rasterize(GetColorProvider());
++  if (!icon.isNull()) {
++    canvas->DrawImageInt(icon, 0, 0, icon.width(), icon.height(),
++                         icon_rect.x(), icon_rect.y(), kIconSize, kIconSize,
++                         /*filter=*/true);
 +  }
 +  const int title_alpha = base::ClampRound(255 * (1.0 - morph));
 +  if (!title_.empty() && title_alpha > 0) {
@@ -1106,7 +1365,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,119 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1205,9 +1464,17 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h
 +  gfx::Size capsule_size_;
 +  gfx::Vector2dF grab_;
 +  gfx::Point pointer_;
++  // Where the card logically is, in the parent's coordinates. The view's own
++  // bounds sit at the origin and the offset rides on the layer transform (see
++  // ApplyBounds), so this is what the settle path has to read.
++  gfx::Rect card_rect_;
 +
 +  // 0 = row, 1 = capsule; the tween runs between them.
 +  bool as_capsule_ = false;
++  // The morph value the current layer contents were painted at. OnPaint reads
++  // nothing else that moves, so this is the whole repaint trigger (a pure
++  // translation of a layer-backed view needs none).
++  double painted_morph_ = -1.0;
 +  gfx::SlideAnimation morph_animation_{this};
 +  gfx::SlideAnimation settle_animation_{this};
 +  gfx::Rect settle_from_;
@@ -1264,7 +1531,25 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
  void WorkspaceEntryView::OnThemeChanged() {
    views::View::OnThemeChanged();
    UpdateCloseButtonColors();
-@@ -993,6 +1028,7 @@ void WorkspaceEntryView::UpdateAccentSou
+@@ -911,9 +946,14 @@ void WorkspaceEntryView::ResolveIcon() {
+       tabs::TabData data = tabs::TabData::FromTabInterface(tab);
+       data.network_state = tabs::TabNetworkState::kNone;
+       data.should_hide_throbber = true;
+-      // This branch does not go through ApplyIcon, so the accent has to be
+-      // taken here too -- otherwise a card bound to a live tab keeps whatever
+-      // color its stored PNG happened to give it.
++      // This branch does not go through ApplyIcon, so everything ApplyIcon
++      // would have kept in step has to be done here as well:
++      //  - the accent, or a card bound to a live tab keeps whatever color
++      //    its stored PNG happened to give it;
++      //  - `current_icon_`, which is what the M3.11 drag card is painted
++      //    from. Leaving it behind meant the card of any entry with an open
++      //    tab came up with **no icon at all** (user 2026-08-25, twice).
++      current_icon_ = data.favicon;
+       UpdateAccentSource(data.favicon.IsImage()
+                              ? data.favicon.GetImage().AsImageSkia()
+                              : gfx::ImageSkia());
+@@ -993,6 +1033,7 @@ void WorkspaceEntryView::UpdateAccentSou
  }
  
  void WorkspaceEntryView::ApplyIcon(const ui::ImageModel& favicon) {
@@ -1330,36 +1615,61 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
-@@ -11,12 +11,14 @@
+@@ -6,17 +6,32 @@
  
+ #include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
+ 
++#include <inttypes.h>
++
+ #include <algorithm>
+ #include <utility>
+ 
++#include "base/command_line.h"
++#include "base/containers/span.h"
++#include "base/files/file.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
  #include "base/functional/bind.h"
++#include "base/logging.h"
  #include "base/numerics/safe_conversions.h"
++#include "base/path_service.h"
++#include "base/strings/stringprintf.h"
 +#include "base/task/single_thread_task_runner.h"
++#include "base/task/thread_pool.h"
++#include "base/trace_event/trace_event.h"
  #include "cc/paint/paint_flags.h"
  #include "cc/paint/path_effect.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_drag_math.h"
  #include "chrome/browser/ui/helium_workspace/workspace_grid_math.h"
  #include "chrome/browser/ui/helium_workspace/workspace_pin_semantics.h"
  #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
-@@ -25,6 +27,13 @@
+@@ -25,9 +40,20 @@
  #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "ui/gfx/geometry/rect_conversions.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_data.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h"
++#include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
 +#include "ui/base/dragdrop/drag_drop_types.h"
 +#include "ui/base/dragdrop/drop_target_event.h"
 +#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 +#include "ui/base/dragdrop/os_exchange_data.h"
++#include "ui/compositor/compositor.h"
++#include "ui/compositor/compositor_animation_observer.h"
 +#include "ui/compositor/layer_tree_owner.h"
  #include "ui/views/controls/scroll_view.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
-@@ -43,6 +52,7 @@
++#include "chrome/common/chrome_paths.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/omnibox/browser/vector_icons.h"
+ #include "components/prefs/pref_service.h"
+@@ -43,10 +69,34 @@
  #include "ui/views/controls/label.h"
  #include "ui/views/layout/box_layout.h"
  #include "ui/views/style/typography.h"
@@ -1367,7 +1677,34 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  #include "ui/views/view_utils.h"
  
  namespace {
-@@ -98,6 +108,52 @@ int GridPerRowMax(int available_width, i
+ 
++// helium-fork M3.11 轮3-r4: arms the drag instrument. Off by default and
++// zero-cost when off -- not one TimeTicks::Now() is taken. Read once: the
++// command line cannot change under a running browser.
++constexpr char kDragPerfSwitch[] = "helium-drag-perf";
++
++bool DragPerfRequested() {
++  static const bool requested =
++      base::CommandLine::ForCurrentProcess()->HasSwitch(kDragPerfSwitch);
++  return requested;
++}
++
++// |samples| is sorted in place; p is 0..1.
++int PercentileUs(std::vector<int>& samples, double p) {
++  if (samples.empty()) {
++    return 0;
++  }
++  std::sort(samples.begin(), samples.end());
++  const size_t i = std::min(
++      samples.size() - 1,
++      static_cast<size_t>(p * static_cast<double>(samples.size() - 1) + 0.5));
++  return samples[i];
++}
++
+ // Arc favorites grid metrics: spacing between capsules, the gap separating
+ // the grid from the space header, the per-row capsule maximum (the 12-entry
+ // cap in three rows) and the height of the persistent empty state.
+@@ -98,6 +148,52 @@ int GridPerRowMax(int available_width, i
                      kMaxFavoritesPerRow);
  }
  
@@ -1420,7 +1757,97 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  // Arc-style persistent placeholder shown while the Favorites grid is empty.
  // Draws a dashed rounded outline with a hint, and never intercepts events.
  class FavoritesEmptyPlaceholder : public views::View {
-@@ -347,6 +403,11 @@ WorkspaceSidebarView::WorkspaceSidebarVi
+@@ -256,6 +352,19 @@ class WorkspaceSpaceHeader : public view
+     chevron_->SetProgress(collapsed);
+   }
+ 
++  // helium-fork M3.11 轮3-r2: a drag hovering the *closed* folder fills the
++  // header the way `Arc:` does -- the row itself reads as selected, and no
++  // blank row opens anywhere (recordings arc-spring 2026-08-24, re-read
++  // 2026-08-25 at the user's request). Same capsule as the hover so the
++  // sidebar keeps one highlight vocabulary.
++  void SetDropTarget(bool drop_target) {
++    if (drop_target_ == drop_target) {
++      return;
++    }
++    drop_target_ = drop_target;
++    SchedulePaint();
++  }
++
+   // views::View:
+   gfx::Size CalculatePreferredSize(
+       const views::SizeBounds& available_size) const override {
+@@ -286,7 +395,7 @@ class WorkspaceSpaceHeader : public view
+   void OnPaint(gfx::Canvas* canvas) override {
+     views::View::OnPaint(canvas);
+     const ui::ColorProvider* colors = GetColorProvider();
+-    if (!hovered_ || !colors) {
++    if ((!hovered_ && !drop_target_) || !colors) {
+       return;
+     }
+     // The row capsule, same fill and radius as a hovered pinned row; instant
+@@ -327,6 +436,7 @@ class WorkspaceSpaceHeader : public view
+   raw_ptr<views::Label> title_ = nullptr;
+   raw_ptr<WorkspaceFolderChevron> chevron_ = nullptr;
+   bool hovered_ = false;
++  bool drop_target_ = false;
+ };
+ 
+ BEGIN_METADATA(WorkspaceSpaceHeader)
+@@ -334,6 +444,52 @@ END_METADATA
+ 
+ }  // namespace
+ 
++// helium-fork M3.11 轮3-r4: one sample per compositor main frame, for the
++// length of a drag and only under --helium-drag-perf.
++//
++// Why this and not the two clocks already in DragPerf: the AppKit callback
++// cadence is the *input* rate (and a synthetic drag's own jitter swamps it),
++// and the handler timer stops the moment we return -- everything a drag
++// update actually costs (layout up to the RootView, the sidebar's repaint,
++// the property-tree rebuild a restack asks for) happens after that. This is
++// the only clock here that can say a frame was dropped.
++class WorkspaceDragFrameProbe : public ui::CompositorAnimationObserver {
++ public:
++  WorkspaceDragFrameProbe(ui::Compositor* compositor,
++                          WorkspaceSidebarView::DragPerf* perf)
++      : compositor_(compositor), perf_(perf) {
++    // The watchdog is for observers that forget to detach; this one is torn
++    // down with the gesture.
++    set_check_active_duration(false);
++    compositor_->AddAnimationObserver(this);
++  }
++  WorkspaceDragFrameProbe(const WorkspaceDragFrameProbe&) = delete;
++  WorkspaceDragFrameProbe& operator=(const WorkspaceDragFrameProbe&) = delete;
++  ~WorkspaceDragFrameProbe() override {
++    if (compositor_) {
++      compositor_->RemoveAnimationObserver(this);
++    }
++  }
++
++  // ui::CompositorAnimationObserver:
++  void OnAnimationStep(base::TimeTicks timestamp) override {
++    if (!last_.is_null() && perf_) {
++      perf_->frame_us.push_back(
++          static_cast<int>((timestamp - last_).InMicroseconds()));
++    }
++    last_ = timestamp;
++  }
++  void OnCompositingShuttingDown(ui::Compositor* compositor) override {
++    compositor->RemoveAnimationObserver(this);
++    compositor_ = nullptr;
++  }
++
++ private:
++  raw_ptr<ui::Compositor> compositor_;
++  const raw_ptr<WorkspaceSidebarView::DragPerf> perf_;
++  base::TimeTicks last_;
++};
++
+ WorkspaceSidebarView::WorkspaceSidebarView()
+     : views::AnimationDelegateViews(this) {
+   // helium-fork M3.10-r1: the folder's motion. Both numbers are Dia's, fitted
+@@ -347,6 +503,11 @@ WorkspaceSidebarView::WorkspaceSidebarVi
    folder_fade_animation_.SetTweenType(gfx::Tween::LINEAR);
    folder_fade_animation_.Reset(1.0);
  
@@ -1432,7 +1859,18 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    placeholder_ = AddChildView(std::make_unique<FavoritesEmptyPlaceholder>());
    space_header_ = AddChildView(std::make_unique<WorkspaceSpaceHeader>(
        base::BindRepeating(&WorkspaceSidebarView::ToggleSpaceCollapsed,
-@@ -430,6 +491,11 @@ void WorkspaceSidebarView::LoadSpaceColl
+@@ -384,6 +545,10 @@ void WorkspaceSidebarView::AddedToWidget
+ }
+ 
+ void WorkspaceSidebarView::RemovedFromWidget() {
++  // 轮3: drop the cross-container pointer before the widget tears down. It
++  // and this view die together, but a raw_ptr that outlives its pointee
++  // trips the dangling detector even where nothing dereferences it.
++  today_container_ = nullptr;
+   service_observation_.Reset();
+   TabStripModelObserver::StopObservingAll(this);
+   service_ = nullptr;
+@@ -430,6 +595,11 @@ void WorkspaceSidebarView::LoadSpaceColl
  }
  
  void WorkspaceSidebarView::ToggleSpaceCollapsed() {
@@ -1444,20 +1882,31 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    // The state being left has to be snapshotted before anything else moves:
    // SyncBindings() below rewrites surfaced_entry_ids_, so recomputing the old
    // layout afterwards would give a different -- and one row shorter -- answer
-@@ -462,6 +528,12 @@ void WorkspaceSidebarView::ToggleSpaceCo
+@@ -462,6 +632,23 @@ void WorkspaceSidebarView::ToggleSpaceCo
  }
  
  void WorkspaceSidebarView::AnimationProgressed(const gfx::Animation* animation) {
 +  if (animation == &drag_yield_animation_) {
 +    // Bounds only -- the preferred height is latched for the session, and
 +    // announcing it every frame is exactly what M3.10-r2 forbids.
-+    InvalidateLayout();
++    //
++    // ⛔ And *not* InvalidateLayout(): views' contract there is "always
++    // invalidate up" (view.cc), so each of this tween's ~48 frames a second
++    // marked the whole ancestor chain, and the next paint re-laid-out and
++    // repainted the entire window. Traced 2026-08-25 during an 8.6s drag:
++    // BrowserFrameView and BrowserView laid out 365 times at ~735us each,
++    // VerticalTabStripRegionView 365 times at ~303us, with ToolbarView /
++    // TopContainerView repainting along with them -- roughly 1.4ms of every
++    // 8.3ms frame, spent entirely outside this view. Nothing above the
++    // sidebar can move while the tween runs (latched height), so lay out
++    // this subtree and leave the window alone.
++    DeprecatedLayoutImmediately();
 +    return;
 +  }
    if (animation != &folder_animation_ &&
        animation != &folder_fade_animation_) {
      return;
-@@ -480,6 +552,11 @@ void WorkspaceSidebarView::AnimationProg
+@@ -480,6 +667,11 @@ void WorkspaceSidebarView::AnimationProg
  }
  
  void WorkspaceSidebarView::AnimationEnded(const gfx::Animation* animation) {
@@ -1469,7 +1918,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    if (animation == &folder_animation_) {
      folder_prev_layout_valid_ = false;
    }
-@@ -561,6 +638,7 @@ void WorkspaceSidebarView::SyncEntryView
+@@ -561,6 +753,7 @@ void WorkspaceSidebarView::SyncEntryView
      if (it == entry_views_.end()) {
        view = AddChildView(
            std::make_unique<WorkspaceEntryView>(this, profile_.get()));
@@ -1477,7 +1926,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
        entry_views_[entry.id] = view;
        structure_changed = true;
      } else {
-@@ -586,6 +664,12 @@ void WorkspaceSidebarView::SyncEntryView
+@@ -586,6 +779,12 @@ void WorkspaceSidebarView::SyncEntryView
    ordered_entries_ = std::move(ordered);
    favorite_count_ = favorites;
  
@@ -1490,7 +1939,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    SyncBindings();
  
    // A title or favicon write-back fires this method too; only a change in
-@@ -593,6 +677,8 @@ void WorkspaceSidebarView::SyncEntryView
+@@ -593,6 +792,8 @@ void WorkspaceSidebarView::SyncEntryView
    if (structure_changed) {
      PreferredSizeChanged();
      InvalidateLayout();
@@ -1499,7 +1948,39 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    }
  }
  
-@@ -686,51 +772,66 @@ WorkspaceSidebarView::SidebarLayout Work
+@@ -635,13 +836,18 @@ void WorkspaceSidebarView::SyncBindings(
+       }
+       if (view->active()) {
+         surfaced_changed |= surfaced_entry_ids_.insert(view->entry_id()).second;
+-      } else if (!view->bound_tab()) {
++      } else if (!view->bound_tab() &&
++                 view->entry_id() != drop_surfaced_entry_id_) {
++        // The one just dropped in stays put even with no tab of its own:
++        // showing it is the whole point of revealing it (轮3-r1).
+         surfaced_changed |= surfaced_entry_ids_.erase(view->entry_id()) > 0;
+       }
+     }
+-  } else if (!surfaced_entry_ids_.empty()) {
++  } else if (!surfaced_entry_ids_.empty() ||
++             !drop_surfaced_entry_id_.empty()) {
++    surfaced_changed = !surfaced_entry_ids_.empty();
+     surfaced_entry_ids_.clear();
+-    surfaced_changed = true;
++    drop_surfaced_entry_id_.clear();
+   }
+   if (surfaced_changed) {
+     PreferredSizeChanged();
+@@ -674,7 +880,8 @@ int WorkspaceSidebarView::FavoritesPlace
+ 
+ WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::ComputeLayout(
+     int width,
+-    bool as_collapsed) const {
++    bool as_collapsed,
++    bool with_drag_hole) const {
+   SidebarLayout out;
+   out.entry_bounds.resize(ordered_entries_.size());
+   out.entry_visible.assign(ordered_entries_.size(), false);
+@@ -686,51 +893,67 @@ WorkspaceSidebarView::SidebarLayout Work
        0,
        width - GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding));
    const int row_width = std::max(available_width, min_child_width);
@@ -1517,7 +1998,8 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  size_t hole = 0;
 +  if (drag_ && !drag_->settling) {
 +    drag_index = DragEntryOrderedIndex();
-+    if (drag_index && drag_->plan_section) {
++    if (drag_index && drag_->plan_section && with_drag_hole &&
++        !drag_->folder_drop) {
 +      hole = drag_->plan_index;
 +      hole_in_grid = *drag_->plan_section ==
 +                     helium_workspace::WorkspaceEntry::Section::kFavorite;
@@ -1600,7 +2082,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    }
  
    y += FavoriteGridGap();
-@@ -741,17 +842,35 @@ WorkspaceSidebarView::SidebarLayout Work
+@@ -741,17 +964,35 @@ WorkspaceSidebarView::SidebarLayout Work
    // step from the header (Dia), each as tall as it asks to be (a row showing
    // its hint is two lines), and laid out only while they are visible.
    const int child_width = std::max(0, row_width - kFolderChildIndent);
@@ -1636,7 +2118,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    }
  
    out.height = y;
-@@ -775,6 +894,26 @@ gfx::Rect LerpRect(const gfx::Rect& from
+@@ -775,6 +1016,26 @@ gfx::Rect LerpRect(const gfx::Rect& from
  WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::CurrentLayout(
      int width) const {
    SidebarLayout target = ComputeLayout(width, space_collapsed_);
@@ -1663,7 +2145,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    if (!folder_animation_.is_animating() || !folder_prev_layout_valid_ ||
        folder_prev_layout_.entry_bounds.size() != target.entry_bounds.size()) {
      // The size guard is for an entry arriving or leaving mid-tween: the two
-@@ -819,7 +958,14 @@ gfx::Size WorkspaceSidebarView::Calculat
+@@ -819,7 +1080,14 @@ gfx::Size WorkspaceSidebarView::Calculat
    const int width = available_size.width().is_bounded()
                          ? available_size.width().value()
                          : GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
@@ -1679,7 +2161,17 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  }
  
  gfx::Size WorkspaceSidebarView::GetMinimumSize() const {
-@@ -880,10 +1026,15 @@ void WorkspaceSidebarView::Layout(PassKe
+@@ -844,6 +1112,9 @@ gfx::Size WorkspaceSidebarView::GetMinim
+ }
+ 
+ void WorkspaceSidebarView::Layout(PassKey) {
++  DragPerf* const perf = drag_perf_.get();
++  const base::TimeTicks layout_start =
++      perf ? base::TimeTicks::Now() : base::TimeTicks();
+   const SidebarLayout layout = CurrentLayout(width());
+ 
+   // helium-fork M3.10-r2: this view's own bounds can trail the layout it is
+@@ -880,12 +1151,21 @@ void WorkspaceSidebarView::Layout(PassKe
                               (bounds_trail_layout && view->layer());
      view->SetFolderMotion(visible && needs_layer,
                            visible ? layout.entry_fade[i] : 1.0f);
@@ -1695,8 +2187,14 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +    view->SetVisible(visible && !hidden_by_drag);
    }
    UpdateCardShadow();
++  if (perf) {
++    perf->layout_us += (base::TimeTicks::Now() - layout_start).InMicroseconds();
++    ++perf->layouts;
++  }
  }
-@@ -1016,5 +1167,405 @@ bool WorkspaceSidebarView::CanEntryBecom
+ 
+ void WorkspaceSidebarView::SetCardShadowFrame(
+@@ -1016,5 +1296,811 @@ bool WorkspaceSidebarView::CanEntryBecom
               helium_workspace::WorkspaceService::kMaxFavorites;
  }
  
@@ -1744,7 +2242,12 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  if (folder_animation_.is_animating()) {
 +    return false;
 +  }
-+  if (!row->renders_as_capsule() && space_collapsed_) {
++  // Only rows that are actually on screen. A surfaced row -- the one a drop
++  // revealed under the closed folder -- is on screen, so it drags like any
++  // other; the sidebar must never contain a row you cannot pick up (user
++  // 2026-08-25).
++  if (!row->renders_as_capsule() &&
++      !IsPinnedRowVisible(row, space_collapsed_)) {
 +    return false;
 +  }
 +  return true;
@@ -1761,6 +2264,18 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +                                   .header_bounds.y();
 +
 +  drag_ = std::make_unique<DragState>();
++  if (DragPerfRequested()) {
++    drag_perf_ = std::make_unique<DragPerf>();
++    if (ui::Compositor* const compositor =
++            GetWidget() ? GetWidget()->GetCompositor() : nullptr) {
++      drag_perf_->frame_interval_us =
++          compositor->refresh_rate() > 0.0
++              ? static_cast<int64_t>(1e6 / compositor->refresh_rate())
++              : 0;
++      drag_frame_probe_ = std::make_unique<WorkspaceDragFrameProbe>(
++          compositor, drag_perf_.get());
++    }
++  }
 +  drag_->zone_boundary_y = settled_boundary;
 +  drag_->entry_id = row->entry_id();
 +  drag_->from_favorite = row->renders_as_capsule();
@@ -1788,6 +2303,13 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +                         row->drag_surface_color(), row->drag_text_color(),
 +                         row->size(), drag_->grab);
 +  }
++  // Today's slot resizes its container while the layout is still animating
++  // towards it -- the same "resized to target bounds whilst scrolling"
++  // artifact TabStripView::DisableOverflowVisuals exists for. Suppress the
++  // scrollbar for the length of the gesture; `Dia:` never shows one mid-drag.
++  if (today_container_) {
++    today_container_->SetWorkspaceEntryDragActive(true);
++  }
 +  InvalidateLayout();
 +  SchedulePaint();
 +}
@@ -1810,12 +2332,20 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +}
 +
 +bool WorkspaceSidebarView::CanDrop(const ui::OSExchangeData& data) {
-+  // Same-session only for now: the id must be the one this sidebar floated.
-+  // A drag from another window has no session (and so no preview) here;
-+  // cross-window entry drags are a later round.
-+  const std::optional<std::string> id =
-+      helium_workspace::ReadWorkspaceEntryDragData(data);
-+  return id && drag_ && drag_->entry_id == *id;
++  // Same-session only for now: a drag from another window has no session
++  // (and so no preview) here; cross-window entry drags are a later round.
++  //
++  // ⛔ The session, never the payload. Reading the pickle means
++  // [NSPasteboard dataForType:] -- a cross-process round trip
++  // (os_exchange_data_provider_mac.mm:261). DropHelper re-walks the target
++  // chain, calling this, every time the view under the pointer changes
++  // (drop_helper.cc:176-208), which during a drag that keeps crossing the
++  // sidebar/Today boundary is many times a second. Same argument the region
++  // view's OnDragUpdated already runs on: a live entry session and a link
++  // drag cannot both be in flight, and a drag started in another window
++  // leaves no session here. The payload is read once per gesture, in
++  // GetDropCallback's neighbourhood.
++  return HasEntryDragSession();
 +}
 +
 +void WorkspaceSidebarView::OnDragEntered(const ui::DropTargetEvent& event) {
@@ -1824,8 +2354,23 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +}
 +
 +int WorkspaceSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
++  TRACE_EVENT0("ui", "WorkspaceSidebarView::OnDragUpdated");
++  DragPerf* const perf = drag_perf_.get();
++  const base::TimeTicks t0 = perf ? base::TimeTicks::Now() : base::TimeTicks();
++  if (perf) {
++    DragPerfTick(t0);
++  }
 +  UpdateDragPlan(event.location());
++  const base::TimeTicks t1 = perf ? base::TimeTicks::Now() : base::TimeTicks();
 +  UpdateDragOverlay(event.location());
++  if (perf) {
++    const base::TimeTicks t2 = base::TimeTicks::Now();
++    perf->plan_us += (t1 - t0).InMicroseconds();
++    perf->overlay_us += (t2 - t1).InMicroseconds();
++    perf->handler_us.push_back(
++        static_cast<int>((t2 - t0).InMicroseconds() + perf->pending_us));
++    perf->pending_us = 0;
++  }
 +  return drag_ && drag_->plan_section ? ui::DragDropTypes::DRAG_MOVE
 +                                      : ui::DragDropTypes::DRAG_NONE;
 +}
@@ -1866,10 +2411,263 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  // removed in the meantime simply misses.
 +  if (service_->MoveEntry(entry_id, section, index)) {
 +    output_drag_op = ui::mojom::DragOperation::kMove;
++    if (space_collapsed_ &&
++        section == helium_workspace::WorkspaceEntry::Section::kPinned) {
++      drop_surfaced_entry_id_ = entry_id;
++    }
 +  }
 +}
 +
++// ---- M3.11 轮3: the Today half of the same session ----
++
++void WorkspaceSidebarView::SetTodayContainer(
++    UnpinnedTabContainerView* container) {
++  today_container_ = container;
++}
++
++bool WorkspaceSidebarView::IsDraggingThisEntry(
++    const ui::OSExchangeData& data) const {
++  const std::optional<std::string> id =
++      helium_workspace::ReadWorkspaceEntryDragData(data);
++  return id && drag_ && drag_->entry_id == *id;
++}
++
++bool WorkspaceSidebarView::HasEntryDragSession() const {
++  return drag_ && !drag_->settling;
++}
++
++bool WorkspaceSidebarView::OnTodayDragUpdate(const views::View& source,
++                                             const gfx::Point& point_in_source,
++                                             std::optional<int> tab_index,
++                                             size_t row_position) {
++  if (!drag_) {
++    return false;
++  }
++  TRACE_EVENT0("ui", "WorkspaceSidebarView::OnTodayDragUpdate");
++  DragPerf* const perf = drag_perf_.get();
++  const base::TimeTicks t0 = perf ? base::TimeTicks::Now() : base::TimeTicks();
++  if (perf) {
++    DragPerfTick(t0);
++  }
++  SetTodayDragPlan(tab_index, row_position);
++  // The card is region-owned, so it keeps tracking the pointer across a
++  // container the sidebar does not contain. Only this view knows the grab
++  // point and the shape it should be wearing, so the conversion happens
++  // here rather than in the container: without it the card freezes at the
++  // sidebar's edge the moment the pointer crosses.
++  gfx::Point point_in_sidebar = point_in_source;
++  views::View::ConvertPointToTarget(&source, this, &point_in_sidebar);
++  const base::TimeTicks t1 = perf ? base::TimeTicks::Now() : base::TimeTicks();
++  UpdateDragOverlay(point_in_sidebar);
++  if (perf) {
++    const base::TimeTicks t2 = base::TimeTicks::Now();
++    perf->plan_us += (t1 - t0).InMicroseconds();
++    perf->overlay_us += (t2 - t1).InMicroseconds();
++    perf->handler_us.push_back(
++        static_cast<int>((t2 - t0).InMicroseconds() + perf->pending_us));
++    perf->pending_us = 0;
++  }
++  return tab_index.has_value();
++}
++
++void WorkspaceSidebarView::OnTodayDragExited() {
++  // Same contract as this view's own OnDragExited: the hole closes, the
++  // session stays. The pointer crosses this boundary mid-gesture in both
++  // directions, so tearing down here would kill the drag on the way back.
++  SetTodayDragPlan(std::nullopt, 0);
++}
++
++views::View::DropCallback WorkspaceSidebarView::GetTodayDropCallback() {
++  if (!drag_ || !drag_->plan_today_index) {
++    return base::NullCallback();
++  }
++  return base::BindOnce(&WorkspaceSidebarView::PerformTodayDrop,
++                        weak_factory_.GetWeakPtr(), drag_->entry_id,
++                        *drag_->plan_today_index);
++}
++
++std::optional<size_t> WorkspaceSidebarView::TodayDropSlotRow() const {
++  if (!drag_ || drag_->settling || !drag_->plan_today_index) {
++    return std::nullopt;
++  }
++  return drag_->plan_today_row;
++}
++
++void WorkspaceSidebarView::SetTodayDragPlan(std::optional<int> tab_index,
++                                            size_t row_position) {
++  if (!drag_) {
++    return;
++  }
++  SetFolderDropTarget(false);
++  const bool had_today = drag_->plan_today_index.has_value();
++  if (drag_->plan_today_index == tab_index && !drag_->plan_section &&
++      (!tab_index || drag_->plan_today_row == row_position)) {
++    return;
++  }
++  if (drag_perf_) {
++    ++drag_perf_->plan_changes;
++    if (!had_today && tab_index) {
++      ++drag_perf_->crossings;
++    }
++  }
++  // Crossing the boundary closes the sidebar's hole in the same breath as it
++  // opens Today's: one snapshot, one glide, so the two sides can never be a
++  // frame apart about where the entry is.
++  RetargetDragYield();
++  drag_->plan_section = std::nullopt;
++  drag_->plan_index = 0;
++  drag_->plan_today_index = tab_index;
++  drag_->plan_today_row = row_position;
++  drag_->form_dirty = true;
++  drag_->hit_dirty = true;
++  InvalidateLayout();
++  SchedulePaint();
++  if (today_container_ && (had_today || tab_index)) {
++    today_container_->InvalidateLayout();
++  }
++}
++
++void WorkspaceSidebarView::PerformTodayDrop(
++    std::string entry_id,
++    int tab_index,
++    const ui::DropTargetEvent& event,
++    ui::mojom::DragOperation& output_drag_op,
++    std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
++  output_drag_op = ui::mojom::DragOperation::kNone;
++  BrowserWindowInterface* const browser = GetBrowserWindow();
++  if (!service_ || !browser) {
++    return;
++  }
++  const helium_workspace::WorkspaceEntry* const entry =
++      service_->FindEntryById(entry_id);
++  TabStripModel* const model = browser->GetTabStripModel();
++  if (!entry || !model) {
++    return;
++  }
++  const GURL url = entry->url;
++  const tabs::TabHandle handle =
++      service_->FindTabForEntryInWindow(entry_id, browser);
++  if (tabs::TabInterface* const tab = handle.Get()) {
++    // The page is already open here, so it just stops being the entry's and
++    // takes its place among the ordinary tabs. Unbind first: Today filters
++    // its layout on the binding, and moving a still-bound tab would be
++    // moving a row nobody draws.
++    service_->UnbindTab(handle);
++    const int from = model->GetIndexOfTab(tab);
++    if (from >= 0 && model->count() > 0) {
++      model->MoveWebContentsAt(from, std::clamp(tab_index, 0, model->count() - 1),
++                               /*select_after_move=*/false);
++    }
++  } else {
++    // No tab here. `Arc:` starts loading the page on landing rather than
++    // parking a placeholder row (measured 2026-08-24), so open a real tab
++    // at the drop index. Not foregrounded: the drop is a reorganisation, and
++    // stealing the active tab is not something the recordings show.
++    chrome::AddAndReturnTabAt(browser, url, std::clamp(tab_index, 0, model->count()),
++                              /*foreground=*/false, /*group=*/std::nullopt,
++                              /*pinned=*/false);
++  }
++  // The one model write that ends the entry's life. Ordered last so that a
++  // failed open still leaves the entry where it was.
++  service_->RemoveEntry(entry_id);
++  output_drag_op = ui::mojom::DragOperation::kMove;
++}
++
 +// ---- M3.11 entry drag: session plumbing ----
++
++void WorkspaceSidebarView::AddTodayHitSample(base::TimeDelta elapsed) {
++  if (!drag_perf_) {
++    return;
++  }
++  const int64_t us = elapsed.InMicroseconds();
++  drag_perf_->today_us += us;
++  // Spent before OnTodayDragUpdate was reached, so it would otherwise fall
++  // outside the frame's handler total.
++  drag_perf_->pending_us += us;
++}
++
++void WorkspaceSidebarView::DragPerfTick(base::TimeTicks now) {
++  DragPerf* const perf = drag_perf_.get();
++  if (perf->last_tick.is_null()) {
++    perf->started = now;
++    perf->last_tick = now;
++    perf->ticks = 1;
++    return;
++  }
++  const base::TimeDelta gap = now - perf->last_tick;
++  // DropHelper delivers an enter *and* an update inside one AppKit callback
++  // when the target view changes; that is one frame, not two.
++  if (gap < base::Milliseconds(1)) {
++    return;
++  }
++  perf->gap_us.push_back(static_cast<int>(gap.InMicroseconds()));
++  perf->last_tick = now;
++  ++perf->ticks;
++}
++
++void WorkspaceSidebarView::DragPerfFinish() {
++  if (!drag_perf_) {
++    return;
++  }
++  std::unique_ptr<DragPerf> perf = std::move(drag_perf_);
++  drag_frame_probe_.reset();
++  // Frames alone are enough to be worth a line: a gesture that never moved
++  // over the sidebar (the pointer left the window) has no updates at all,
++  // and that is exactly the control worth reading.
++  if (perf->ticks < 2 && perf->frame_us.size() < 2) {
++    return;
++  }
++  // How many compositor frames came in at more than 1.5 budgets -- the
++  // closest thing to "frames the user saw drop".
++  int late_frames = 0;
++  if (perf->frame_interval_us > 0) {
++    const int64_t late = perf->frame_interval_us * 3 / 2;
++    for (int us : perf->frame_us) {
++      if (us > late) {
++        ++late_frames;
++      }
++    }
++  }
++  const int64_t span_ms = (perf->last_tick - perf->started).InMilliseconds();
++  const size_t frames = perf->frame_us.size();
++  const std::string line = base::StringPrintf(
++      "helium drag-perf: %" PRId64 "ms | frame us budget=%" PRId64
++      " n=%zu p50=%d p95=%d max=%d late=%d | handler us p50=%d p95=%d max=%d "
++      "over %d updates | layout us total=%" PRId64 " n=%d | gap us p50=%d "
++      "p95=%d max=%d | phases us plan=%" PRId64 " overlay=%" PRId64
++      " todayhit=%" PRId64 " | plan-changes=%d crossings=%d",
++      span_ms, perf->frame_interval_us, frames,
++      PercentileUs(perf->frame_us, 0.50), PercentileUs(perf->frame_us, 0.95),
++      PercentileUs(perf->frame_us, 1.0), late_frames,
++      PercentileUs(perf->handler_us, 0.50),
++      PercentileUs(perf->handler_us, 0.95),
++      PercentileUs(perf->handler_us, 1.0), perf->ticks, perf->layout_us,
++      perf->layouts, PercentileUs(perf->gap_us, 0.50),
++      PercentileUs(perf->gap_us, 0.95), PercentileUs(perf->gap_us, 1.0),
++      perf->plan_us, perf->overlay_us, perf->today_us, perf->plan_changes,
++      perf->crossings);
++  LOG(WARNING) << line;
++  // `open -na` gives the user no stderr, so the line also lands in a file
++  // next to the profile. Off the UI thread: this runs at the end of a
++  // gesture, and blocking there is exactly what is being measured.
++  base::FilePath dir;
++  if (!base::PathService::Get(chrome::DIR_USER_DATA, &dir)) {
++    return;
++  }
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
++      base::BindOnce(
++          [](base::FilePath path, std::string text) {
++            // OPEN_ALWAYS, not AppendToFile: the latter opens without
++            // O_CREAT and simply fails while the log does not exist yet.
++            base::File file(path, base::File::FLAG_OPEN_ALWAYS |
++                                      base::File::FLAG_APPEND);
++            if (file.IsValid()) {
++              file.WriteAtCurrentPos(base::as_byte_span(text));
++            }
++          },
++          dir.AppendASCII("helium_drag_perf.log"), line + "\n"));
++}
 +
 +std::optional<size_t> WorkspaceSidebarView::DragEntryOrderedIndex() const {
 +  if (!drag_) {
@@ -1883,11 +2681,57 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  return std::nullopt;
 +}
 +
++void WorkspaceSidebarView::EnsureDropGeometry() {
++  if (!drag_) {
++    return;
++  }
++  // The two inputs that move without a plan change: the sidebar resizing
++  // under the drag, and an entry arriving or leaving mid-gesture.
++  const int w = width();
++  const size_t count = ordered_entries_.size();
++  if (!drag_->hit_dirty && drag_->hit_width == w &&
++      drag_->hit_entry_count == count) {
++    return;
++  }
++  drag_->hit_dirty = false;
++  drag_->hit_width = w;
++  drag_->hit_entry_count = count;
++
++  const std::optional<size_t> drag_index = DragEntryOrderedIndex();
++  const size_t effective_favorites =
++      favorite_count_ - (drag_->from_favorite ? 1u : 0u);
++  drag_->hit_grid_slots = BuildGridSlotRects(effective_favorites + 1, w);
++
++  // The live layout -- the one with the preview slot in it -- on purpose:
++  // measuring against what the user can actually see is what gives the row
++  // rule its hysteresis (the slot only advances once the pointer passes the
++  // row where it is *drawn*), and that is the 轮2 feel the user accepted.
++  // Measuring against the closed-up layout instead removes the hysteresis
++  // and shifts every row-to-row drop one place; tried 2026-08-25, reverted.
++  const SidebarLayout current_target = ComputeLayout(w, space_collapsed_);
++  drag_->hit_row_centers.clear();
++  for (size_t i = favorite_count_; i < ordered_entries_.size(); ++i) {
++    if (drag_index && i == *drag_index) {
++      continue;
++    }
++    if (!current_target.entry_visible[i]) {
++      continue;
++    }
++    drag_->hit_row_centers.push_back(
++        current_target.entry_bounds[i].CenterPoint().y());
++  }
++}
++
 +void WorkspaceSidebarView::UpdateDragPlan(const gfx::Point& point) {
 +  if (!drag_ || !service_) {
 +    return;
 +  }
-+  const SidebarLayout current_target = ComputeLayout(width(), space_collapsed_);
++  // ⛔ Not a fresh ComputeLayout per pointer frame (轮3 did that, and it was
++  // still there after r3 removed the overlay's copy). What the pointer is
++  // measured against only moves when the plan does, so it is cached and the
++  // plan-change sites mark it dirty -- the same contract as form_dirty.
++  // Nothing below recomputes it, so the vectors stay put for this call.
++  EnsureDropGeometry();
 +  const helium_workspace::SidebarDragZone zone =
 +      helium_workspace::ClassifySidebarDragZone(point.y(),
 +                                                drag_->zone_boundary_y);
@@ -1899,35 +2743,38 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +        service_->CountFavorites() <
 +            helium_workspace::WorkspaceService::kMaxFavorites;
 +    if (!accepted) {
++      SetFolderDropTarget(false);
 +      SetDragPlan(std::nullopt, 0);
 +      return;
 +    }
-+    const size_t effective_favorites =
-+        favorite_count_ - (drag_->from_favorite ? 1u : 0u);
-+    const std::vector<gfx::Rect> slot_rects =
-+        BuildGridSlotRects(effective_favorites + 1, width());
-+    SetDragPlan(helium_workspace::WorkspaceEntry::Section::kFavorite,
-+                helium_workspace::GridInsertIndex(point, slot_rects));
-+    return;
-+  }
-+  // Rows. A collapsed folder has nowhere visible to land a row.
-+  if (space_collapsed_) {
-+    SetDragPlan(std::nullopt, 0);
++    SetFolderDropTarget(false);
++    SetDragPlan(
++        helium_workspace::WorkspaceEntry::Section::kFavorite,
++        helium_workspace::GridInsertIndex(point, drag_->hit_grid_slots));
 +    return;
 +  }
 +  const std::optional<size_t> drag_index = DragEntryOrderedIndex();
-+  std::vector<int> row_centers;
-+  for (size_t i = favorite_count_; i < ordered_entries_.size(); ++i) {
-+    if (drag_index && i == *drag_index) {
-+      continue;
-+    }
-+    if (!current_target.entry_visible[i]) {
-+      continue;
-+    }
-+    row_centers.push_back(current_target.entry_bounds[i].CenterPoint().y());
++  // Rows. 轮3: a collapsed folder *does* take a drop -- `Arc:` expands it
++  // afterwards to show the new member, and neither reference spring-loads on
++  // hover (measured 2026-08-24). What a collapsed folder cannot do is show a
++  // slot: its rows are not laid out, so there is no ordering to preview and
++  // the plan is simply "append to the section".
++  if (space_collapsed_) {
++    // `Arc:` fills the closed folder's own row and opens nothing: the item
++    // appears on the line under it only once you let go (recordings
++    // re-read 2026-08-25). So the plan is "append", but the layout is told
++    // to leave the rows exactly where they are.
++    const size_t pinned_count = ordered_entries_.size() - favorite_count_;
++    const bool dragging_a_row = drag_index && *drag_index >= favorite_count_;
++    SetFolderDropTarget(true);
++    SetDragPlan(helium_workspace::WorkspaceEntry::Section::kPinned,
++                pinned_count - (dragging_a_row ? 1u : 0u));
++    return;
 +  }
-+  SetDragPlan(helium_workspace::WorkspaceEntry::Section::kPinned,
-+              helium_workspace::RowInsertIndex(point.y(), row_centers));
++  SetFolderDropTarget(false);
++  SetDragPlan(
++      helium_workspace::WorkspaceEntry::Section::kPinned,
++      helium_workspace::RowInsertIndex(point.y(), drag_->hit_row_centers));
 +}
 +
 +void WorkspaceSidebarView::SetDragPlan(
@@ -1936,15 +2783,31 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  if (!drag_) {
 +    return;
 +  }
++  const bool had_today = drag_->plan_today_index.has_value();
 +  if (drag_->plan_section == section &&
-+      (!section || drag_->plan_index == index)) {
++      (!section || drag_->plan_index == index) && !had_today) {
 +    return;
++  }
++  if (drag_perf_) {
++    ++drag_perf_->plan_changes;
++    if (had_today) {
++      ++drag_perf_->crossings;
++    }
 +  }
 +  // Snapshot what is on screen *before* the flip (M3.10-r1 lesson), then
 +  // glide to the new preview.
 +  RetargetDragYield();
 +  drag_->plan_section = section;
 +  drag_->plan_index = index;
++  drag_->form_dirty = true;
++  drag_->hit_dirty = true;
++  // 轮3: the two plans are mutually exclusive. Coming back from Today has to
++  // close that slot here, in the same snapshot, or both sides show a hole.
++  drag_->plan_today_index = std::nullopt;
++  drag_->plan_today_row = 0;
++  if (had_today && today_container_) {
++    today_container_->InvalidateLayout();
++  }
 +  const int target_height = ComputeLayout(width(), space_collapsed_).height;
 +  if (target_height > drag_->latched_height) {
 +    // Discrete, once per plan change -- a zone crossing, not a pointer
@@ -1952,6 +2815,23 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +    drag_->latched_height = target_height;
 +    PreferredSizeChanged();
 +  }
++  InvalidateLayout();
++  SchedulePaint();
++}
++
++void WorkspaceSidebarView::SetFolderDropTarget(bool folder_drop) {
++  const bool now = drag_ && folder_drop;
++  if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
++    header->SetDropTarget(now);
++  }
++  if (!drag_ || drag_->folder_drop == now) {
++    return;
++  }
++  // The hole appears or disappears with this flag, so the layout has to be
++  // told even when the plan itself did not move.
++  drag_->folder_drop = now;
++  drag_->form_dirty = true;
++  drag_->hit_dirty = true;
 +  InvalidateLayout();
 +  SchedulePaint();
 +}
@@ -1967,6 +2847,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  if (!drag_ || drag_->settling) {
 +    return;
 +  }
++  DragPerfFinish();
 +  // Let the rows glide from wherever the preview left them to the settled
 +  // layout -- after a drop that is a no-op (they are already there); after a
 +  // cancel it is the fold-back.
@@ -1975,6 +2856,9 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  // floating card lands on it: the card *is* the row until then, and
 +  // revealing both would show it twice.
 +  drag_->settling = true;
++  if (today_container_ && drag_->plan_today_index) {
++    today_container_->InvalidateLayout();
++  }
 +  PreferredSizeChanged();
 +  InvalidateLayout();
 +  SchedulePaint();
@@ -1989,9 +2873,19 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +}
 +
 +void WorkspaceSidebarView::FinishDragSettle() {
++  SetFolderDropTarget(false);
 +  drag_.reset();
 +  if (drag_overlay_) {
 +    drag_overlay_->Stop();
++  }
++  if (today_container_) {
++    today_container_->SetWorkspaceEntryDragActive(false);
++  }
++  // The folder stays shut and just shows what was dropped into it -- `Arc:`
++  // reveals the one entry, not the whole folder (user 2026-08-25).
++  if (!drop_surfaced_entry_id_.empty() && space_collapsed_ &&
++      surfaced_entry_ids_.insert(drop_surfaced_entry_id_).second) {
++    PreferredSizeChanged();
 +  }
 +  PreferredSizeChanged();
 +  InvalidateLayout();
@@ -2068,6 +2962,21 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  if (!drag_ || !drag_overlay_ || !drag_overlay_->active()) {
 +    return;
 +  }
++  if (drag_->form_dirty) {
++    drag_->form_dirty = false;
++    RefreshDragForm();
++  }
++  gfx::Point point = point_in_sidebar;
++  if (drag_overlay_->parent()) {
++    views::View::ConvertPointToTarget(this, drag_overlay_->parent(), &point);
++  }
++  drag_overlay_->SetPointer(point);
++}
++
++void WorkspaceSidebarView::RefreshDragForm() {
++  if (!drag_ || !drag_overlay_ || !drag_overlay_->active()) {
++    return;
++  }
 +  const bool as_capsule =
 +      drag_->plan_section == helium_workspace::WorkspaceEntry::Section::kFavorite;
 +  // The capsule the card would become is the slot it would fill; a refused
@@ -2089,11 +2998,6 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +  if (!form_size.IsEmpty()) {
 +    drag_overlay_->SetForm(as_capsule, form_size);
 +  }
-+  gfx::Point point = point_in_sidebar;
-+  if (drag_overlay_->parent()) {
-+    views::View::ConvertPointToTarget(this, drag_overlay_->parent(), &point);
-+  }
-+  drag_overlay_->SetPointer(point);
 +}
 +
 +void WorkspaceSidebarView::SetDragOverlay(WorkspaceEntryDragOverlay* overlay) {
@@ -2106,7 +3010,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-@@ -6,6 +6,8 @@
+@@ -6,12 +6,15 @@
  #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SIDEBAR_VIEW_H_
  
  #include <map>
@@ -2115,7 +3019,14 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  #include <set>
  #include <string>
  #include <vector>
-@@ -19,10 +21,12 @@
+ 
+ #include "base/callback_list.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/time/time.h"
+ #include "base/scoped_observation.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+@@ -19,13 +22,19 @@
  #include "ui/base/metadata/metadata_header_macros.h"
  #include "ui/gfx/animation/slide_animation.h"
  #include "ui/views/animation/animation_delegate_views.h"
@@ -2124,11 +3035,18 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
  class BrowserWindowInterface;
  class HeliumCardShadowView;
++// 轮3-r4: the frame-cadence probe (defined in the .cc, only ever alive
++// while --helium-drag-perf is on and an entry is in the air).
++class WorkspaceDragFrameProbe;
 +class WorkspaceEntryDragOverlay;
  class PrefService;
  class Profile;
  class TabStripModel;
-@@ -48,7 +52,8 @@ class WorkspaceSidebarView : public view
++class UnpinnedTabContainerView;
+ 
+ // The whole workspace sidebar: the Favorites capsule grid, the collapsible
+ // space header (which the user treats as the pinned rows' folder, M3.10),
+@@ -48,7 +57,8 @@ class WorkspaceSidebarView : public view
                               public views::AnimationDelegateViews,
                               public helium_workspace::WorkspaceService::Observer,
                               public TabStripModelObserver,
@@ -2138,7 +3056,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
    METADATA_HEADER(WorkspaceSidebarView, views::View)
  
   public:
-@@ -65,6 +70,29 @@ class WorkspaceSidebarView : public view
+@@ -65,6 +75,29 @@ class WorkspaceSidebarView : public view
    gfx::Size GetMinimumSize() const override;
    void Layout(PassKey) override;
    void ChildPreferredSizeChanged(views::View* child) override;
@@ -2168,7 +3086,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
    // views::AnimationDelegateViews:
    void AnimationProgressed(const gfx::Animation* animation) override;
-@@ -91,6 +119,12 @@ class WorkspaceSidebarView : public view
+@@ -91,6 +124,86 @@ class WorkspaceSidebarView : public view
    // only aims it, because it knows the rows and the scroll offset.
    void SetCardShadowFrame(HeliumCardShadowView* card_shadow);
  
@@ -2178,10 +3096,84 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +  // rectangle.
 +  void SetDragOverlay(WorkspaceEntryDragOverlay* overlay);
 +
++  // helium-fork M3.11 轮3: Today is the other half of this same drag
++  // session. UnpinnedTabContainerView keeps no state of its own -- it
++  // forwards the pointer and the tab index it would drop at, and asks these
++  // for the answers. The session has to live here: it opens before the
++  // pointer ever reaches Today, and it must survive every OnDragExited on
++  // the way across (that is why OnDragExited only closes the hole).
++  void SetTodayContainer(UnpinnedTabContainerView* container);
++  bool IsDraggingThisEntry(const ui::OSExchangeData& data) const;
++  // Is any entry airborne right now? Asked by Today's event targeter, which
++  // has no drag data to check against.
++  bool HasEntryDragSession() const;
++
++  // ---- 轮3-r4 drag instrument (off unless --helium-drag-perf) ----
++  // Whether the timers are armed at all, so callers can skip the clock reads.
++  bool drag_perf_active() const { return drag_perf_ != nullptr; }
++  // How long the Today container spent working out which row the pointer is
++  // on. Counted both as its own phase and into this frame's handler total.
++  void AddTodayHitSample(base::TimeDelta elapsed);
++
++  // 轮3-r4. Two histograms, deliberately kept apart: |gap_us| is the cadence
++  // AppKit actually achieved between draggingUpdated: callbacks, |handler_us|
++  // is what we spent inside one. Lumpy gaps with short handlers would mean
++  // the stall is not ours, and that is a different bug from this one -- the
++  // instrument exists to tell those two apart rather than guess again
++  // (r3 guessed, and the frames still dropped).
++  struct DragPerf {
++    base::TimeTicks started;
++    base::TimeTicks last_tick;
++    std::vector<int> gap_us;
++    std::vector<int> handler_us;
++    int64_t plan_us = 0;
++    int64_t overlay_us = 0;
++    int64_t today_us = 0;
++    // Work done before this frame's entry point was reached (the Today
++    // container's hit test), folded into the frame's handler total.
++    int64_t pending_us = 0;
++    // Time in WorkspaceSidebarView::Layout() during the session, and how
++    // many times it ran -- the yield tween invalidates up to the RootView on
++    // every one of its frames, so this is what says whether the relayout is
++    // the expensive half.
++    int64_t layout_us = 0;
++    int layouts = 0;
++    // Compositor main-frame intervals, in microseconds. This is the only
++    // number here that answers "did a frame drop": the handler and the
++    // AppKit callback cadence are both blind to work that happens after the
++    // callback returns.
++    std::vector<int> frame_us;
++    // What the display says a frame is worth, so the log states its own
++    // budget instead of assuming 60Hz.
++    int64_t frame_interval_us = 0;
++    int ticks = 0;
++    int plan_changes = 0;
++    int crossings = 0;
++  };
++
++  // One hit test, two numbers: |tab_index| is the tab-strip index the drop
++  // commits at, |row_position| is which of Today's laid-out rows the empty
++  // slot goes before. They are not the same counter -- entry tabs are laid
++  // out nowhere here but still occupy model indices -- and deriving one from
++  // the other during layout would mean hit-testing from inside a layout
++  // pass. |tab_index| is nullopt when Today has no landing spot at all.
++  // Returns whether a release here would be taken.
++  bool OnTodayDragUpdate(const views::View& source,
++                         const gfx::Point& point_in_source,
++                         std::optional<int> tab_index,
++                         size_t row_position);
++  void OnTodayDragExited();
++  views::View::DropCallback GetTodayDropCallback();
++  // Which laid-out Today row the one-row gap goes before, or nullopt for no
++  // gap. Asked by UnpinnedTabContainerView from its layout: `Dia:` opens a
++  // plain empty slot there, the same rule as a reorder inside a section
++  // (measured 2026-08-24, decisions "M3.11 轮3").
++  std::optional<size_t> TodayDropSlotRow() const;
++
    // WorkspaceEntryView::Delegate:
    void OnEntryActivated(const std::string& entry_id) override;
    void OnEntryToggleFavorite(const std::string& entry_id) override;
-@@ -98,6 +132,7 @@ class WorkspaceSidebarView : public view
+@@ -98,6 +211,7 @@ class WorkspaceSidebarView : public view
    void OnEntryCloseRequested(const std::string& entry_id) override;
    void OnEntryResetRequested(const std::string& entry_id) override;
    bool CanEntryBecomeFavorite(const std::string& entry_id) const override;
@@ -2189,7 +3181,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
   private:
    // Geometry of one layout pass, shared by Layout() and the preferred-size
-@@ -111,6 +146,9 @@ class WorkspaceSidebarView : public view
+@@ -111,6 +225,9 @@ class WorkspaceSidebarView : public view
      gfx::Rect placeholder_bounds;
      gfx::Rect header_bounds;
      bool placeholder_visible = false;
@@ -2199,7 +3191,23 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
    };
  
    // Resolves the browser this sidebar belongs to; only valid once the widget
-@@ -141,6 +179,77 @@ class WorkspaceSidebarView : public view
+@@ -130,7 +247,14 @@ class WorkspaceSidebarView : public view
+ 
+   // The layout of one settled state. |as_collapsed| is asked for rather than
+   // read off space_collapsed_ so the folder animation can have both.
+-  SidebarLayout ComputeLayout(int width, bool as_collapsed) const;
++  // |with_drag_hole| = false leaves the drag preview's empty slot out: that
++  // is the geometry the *hit test* has to read. Measuring the drop against a
++  // layout the drop plan itself moved makes the answer lag the pointer by a
++  // slot and then latch there (M3.11 轮3-r1, user 2026-08-25) -- the same
++  // family as the frozen zone boundary, one level down.
++  SidebarLayout ComputeLayout(int width,
++                              bool as_collapsed,
++                              bool with_drag_hole = true) const;
+   // What to actually lay out right now: the settled target, or -- while the
+   // folder animates -- that blended with the state it is leaving.
+   SidebarLayout CurrentLayout(int width) const;
+@@ -141,6 +265,137 @@ class WorkspaceSidebarView : public view
    // Pushes |tab|'s title and at-home state onto |view|.
    void PushLiveState(WorkspaceEntryView* view, tabs::TabInterface* tab);
  
@@ -2216,6 +3224,13 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +    // releasing changes nothing.
 +    std::optional<helium_workspace::WorkspaceEntry::Section> plan_section;
 +    size_t plan_index = 0;
++    // 轮3: the pointer is over Today, and this is the tab-strip index the
++    // entry would land at. Mutually exclusive with |plan_section| -- landing
++    // in Today means the entry stops being an entry, so there is no section
++    // left to be in. |plan_today_row| is the same spot counted in laid-out
++    // Today rows, which is what the empty slot needs.
++    std::optional<int> plan_today_index;
++    size_t plan_today_row = 0;
 +    // Grow-only preferred height for the whole session, so per-frame drop
 +    // feedback can never feed the 200ms container animation (M3.10-r2).
 +    int latched_height = 0;
@@ -2231,14 +3246,46 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +    // the floating card keeps that point under the pointer even as it
 +    // changes shape.
 +    gfx::Vector2dF grab;
++    // 轮3-r2: the pointer is over the *closed* folder. The plan is still
++    // "append to the pinned section", but no slot is drawn -- `Arc:` fills
++    // the folder's own row instead and reveals the entry only on release.
++    bool folder_drop = false;
++    // The card's shape only changes when the plan does. Recomputing it from
++    // a fresh ComputeLayout on every pointer move meant a whole sidebar
++    // layout per frame, on top of the two the plan already costs.
++    bool form_dirty = true;
++    // 轮3-r4: the same argument for the geometry the *hit test* reads. The
++    // row centres and grid slots the drop plan is measured against are a
++    // step function of the plan itself, so recomputing them per pointer
++    // frame -- which is what 轮3 still did -- bought nothing and cost a
++    // whole ComputeLayout (four vector allocations) every frame.
++    bool hit_dirty = true;
++    // The cached answer, plus the two inputs that can change without any
++    // plan change (a resize, an entry arriving or leaving mid-drag).
++    std::vector<gfx::Rect> hit_grid_slots;
++    std::vector<int> hit_row_centers;
++    int hit_width = -1;
++    size_t hit_entry_count = 0;
 +    // The gesture is over and the card is flying to its place. The entry is
 +    // laid out normally again (no hole), but its row stays hidden until the
 +    // card lands on it.
 +    bool settling = false;
 +  };
 +
++  // Starts a frame: records the gap since the previous one. An enter+update
++  // pair arrives inside a single AppKit callback, so anything closer than a
++  // millisecond is the same frame, not two.
++  void DragPerfTick(base::TimeTicks now);
++  // Writes one summary line to <user-data-dir>/helium_drag_perf.log.
++  void DragPerfFinish();
++
 +  // The dragged entry's index in |ordered_entries_|, if it still exists.
 +  std::optional<size_t> DragEntryOrderedIndex() const;
++  // The geometry UpdateDragPlan measures the pointer against, recomputed
++  // only when the plan (or the sidebar's shape) actually moved. Callers must
++  // not trigger a plan change while holding the returned reference -- none
++  // of them recompute, they only mark it dirty for the next frame.
++  void EnsureDropGeometry();
 +  // Recomputes the drop plan from a pointer position in sidebar coordinates.
 +  void UpdateDragPlan(const gfx::Point& point);
 +  void SetDragPlan(
@@ -2246,6 +3293,9 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +      size_t index);
 +  // Snapshots the currently displayed layout and restarts the yield tween
 +  // towards the (changed) target.
++  // Turns the closed folder's "you are dropping into me" fill on or off,
++  // and with it the presence of the preview slot.
++  void SetFolderDropTarget(bool folder_drop);
 +  void RetargetDragYield();
 +  void EndDragSession();
 +  // The floating card has landed: hand the row back and drop the session.
@@ -2262,6 +3312,9 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +  gfx::Rect SettledDragTargetInOverlaySpace();
 +  // Pushes a pointer position and the planned shape onto the overlay.
 +  void UpdateDragOverlay(const gfx::Point& point_in_sidebar);
++  // The shape the card should wear, asked of the layout. Only run when the
++  // plan moved (DragState::form_dirty), never per pointer frame.
++  void RefreshDragForm();
 +  // The drop: one MoveEntry, from the plan bound at GetDropCallback time.
 +  // The plan travels *with* the callback rather than being read back off
 +  // the session: the drop and the source row's OnDragDone are two separate
@@ -2274,14 +3327,41 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +                        ui::mojom::DragOperation& output_drag_op,
 +                        std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
 +
++  // ---- M3.11 轮3 cross-boundary ----
++  // Swaps the sidebar plan for a Today plan (or back). Goes through the same
++  // snapshot-then-glide path as SetDragPlan so the rows on both sides move
++  // from where they are, not from where the last settled layout put them.
++  void SetTodayDragPlan(std::optional<int> tab_index, size_t row_position);
++  // The cross-boundary commit: the entry stops being one. `Arc:` semantics
++  // (measured 2026-08-24): a bound tab in this window is unbound and moved
++  // to |tab_index|; an entry with no tab here opens one there carrying its
++  // URL. Either way the entry is removed.
++  void PerformTodayDrop(std::string entry_id,
++                        int tab_index,
++                        const ui::DropTargetEvent& event,
++                        ui::mojom::DragOperation& output_drag_op,
++                        std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
++
    // Re-aims the card shadow at the active pinned row (or hides it). Called
    // wherever the answer can change: bindings sync, layout, scroll.
    void UpdateCardShadow();
-@@ -188,6 +297,22 @@ class WorkspaceSidebarView : public view
+@@ -188,6 +443,38 @@ class WorkspaceSidebarView : public view
    // SetCardShadowFrame).
    raw_ptr<HeliumCardShadowView> card_shadow_ = nullptr;
    base::CallbackListSubscription card_shadow_scroll_subscription_;
 +  raw_ptr<WorkspaceEntryDragOverlay> drag_overlay_ = nullptr;
++  // 轮3: the Today container, injected by the region view alongside the
++  // overlay. Only ever used to ask it to re-lay-out when the slot moves.
++  raw_ptr<UnpinnedTabContainerView> today_container_ = nullptr;
++  // 轮3-r1: the entry that was dropped into the folder while it was
++  // collapsed. `Arc:` does not open the folder for it -- it leaves the
++  // folder shut and shows *only the thing you just dropped* underneath
++  // (user 2026-08-25, confirmed against the arc-spring / arc-today2pin
++  // recordings), which is the surfaced-row mechanism M3.10 already built.
++  // Held as its own field because such an entry usually has no tab, and the
++  // plain surfacing rule drops tabless entries on the next sync; it is
++  // forgotten when the folder is opened, along with the set.
++  std::string drop_surfaced_entry_id_;
 +  // Where the pointer went down inside the row, as a fraction of its size.
 +  // Recorded in WriteDragDataForView, which the framework calls *before*
 +  // OnWillStartDragForView -- so it cannot go straight into DragState.
@@ -2292,6 +3372,10 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +  // preferred height, which stays latched for the whole session.
 +  bool hover_resync_pending_ = false;
 +  std::unique_ptr<DragState> drag_;
++  // Non-null only between OnWillStartDragForView and EndDragSession, and
++  // only when --helium-drag-perf is on.
++  std::unique_ptr<DragPerf> drag_perf_;
++  std::unique_ptr<WorkspaceDragFrameProbe> drag_frame_probe_;
 +  gfx::SlideAnimation drag_yield_animation_{this};
 +  SidebarLayout drag_prev_layout_;
 +  bool drag_prev_layout_valid_ = false;

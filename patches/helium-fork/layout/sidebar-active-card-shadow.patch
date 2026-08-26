@@ -368,11 +368,12 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
-@@ -8,8 +8,11 @@
+@@ -8,8 +8,12 @@
  #include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/helium_workspace/workspace_service.h"
  #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
 +#include "base/scoped_observation.h"
++#include "base/time/time.h"
 +#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -380,8 +381,15 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
  #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
-@@ -20,12 +23,14 @@
+@@ -18,14 +22,21 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_group_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
  #include "chrome/browser/ui/views/tabs/common/tab_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_data.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
++#include "ui/base/dragdrop/drag_drop_types.h"
++#include "ui/base/dragdrop/drop_target_event.h"
++#include "ui/base/dragdrop/os_exchange_data.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/gfx/geometry/rect.h"
 +#include "ui/gfx/geometry/rect_conversions.h"
@@ -395,7 +403,35 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "ui/views/view_targeter.h"
  #include "ui/views/view_targeter_delegate.h"
  #include "ui/views/view_utils.h"
-@@ -88,6 +93,97 @@ class UnpinnedTabContainerViewTargeter :
+@@ -68,11 +79,20 @@ static_assert(kMinHeaderHeightPctForGrou
+ 
+ class UnpinnedTabContainerViewTargeter : public views::ViewTargeterDelegate {
+  public:
+-  explicit UnpinnedTabContainerViewTargeter(views::View* view) : view_(view) {}
++  explicit UnpinnedTabContainerViewTargeter(UnpinnedTabContainerView* view)
++      : view_(view) {}
+   ~UnpinnedTabContainerViewTargeter() override = default;
+ 
+   bool DoesIntersectRect(const views::View* target,
+                          const gfx::Rect& rect) const override {
++    // helium-fork M3.11 轮3: while a sidebar entry is airborne the whole
++    // container takes hits, its empty tail included. Releasing below the
++    // last row plainly means "put it at the end", and the default rule --
++    // only the rows themselves are hittable -- makes that release land on
++    // nothing and silently cancel the drag.
++    if (view_->HasWorkspaceEntryDrag()) {
++      return view_->GetLocalBounds().Intersects(rect);
++    }
+     gfx::Rect content_bounds;
+     for (const views::View* child : view_->children()) {
+       if (child->GetVisible()) {
+@@ -83,11 +103,102 @@ class UnpinnedTabContainerViewTargeter :
+   }
+ 
+  private:
+-  raw_ptr<views::View> view_;
++  raw_ptr<UnpinnedTabContainerView> view_;
+ };
  
  }  // namespace
  
@@ -493,7 +529,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  UnpinnedTabContainerView::UnpinnedTabContainerView(
      TabCollectionNode* collection_node)
      : DraggedTabsContainer(static_cast<views::View&>(*this),
-@@ -105,6 +201,10 @@ UnpinnedTabContainerView::UnpinnedTabCon
+@@ -105,6 +216,10 @@ UnpinnedTabContainerView::UnpinnedTabCon
    SetEventTargeter(std::make_unique<views::ViewTargeter>(
        std::make_unique<UnpinnedTabContainerViewTargeter>(this)));
  
@@ -504,7 +540,219 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
    collection_node->set_remove_child_from_node(base::BindRepeating(
        &TabCollectionAnimatingLayoutManager::AnimateAndDestroyChildView,
        base::Unretained(&layout_manager_.get())));
-@@ -342,6 +442,97 @@ bool UnpinnedTabContainerView::ShouldSna
+@@ -115,6 +230,9 @@ UnpinnedTabContainerView::UnpinnedTabCon
+   node_destroyed_subscription_ = collection_node_->RegisterWillDestroyCallback(
+       base::BindOnce(&UnpinnedTabContainerView::ResetCollectionNode,
+                      base::Unretained(this)));
++
++  // Last line of the constructor on purpose -- see the header.
++  constructed_ = true;
+ }
+ 
+ UnpinnedTabContainerView::~UnpinnedTabContainerView() = default;
+@@ -140,6 +258,24 @@ views::ProposedLayout UnpinnedTabContain
+   const helium_workspace::WorkspaceService* workspace_service =
+       GetWorkspaceService();
+ 
++  // helium-fork M3.11 轮3: while a sidebar entry hovers Today, the rows
++  // leave it one plain empty slot -- no line, no tint (`Dia:` measured
++  // 2026-08-24). The gap is one row pitch and its position only changes when
++  // the plan does, never per pointer frame, so it cannot feed the container
++  // animation the way a per-frame host_size would (pitfalls: drag geometry
++  // must stay monotonic).
++  // |constructed_| first, and the && matters: this runs once from inside the
++  // member-initialiser list, before |workspace_drag_host_| exists at all (see
++  // the header). There cannot be a drag in flight then, so "no slot" is also
++  // the correct answer.
++  const std::optional<size_t> drop_slot_row =
++      (constructed_ && workspace_drag_host_)
++          ? workspace_drag_host_->TodayDropSlotRow()
++          : std::nullopt;
++  const int drop_slot_height =
++      GetLayoutConstant(LayoutConstant::kVerticalTabHeight) +
++      kTabVerticalPadding;
++
+   // Layout children in order. Children will have their preferred height and
+   // fill available width.
+   int laid_out_count = 0;
+@@ -148,6 +284,10 @@ views::ProposedLayout UnpinnedTabContain
+       layouts.child_layouts.emplace_back(child, false, gfx::Rect());
+       continue;
+     }
++    if (drop_slot_row &&
++        *drop_slot_row == static_cast<size_t>(laid_out_count)) {
++      height += drop_slot_height;
++    }
+     // The leading inset should not be applied for tab groups when the tab strip
+     // is collapsed since the group color line is drawn in that space.
+     int x =
+@@ -191,6 +331,10 @@ views::ProposedLayout UnpinnedTabContain
+   if (laid_out_count > 0) {
+     height -= kTabVerticalPadding;
+   }
++  // The slot can also sit past the last row (dropping at the end).
++  if (drop_slot_row && *drop_slot_row >= static_cast<size_t>(laid_out_count)) {
++    height += drop_slot_height + (laid_out_count > 0 ? kTabVerticalPadding : 0);
++  }
+ 
+   if (IsHandlingDrag()) {
+     dragged_view_bottom = GetDraggingViewsBounds().bottom();
+@@ -316,6 +460,154 @@ UnpinnedTabContainerView::GetLinkDropInd
+                                                   std::nullopt);
+ }
+ 
++// ---- helium-fork M3.11 轮3: the Today end of the sidebar's entry drag ----
++
++void UnpinnedTabContainerView::SetWorkspaceDragHost(
++    WorkspaceSidebarView* sidebar) {
++  workspace_drag_host_ = sidebar;
++}
++
++void UnpinnedTabContainerView::SetWorkspaceEntryDragActive(bool active) {
++  views::ScrollView* const scroll_view = GetScrollViewForContainer();
++  if (!scroll_view) {
++    return;
++  }
++  if (active) {
++    if (!saved_scrollbar_mode_) {
++      saved_scrollbar_mode_ = scroll_view->GetVerticalScrollBarMode();
++      saved_overflow_indicator_ = scroll_view->GetDrawOverflowIndicator();
++    }
++    scroll_view->SetVerticalScrollBarMode(
++        views::ScrollView::ScrollBarMode::kHiddenButEnabled);
++    // ⚠ Both, exactly like TabStripView::DisableOverflowVisuals(). Hiding
++    // only the scrollbar leaves the overflow *indicator* -- a light rule
++    // across Today -- which is what the user saw as "一条白线" once the
++    // scrollbar itself was suppressed (2026-08-25).
++    scroll_view->SetDrawOverflowIndicator(false);
++  } else if (saved_scrollbar_mode_) {
++    scroll_view->SetVerticalScrollBarMode(*saved_scrollbar_mode_);
++    if (saved_overflow_indicator_) {
++      scroll_view->SetDrawOverflowIndicator(*saved_overflow_indicator_);
++      saved_overflow_indicator_.reset();
++    }
++    saved_scrollbar_mode_.reset();
++  }
++}
++
++bool UnpinnedTabContainerView::HasWorkspaceEntryDrag() const {
++  return workspace_drag_host_ && workspace_drag_host_->HasEntryDragSession();
++}
++
++std::optional<UnpinnedTabContainerView::EntryDropSpot>
++UnpinnedTabContainerView::EntryDropSpotAt(const gfx::Point& loc) {
++  if (!collection_node_) {
++    return std::nullopt;
++  }
++  const helium_workspace::WorkspaceService* workspace_service =
++      GetWorkspaceService();
++  size_t row_position = 0;
++  for (auto& child_node : collection_node_->children()) {
++    views::View* const view = child_node->view();
++    // Entry tabs are drawn by the sidebar and laid out at no bounds here, so
++    // they are neither a landing spot nor a row to count.
++    if (!view || IsWorkspaceEntryTab(workspace_service, view)) {
++      continue;
++    }
++    if (loc.y() >= view->bounds().CenterPoint().y()) {
++      ++row_position;
++      continue;
++    }
++    // First row whose centre is below the pointer: land in front of it.
++    const std::optional<BrowserRootView::DropIndex> drop =
++        GetDragHandler().GetLinkDropIndexForNode(*child_node,
++                                                 DragPositionHint::kBefore);
++    if (!drop) {
++      return std::nullopt;
++    }
++    return EntryDropSpot{drop->index, row_position};
++  }
++  const std::optional<BrowserRootView::DropIndex> drop =
++      GetDragHandler().GetLinkDropIndexForNode(*collection_node_, std::nullopt);
++  if (!drop) {
++    return std::nullopt;
++  }
++  return EntryDropSpot{drop->index, row_position};
++}
++
++bool UnpinnedTabContainerView::GetDropFormats(
++    int* formats,
++    std::set<ui::ClipboardFormatType>* format_types) {
++  format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
++  return true;
++}
++
++bool UnpinnedTabContainerView::AreDropTypesRequired() {
++  return true;
++}
++
++bool UnpinnedTabContainerView::CanDrop(const ui::OSExchangeData& data) {
++  // ⛔ Session, not payload -- see WorkspaceSidebarView::CanDrop. Unpickling
++  // here is an NSPasteboard round trip on every boundary crossing.
++  return HasWorkspaceEntryDrag();
++}
++
++void UnpinnedTabContainerView::OnDragEntered(
++    const ui::DropTargetEvent& event) {
++  OnDragUpdated(event);
++}
++
++int UnpinnedTabContainerView::OnDragUpdated(const ui::DropTargetEvent& event) {
++  return HandleWorkspaceEntryDragAt(event.location());
++}
++
++int UnpinnedTabContainerView::HandleWorkspaceEntryDragAt(
++    const gfx::Point& point_in_this) {
++  if (!workspace_drag_host_) {
++    return ui::DragDropTypes::DRAG_NONE;
++  }
++  // ⚠ Two different points. *Which row* is asked with y clamped into this
++  // container, because the region forwards the separator band above it and
++  // there is no row up there to be past. The *card* must get the real
++  // pointer: clamping that one too pinned the card to Today's top edge for
++  // the width of the band -- a jump and then ~110ms of not following the
++  // hand, which is the snag the crossing had (user 2026-08-25).
++  const gfx::Point point_for_index(point_in_this.x(),
++                                   std::max(0, point_in_this.y()));
++  // 轮3-r4: the row lookup happens before the sidebar's entry point, so it
++  // is handed over separately or it would fall outside the frame's handler
++  // total. No clock is read unless --helium-drag-perf armed the instrument.
++  const bool measuring = workspace_drag_host_->drag_perf_active();
++  const base::TimeTicks hit_start =
++      measuring ? base::TimeTicks::Now() : base::TimeTicks();
++  const std::optional<EntryDropSpot> spot = EntryDropSpotAt(point_for_index);
++  if (measuring) {
++    workspace_drag_host_->AddTodayHitSample(base::TimeTicks::Now() - hit_start);
++  }
++  const bool accepted = workspace_drag_host_->OnTodayDragUpdate(
++      *this, point_in_this,
++      spot ? std::optional<int>(spot->tab_index) : std::nullopt,
++      spot ? spot->row_position : 0u);
++  return accepted ? ui::DragDropTypes::DRAG_MOVE
++                  : ui::DragDropTypes::DRAG_NONE;
++}
++
++views::View::DropCallback
++UnpinnedTabContainerView::GetWorkspaceEntryDropCallback() {
++  return workspace_drag_host_ ? workspace_drag_host_->GetTodayDropCallback()
++                              : base::NullCallback();
++}
++
++void UnpinnedTabContainerView::OnDragExited() {
++  if (workspace_drag_host_) {
++    workspace_drag_host_->OnTodayDragExited();
++  }
++}
++
++views::View::DropCallback UnpinnedTabContainerView::GetDropCallback(
++    const ui::DropTargetEvent& event) {
++  return GetWorkspaceEntryDropCallback();
++}
++
+ bool UnpinnedTabContainerView::IsDragging() const {
+   if (!collection_node_ || !collection_node_->GetController()) {
+     return false;
+@@ -342,6 +634,99 @@ bool UnpinnedTabContainerView::ShouldSna
    return views::IsViewClass<SplitTabView>(&child_view);
  }
  
@@ -520,6 +768,8 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +}
 +
 +void UnpinnedTabContainerView::RemovedFromWidget() {
++  // 轮3: see the twin in WorkspaceSidebarView::RemovedFromWidget().
++  workspace_drag_host_ = nullptr;
 +  bindings_observer_.reset();
 +  views::View::RemovedFromWidget();
 +}
@@ -606,24 +856,31 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 +++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
-@@ -5,6 +5,8 @@
+@@ -5,6 +5,9 @@
  #ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_UNPINNED_TAB_CONTAINER_VIEW_H_
  #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_UNPINNED_TAB_CONTAINER_VIEW_H_
  
 +#include <memory>
++#include <optional>
 +
  #include "base/callback_list.h"
  #include "base/memory/raw_ptr.h"
  #include "chrome/browser/ui/views/frame/browser_root_view.h"
-@@ -14,6 +16,7 @@
+@@ -12,10 +15,13 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
  #include "ui/views/layout/delegating_layout_manager.h"
++#include "ui/views/controls/scroll_view.h"
  #include "ui/views/view.h"
  
 +class HeliumCardShadowView;
  class TabCollectionNode;
  class TabGroupView;
++class WorkspaceSidebarView;
  
-@@ -37,6 +40,10 @@ class UnpinnedTabContainerView
+ namespace helium_workspace {
+ class WorkspaceService;
+@@ -37,6 +43,10 @@ class UnpinnedTabContainerView
    UnpinnedTabContainerView& operator=(const UnpinnedTabContainerView&) = delete;
    ~UnpinnedTabContainerView() override;
  
@@ -634,7 +891,51 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
    // LayoutDelegate:
    views::ProposedLayout CalculateProposedLayout(
        const views::SizeBounds& size_bounds) const override;
-@@ -58,6 +65,15 @@ class UnpinnedTabContainerView
+@@ -44,6 +54,43 @@ class UnpinnedTabContainerView
+   // views::View:
+   gfx::Size GetMinimumSize() const override;
+ 
++  // helium-fork M3.11 轮3: the second drop target of the sidebar's entry
++  // drag. Everything except the hit test is delegated -- the session, the
++  // floating card and the commit all live in WorkspaceSidebarView, because
++  // the gesture starts there and has to survive the pointer crossing this
++  // boundary in both directions.
++  bool GetDropFormats(int* formats,
++                      std::set<ui::ClipboardFormatType>* format_types) override;
++  bool AreDropTypesRequired() override;
++  bool CanDrop(const ui::OSExchangeData& data) override;
++  void OnDragEntered(const ui::DropTargetEvent& event) override;
++  int OnDragUpdated(const ui::DropTargetEvent& event) override;
++  void OnDragExited() override;
++  views::View::DropCallback GetDropCallback(
++      const ui::DropTargetEvent& event) override;
++
++  // Injected by the region view, which is the only thing that owns both
++  // halves (same lazy-injection spot as SetCardShadowFrame).
++  void SetWorkspaceDragHost(WorkspaceSidebarView* sidebar);
++  // True while a sidebar entry is airborne. Public because the event
++  // targeter, which is not a member, has to ask.
++  bool HasWorkspaceEntryDrag() const;
++  // The same drag handling, addressed by a point in this view's coordinates
++  // rather than by an event. VerticalTabStripRegionView forwards the dead
++  // space *under* Today through here: that space belongs to the region (this
++  // container is only ever as tall as its rows), and releasing there plainly
++  // means "put it at the end" -- without this, the commonest drop of all
++  // (Today holds one tab, so most of the target area is empty) lands on
++  // nothing and silently cancels.
++  int HandleWorkspaceEntryDragAt(const gfx::Point& point_in_this);
++  // Opens/closes the gesture. While it is open the scroll view's overflow
++  // visuals are suppressed: the slot changes this container's height while
++  // the layout animation is still travelling to it, which is exactly the
++  // artifact TabStripView::DisableOverflowVisuals() guards against
++  // elsewhere, and `Dia:` shows no scrollbar mid-drag.
++  void SetWorkspaceEntryDragActive(bool active);
++  views::View::DropCallback GetWorkspaceEntryDropCallback();
++
+   // TabCollectionAnimatingLayoutManager::Delegate:
+   bool IsDragging() const override;
+   bool IsViewDragging(const views::View& child_view) const override;
+@@ -58,7 +105,31 @@ class UnpinnedTabContainerView
    std::optional<BrowserRootView::DropIndex> GetLinkDropIndex(
        const gfx::Point& point_in_local_coords);
  
@@ -648,9 +949,25 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 +  void SetCardShadowFrame(HeliumCardShadowView* card_shadow);
 +
   private:
++  // helium-fork M3.11 轮3: where a sidebar entry would land. Two counters
++  // from one hit test: |tab_index| is the tab-strip index the drop commits
++  // at, |row_position| the laid-out row the empty slot goes before. They
++  // differ because entry tabs hold model indices while being laid out
++  // nowhere here.
++  struct EntryDropSpot {
++    int tab_index = 0;
++    size_t row_position = 0;
++  };
++  // Midpoint rule -- land before the first row whose centre is below the
++  // pointer. Deliberately not GetLinkDropIndex(): that one can answer
++  // "replace this tab", which an entry drop never means (`Dia:` always
++  // opens a slot between rows, measured 2026-08-24).
++  std::optional<EntryDropSpot> EntryDropSpotAt(const gfx::Point& loc);
++
    // helium-fork: the profile's workspace model, or null (off-the-record
    // windows, or before this view has a widget). Tabs bound to an entry are
-@@ -80,10 +96,25 @@ class UnpinnedTabContainerView
+   // drawn by the sidebar and skipped here.
+@@ -80,10 +151,46 @@ class UnpinnedTabContainerView
  
    void ResetCollectionNode();
  
@@ -661,11 +978,32 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 +  class BindingsObserver;
 +  void UpdateCardShadow();
 +
++  // ⛔⛔ Declared first, and set at the very end of the constructor: this is
++  // the gate that makes CalculateProposedLayout() safe to run *during*
++  // construction. |layout_manager_|'s initialiser calls SetLayoutManager()
++  // from the member-initialiser list; LayoutManagerBase::Installed() runs
++  // RecalculateTarget() right there, and that calls CalculateProposedLayout()
++  // -- while every member declared below |layout_manager_| is still
++  // uninitialised. A default member initialiser (`= nullptr`) does not save
++  // you: those run in declaration order too, so the field simply holds
++  // whatever was in that memory.
++  // Cost of learning this: a browser crash 2026-08-25 05:01, EXC_BAD_ACCESS
++  // at 0xefefefefefeff60f -- PartitionAlloc's freed-memory poison read as a
++  // WorkspaceSidebarView* by the 轮3 drop-slot lookup. It only fires on a
++  // *later* window: the first one's pages are freshly zeroed, recycled ones
++  // are not, which is why three days of testing never saw it.
++  // ⚠ Anything new that CalculateProposedLayout() reads must sit behind this
++  // flag (or be declared above |layout_manager_|).
++  bool constructed_ = false;
++
    raw_ptr<TabCollectionNode> collection_node_;
    const raw_ref<TabCollectionAnimatingLayoutManager> layout_manager_;
  
    base::CallbackListSubscription node_destroyed_subscription_;
 +
++  raw_ptr<WorkspaceSidebarView> workspace_drag_host_ = nullptr;
++  std::optional<views::ScrollView::ScrollBarMode> saved_scrollbar_mode_;
++  std::optional<bool> saved_overflow_indicator_;
 +  raw_ptr<HeliumCardShadowView> card_shadow_ = nullptr;
 +  std::unique_ptr<CardShadowTracker> card_shadow_tracker_;
 +  // helium-fork r5: watches WorkspaceService binding flips so the layout's

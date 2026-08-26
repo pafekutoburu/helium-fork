@@ -621,7 +621,15 @@ Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
 +++ src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
-@@ -37,11 +37,15 @@ HeliumCardShadowView::~HeliumCardShadowV
+@@ -20,6 +20,7 @@
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/insets_f.h"
+ #include "ui/gfx/geometry/outsets.h"
++#include "ui/gfx/geometry/transform.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+ 
+ BEGIN_METADATA(HeliumCardShadowView)
+@@ -37,11 +38,29 @@ HeliumCardShadowView::~HeliumCardShadowV
  
  void HeliumCardShadowView::SetCardBounds(const gfx::Rect& card_bounds) {
    gfx::Rect bounds = card_bounds;
@@ -631,6 +639,20 @@ Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
    SetBoundsRect(bounds);
  }
  
++void HeliumCardShadowView::SetCardBoundsByTransform(
++    const gfx::Rect& card_bounds) {
++  gfx::Rect bounds = card_bounds;
++  bounds.Outset(gfx::Outsets::VH(spec_.outset_v, spec_.outset_h));
++  if (size() != bounds.size()) {
++    // Origin stays at zero for the view's whole life; only the size is ever
++    // written through bounds, and cc::Layer::SetBounds does not rebuild the
++    // property trees (it only marks a commit) unless the layer masks.
++    SetBoundsRect(gfx::Rect(bounds.size()));
++  }
++  SetTransform(gfx::Transform::MakeTranslation(
++      static_cast<float>(bounds.x()), static_cast<float>(bounds.y())));
++}
++
 +void HeliumCardShadowView::SetShadowSpec(const helium::CardShadowSpec& spec) {
 +  spec_ = spec;
 +  SchedulePaint();
@@ -639,7 +661,7 @@ Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
  void HeliumCardShadowView::SetShadowOpacity(double opacity) {
    layer()->SetOpacity(static_cast<float>(opacity));
  }
-@@ -60,8 +64,7 @@ void HeliumCardShadowView::OnPaint(gfx::
+@@ -60,8 +79,7 @@ void HeliumCardShadowView::OnPaint(gfx::
        provider && color_utils::IsDark(provider->GetColor(kColorToolbar));
  
    gfx::RectF card{gfx::SizeF(size())};
@@ -649,7 +671,7 @@ Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
    const SkScalar radius = SkIntToScalar(corner_radius_);
    const SkRRect card_rrect =
        SkRRect::MakeRectXY(gfx::RectFToSkRect(card), radius, radius);
-@@ -74,8 +77,7 @@ void HeliumCardShadowView::OnPaint(gfx::
+@@ -74,8 +92,7 @@ void HeliumCardShadowView::OnPaint(gfx::
    paint_canvas->clipRRect(card_rrect, SkClipOp::kDifference,
                            /*do_anti_alias=*/true);
  
@@ -671,7 +693,21 @@ Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.h
  #include "ui/gfx/geometry/rect.h"
  #include "ui/views/view.h"
  
-@@ -39,12 +40,17 @@ class HeliumCardShadowView : public view
+@@ -31,6 +32,13 @@ class HeliumCardShadowView : public view
+ 
+   // Positions the shadow around `card_bounds` (in the parent's coordinates).
+   void SetCardBounds(const gfx::Rect& card_bounds);
++  // Same target, but the layer's *position* never changes: only the size goes
++  // through bounds, the offset rides on the layer transform. For anything
++  // that moves every frame -- the dragged entry's card shadow -- that is the
++  // difference between updating one transform node and making cc rebuild the
++  // whole window's property trees (cc::Layer::SetPosition ends in
++  // SetPropertyTreesNeedRebuild when the layer has no transform node).
++  void SetCardBoundsByTransform(const gfx::Rect& card_bounds);
+ 
+   // The fade knob, mirrored from the card it underlines: a sibling layer
+   // inherits neither the card's opacity animation nor its visibility.
+@@ -39,12 +47,17 @@ class HeliumCardShadowView : public view
    // The card's corner radius (the blurred silhouette follows it).
    void SetShadowCornerRadius(int corner_radius);
  
