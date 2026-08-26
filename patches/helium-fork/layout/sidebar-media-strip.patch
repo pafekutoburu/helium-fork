@@ -1182,7 +1182,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.c
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.cc
-@@ -0,0 +1,512 @@
+@@ -0,0 +1,575 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1194,6 +1194,8 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.c
 +#include <utility>
 +
 +#include "base/containers/flat_map.h"
++#include "base/functional/bind.h"
++#include "base/timer/timer.h"
 +#include "base/no_destructor.h"
 +#include "base/unguessable_token.h"
 +#include "chrome/browser/ui/browser.h"
@@ -1282,12 +1284,37 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.c
 +  bool session_active() const { return session_active_; }
 +  bool session_inactive() const { return session_inactive_; }
 +
++  // helium-fork M4-r1: audio focus went away. Native freezes the item for
++  // kFreezeTimerDelay and only then removes it, so that a session that
++  // merely handed the speaker over for a moment comes straight back. Same
++  // grace here.
++  void StartFocusLostGrace() {
++    focus_lost_timer_.Start(
++        FROM_HERE, base::Milliseconds(2500),
++        base::BindOnce(&SessionRow::OnFocusLostGraceElapsed,
++                       base::Unretained(this)));
++  }
++  void CancelFocusLostGrace() { focus_lost_timer_.Stop(); }
++
 +  // content::WebContentsObserver:
 +  void DidUpdateAudioMutingState(bool muted) override {
 +    model_.muted = muted;
 +    owner_->NotifyModelChanged();
 +  }
 +  void WebContentsDestroyed() override {
++    owner_->RemoveRow(this);  // Deletes |this|.
++  }
++
++  void OnFocusLostGraceElapsed() {
++    // ⛔ A muted tab keeps its row. Losing focus and being muted look alike
++    // from the outside, and r3 fixed a real complaint by making the row
++    // sticky: without it the strip vanishes the moment you mute, taking the
++    // only control that could unmute it again. Subscribing to focus events
++    // instead of diffing the active list is what lets these two be told
++    // apart -- this guard is the belt to that braces.
++    if (web_contents() && web_contents()->IsAudioMuted()) {
++      return;
++    }
 +    owner_->RemoveRow(this);  // Deletes |this|.
 +  }
 +
@@ -1409,6 +1436,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.c
 +  }
 +
 +  const raw_ptr<HeliumMediaStripController> owner_;
++  base::OneShotTimer focus_lost_timer_;
 +  bool in_active_list_ = true;
 +  bool session_active_ = false;
 +  bool session_inactive_ = false;
@@ -1439,6 +1467,12 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.c
 +  browser_->tab_strip_model()->AddObserver(this);
 +  content::GetMediaSessionService().BindMediaControllerManager(
 +      controller_manager_.BindNewPipeAndPassReceiver());
++  // The edge the four end-of-life signals were missing: real audio focus
++  // events, from the same service the native producer watches.
++  content::GetMediaSessionService().BindAudioFocusManager(
++      audio_focus_remote_.BindNewPipeAndPassReceiver());
++  audio_focus_remote_->AddObserver(
++      audio_focus_observer_receiver_.BindNewPipeAndPassRemote());
 +  RescanItems();
 +}
 +
@@ -1601,6 +1635,35 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.c
 +  NotifyModelChanged();
 +}
 +
++void HeliumMediaStripController::OnFocusGained(
++    media_session::mojom::AudioFocusRequestStatePtr state) {
++  if (!state || !state->request_id.has_value()) {
++    return;
++  }
++  if (SessionRow* const row = FindRow(state->request_id->ToString())) {
++    // Back within the grace window -- native calls this unfreezing.
++    row->CancelFocusLostGrace();
++  }
++}
++
++void HeliumMediaStripController::OnFocusLost(
++    media_session::mojom::AudioFocusRequestStatePtr state) {
++  if (!state || !state->request_id.has_value()) {
++    return;
++  }
++  if (SessionRow* const row = FindRow(state->request_id->ToString())) {
++    row->StartFocusLostGrace();
++  }
++}
++
++void HeliumMediaStripController::OnRequestIdReleased(
++    const base::UnguessableToken& request_id) {
++  // The session is gone for good; no point waiting out the grace period.
++  if (SessionRow* const row = FindRow(request_id.ToString())) {
++    RemoveRow(row);  // Deletes |row|.
++  }
++}
++
 +void HeliumMediaStripController::RescanItems() {
 +  if (!item_manager_) {
 +    return;
@@ -1699,7 +1762,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,218 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -1718,7 +1781,9 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h
 +#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 +#include "components/global_media_controls/public/media_item_manager.h"
 +#include "components/global_media_controls/public/media_item_manager_observer.h"
++#include "mojo/public/cpp/bindings/receiver.h"
 +#include "mojo/public/cpp/bindings/remote.h"
++#include "services/media_session/public/mojom/audio_focus.mojom.h"
 +#include "services/media_session/public/mojom/media_controller.mojom.h"
 +#include "services/media_session/public/mojom/media_session.mojom.h"
 +#include "ui/gfx/image/image_skia.h"
@@ -1803,6 +1868,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h
 +// mutes from anywhere (tab context menu included) stay in sync.
 +class HeliumMediaStripController
 +    : public global_media_controls::MediaItemManagerObserver,
++      public media_session::mojom::AudioFocusObserver,
 +      public TabStripModelObserver {
 + public:
 +  HeliumMediaStripController(Browser* browser,
@@ -1860,6 +1926,31 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h
 +  // the display order), and drops rows whose tab left this window. Never
 +  // drops a row merely for leaving the active list (stickiness, above).
 +  void RescanItems();
++  // media_session::mojom::AudioFocusObserver:
++  //
++  // helium-fork M4-r1: the edge the strip was missing. A row used to leave
++  // on only four signals -- its WebContents dies, its session info goes
++  // null, its tab leaves this window, or the user dismisses it -- and the
++  // second of those never fires. MediaSessionInfoChanged(nullptr) is only
++  // sent by MediaController::ClearMediaSession(), which serves the one
++  // global "active" controller; the per-session controller this class binds
++  // is simply destroyed with its AudioFocusRequest, silently.
++  //
++  // The upshot, reported 2026-08-26: finish a video, search for something
++  // else, and the toolbar's own media button disappears while the sidebar
++  // strip stays -- clicking it then lands on the search results, because a
++  // row tracks a WebContents, not a document. MediaSessionImpl survives the
++  // navigation, so even the direct line only reports state=kInactive.
++  //
++  // Native does not rely on that null either: MediaSessionItemProducer
++  // watches real focus events and freezes the item for 2.5s before removing
++  // it. This observes the same events, from the same service.
++  void OnFocusGained(
++      media_session::mojom::AudioFocusRequestStatePtr state) override;
++  void OnFocusLost(
++      media_session::mojom::AudioFocusRequestStatePtr state) override;
++  void OnRequestIdReleased(const base::UnguessableToken& request_id) override;
++
 +  SessionRow* FindRow(const std::string& item_id) const;
 +  // Removes `row` and notifies. Safe to call from the row's own callbacks --
 +  // the caller must return immediately afterwards.
@@ -1883,6 +1974,10 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h
 +  // Items the user closed from the strip. Pruned as the sessions leave the
 +  // active list, so a site that starts playing again gets its strip back.
 +  base::flat_set<std::string> dismissed_item_ids_;
++
++  mojo::Remote<media_session::mojom::AudioFocusManager> audio_focus_remote_;
++  mojo::Receiver<media_session::mojom::AudioFocusObserver>
++      audio_focus_observer_receiver_{this};
 +};
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_MEDIA_STRIP_CONTROLLER_H_

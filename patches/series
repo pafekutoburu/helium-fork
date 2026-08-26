@@ -383,3 +383,7 @@ helium-fork/layout/sidebar-floating-calibration.patch
 helium-fork/workspace/sidebar-dia-m310.patch
 helium-fork/workspace/entry-drag-m311.patch
 helium-fork/settings/continue-session-by-default.patch
+helium-fork/workspace/close-unused-tabs.patch
+helium-fork/workspace/close-unpinned-tabs.patch
+helium-fork/layout/sidebar-blank-window-menu.patch
+helium-fork/settings/close-unused-tabs-duration.patch

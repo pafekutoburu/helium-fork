@@ -1,0 +1,46 @@
+Index: src/chrome/browser/ui/views/frame/browser_widget.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_widget.cc
++++ src/chrome/browser/ui/views/frame/browser_widget.cc
+@@ -32,6 +32,7 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/system_menu_model_builder.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
++#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+@@ -416,8 +417,32 @@ void BrowserWidget::ShowContextMenuForVi
+       }
+     }
+   }
++  // helium-fork M4-r2: the sidebar's blank belongs to this menu too. The
++  // stretch under the new tab button already arrives as HTCAPTION, but the
++  // list above it has to answer HTCLIENT -- its rows tell a click from a drag
++  // -- so right-clicking between rows used to do nothing at all. Reaching this
++  // method already proves no row, entry, button or scrollbar claimed the
++  // press (a view with a ContextMenuController consumes it), which is exactly
++  // what "blank" means here, so the bounds test is the whole condition.
++  //
++  // ⛔ Which is also why neither TabStripView nor VerticalTabStripBottomContainer
++  // may install a ContextMenuController: whatever one of them showed would
++  // replace this menu rather than add to it. That is what M4-r1 did, and the
++  // user lost the whole window menu on the sidebar blank until M4-r2.
++  bool in_sidebar_blank = false;
++  if (browser_view_) {
++    if (VerticalTabStripRegionView* const sidebar =
++            browser_view_->vertical_tab_strip_region_view()) {
++      if (sidebar->GetVisible()) {
++        gfx::Point point_in_sidebar(p);
++        views::View::ConvertPointFromScreen(sidebar, &point_in_sidebar);
++        in_sidebar_blank = sidebar->HitTestPoint(point_in_sidebar);
++      }
++    }
++  }
+   if (source_type == ui::mojom::MenuSourceType::kKeyboard ||
+-      hit_test == HTCAPTION || hit_test == HTNOWHERE || in_arc_band_blank) {
++      hit_test == HTCAPTION || hit_test == HTNOWHERE || in_arc_band_blank ||
++      in_sidebar_blank) {
+     menu_runner_ = std::make_unique<views::MenuRunner>(
+         GetSystemMenuModel(),
+         views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU,

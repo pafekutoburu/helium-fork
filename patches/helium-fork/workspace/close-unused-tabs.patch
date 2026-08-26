@@ -1,0 +1,1351 @@
+Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+===================================================================
+--- src.orig/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
++++ src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+@@ -651,6 +651,7 @@
+ #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
+ #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_service_factory.h"
+ #endif
++#include "chrome/browser/ui/helium_workspace/workspace_archive_service_factory.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ 
+ #if BUILDFLAG(USE_NSS_CERTS)
+@@ -847,6 +848,11 @@ void ChromeBrowserMainExtraPartsProfiles
+   browser_shortcuts::BrowserShortcutServiceFactory::GetInstance();
+ #endif
+   helium_workspace::WorkspaceServiceFactory::GetInstance();
++  // M4: nothing in the UI ever asks for the archive service, so this
++  // is the only thing that gets it into the dependency graph -- and
++  // without being in the graph its ServiceIsCreatedWithBrowserContext()
++  // is never consulted and the sweep timer never starts.
++  helium_workspace::WorkspaceArchiveServiceFactory::GetInstance();
+ #if !BUILDFLAG(IS_ANDROID)
+   BrowserManagerServiceFactory::GetInstance();
+ #endif
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -391,6 +391,12 @@ static_library("ui") {
+     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+     "helium/helium_tab_switcher_controller.h",
++    "helium_workspace/workspace_archive_policy.cc",
++    "helium_workspace/workspace_archive_policy.h",
++    "helium_workspace/workspace_archive_service.cc",
++    "helium_workspace/workspace_archive_service.h",
++    "helium_workspace/workspace_archive_service_factory.cc",
++    "helium_workspace/workspace_archive_service_factory.h",
+     "helium_workspace/workspace_entry.cc",
+     "helium_workspace/workspace_entry.h",
+     "helium_workspace/workspace_drag_math.h",
+@@ -6064,6 +6070,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_toolbar_host_unittest.cc",
+     "helium/arc_omnibox_panel.h",
+     "helium/arc_omnibox_panel_unittest.cc",
++    "helium_workspace/workspace_archive_policy.h",
++    "helium_workspace/workspace_archive_policy_unittest.cc",
+     "helium_workspace/workspace_blank_tab.h",
+     "helium_workspace/workspace_blank_tab_unittest.cc",
+     "helium_workspace/workspace_entry.cc",
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_policy.cc
+@@ -0,0 +1,163 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
++
++#include "chrome/browser/ui/browser_tabstrip.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/visibility.h"
++#include "content/public/browser/web_contents.h"
++#include "url/gurl.h"
++
++namespace helium_workspace {
++namespace {
++
++// Whether any frame of the primary page would put up a "Leave site?"
++// dialog: a beforeunload handler *and* sticky user activation. Both halves
++// matter -- a page that merely registered the handler and was never typed
++// into has nothing to lose.
++//
++// Lifted from restartability_monitor.cc's helper of the same shape (that
++// one is in an anonymous namespace, so this is a copy, not a call).
++// ForEachRenderFrameHostWithAction because the handler can be in an iframe.
++bool CouldTabDisplayBeforeUnloadDialog(content::WebContents* contents) {
++  if (!contents) {
++    return false;
++  }
++  bool could_display = false;
++  contents->GetPrimaryMainFrame()->ForEachRenderFrameHostWithAction(
++      [&could_display](content::RenderFrameHost* rfh) {
++        if (rfh->CouldDisplayBeforeUnloadDialog()) {
++          could_display = true;
++          return content::RenderFrameHost::FrameIterationAction::kStop;
++        }
++        return content::RenderFrameHost::FrameIterationAction::kContinue;
++      });
++  return could_display;
++}
++
++}  // namespace
++
++ArchiveTabState SampleTab(tabs::TabInterface* tab,
++                          const tabs::TabInterface* active,
++                          const WorkspaceService& service) {
++  ArchiveTabState state;
++  if (!tab) {
++    return state;
++  }
++  state.handle = tab->GetHandle();
++  state.is_active = (tab == active);
++  state.is_split = tab->IsSplit();
++  state.is_workspace_entry = service.IsWorkspaceTab(tab->GetHandle());
++
++  content::WebContents* contents = tab->GetContents();
++  if (!contents) {
++    // Nothing committed, nothing playing, nothing to lose. It still has to
++    // appear in the window's list -- the "never empties the window" proof
++    // counts every tab, not every tab with contents.
++    return state;
++  }
++  state.last_active = contents->GetLastActiveTime();
++  state.is_visible = contents->GetVisibility() == content::Visibility::VISIBLE;
++  // A muted tab is not bothering anyone.
++  state.is_audible = contents->IsCurrentlyAudible() && !contents->IsAudioMuted();
++  state.is_media_active = contents->HasPictureInPictureVideo() ||
++                          contents->HasPictureInPictureDocument() ||
++                          contents->IsBeingVisiblyCaptured();
++  state.could_prompt = CouldTabDisplayBeforeUnloadDialog(contents);
++  // Same predicate TabStripModel::CloseWebContentsAt uses to decide whether
++  // handing back an empty tab is worth it.
++  state.is_blank_new_tab = IsBlankNewTabState(
++      contents->GetVisibleURL(), contents->GetController().GetEntryCount());
++  return state;
++}
++
++std::vector<ArchiveTabState> SampleWindow(BrowserWindowInterface* browser,
++                                          const WorkspaceService& service) {
++  std::vector<ArchiveTabState> tabs;
++  if (!browser) {
++    return tabs;
++  }
++  TabStripModel* model = browser->GetTabStripModel();
++  if (!model) {
++    return tabs;
++  }
++  const tabs::TabInterface* active = model->GetActiveTab();
++  tabs.reserve(static_cast<size_t>(model->count()));
++  for (int i = 0; i < model->count(); ++i) {
++    tabs.push_back(SampleTab(model->GetTabAtIndex(i), active, service));
++  }
++  return tabs;
++}
++
++void ExecuteArchivePlan(BrowserWindowInterface* browser,
++                        const ArchivePlan& plan) {
++  if (!browser || browser->IsDeleteScheduled()) {
++    return;
++  }
++  TabStripModel* model = browser->GetTabStripModel();
++  if (!model) {
++    return;
++  }
++  // ⛔ "Never leave the window empty" has to happen here, not be left to
++  // TabStripModel::CloseWebContentsAt. That guard deliberately lets a
++  // *second* close of an already-blank tab take the window down -- right for
++  // Cmd+W, wrong for this. Clearing a window whose leftover blank new tab
++  // was itself in the plan quit the browser outright (2026-08-25).
++  //
++  // Opening the replacement up front, rather than guarding the loop, keeps
++  // the promised outcome: the user lands on a fresh new tab page instead of
++  // being stranded on their oldest tab.
++  if (plan.empties_window) {
++    chrome::AddTabAt(browser, GURL(), /*index=*/-1, /*foreground=*/true);
++  }
++
++  // ⛔ Nothing here counts how many tabs actually closed, and callers must
++  // not try: CloseWebContentsAt() returning is not the same as the tab
++  // being gone. A tab whose page has an unload/pagehide/visibilitychange
++  // handler anywhere in its frame tree takes the asynchronous path
++  // (TabStripModel::CloseWebContentses -> RunUnloadListenerBeforeClosing),
++  // stays in the strip, and comes back to be closed tens of milliseconds
++  // later. YouTube's ad and analytics iframes make that the common case,
++  // not the exception.
++  //
++  // The first cut counted anyway, and the over-count went straight into
++  // Undo, which then reached one entry too far back and resurrected tabs
++  // from an *earlier* clear -- the same failure the blank-new-tab rule was
++  // added to prevent, arriving by a second route. Undo now works off a
++  // TabRestoreService watermark instead and needs no count at all.
++  //
++  // ⛔ Iterate the handles the read pass named -- never "while any Today tab
++  // is left". Both this function and CloseWebContentsAt can add a blank new
++  // tab, and that tab is itself a Today tab, so such a loop never ends.
++  //
++  // Back to front so the common case does not walk the model repeatedly;
++  // the index is re-resolved anyway, because closing can run an unload
++  // handler and shift everything after it.
++  for (auto it = plan.to_close.rbegin(); it != plan.to_close.rend(); ++it) {
++    tabs::TabInterface* tab = it->Get();
++    if (!tab) {
++      continue;
++    }
++    const int index = model->GetIndexOfTab(tab);
++    if (index < 0) {
++      continue;
++    }
++    // CLOSE_CREATE_HISTORICAL_TAB is the whole recovery story: it is what
++    // puts the tab in Cmd+Shift+T and chrome://history. Dropping it would
++    // make an unattended close unrecoverable.
++    model->CloseWebContentsAt(
++        index, TabCloseTypes::CLOSE_USER_GESTURE |
++                   TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++  }
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
+@@ -0,0 +1,313 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_POLICY_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_POLICY_H_
++
++#include <algorithm>
++#include <vector>
++
++#include "base/containers/span.h"
++#include "base/time/time.h"
++#include "components/tabs/public/tab_interface.h"
++
++class BrowserWindowInterface;
++
++namespace helium_workspace {
++
++class WorkspaceService;
++
++// helium-fork M4: which of the sidebar's unpinned tabs get closed, and why.
++//
++// "Archive" here means *close the tab* -- Chromium's own Recently Closed
++// (Cmd+Shift+T) and chrome://history are the recovery path, so this fork
++// grows no archive store of its own. That mapping is not a shortcut: Arc's
++// own archive, read on 2026-08-25, is 2463 manual entries against 120
++// automatic ones, and the manual ones land a median 29 seconds after the
++// tab was last active -- in Arc, closing a tab *is* archiving it, and its
++// Archive page is its history.
++//
++// Kept dependency-free (no //content, no //chrome/browser/ui) so
++// helium_workspace_unittests can exercise it directly -- the same reason
++// workspace_pin_semantics.h splits its live-tab wrappers into a .cc that
++// the test target does not build. Everything the renderer knows arrives
++// here as a plain bool; the sampling lives in workspace_archive_service.cc.
++
++// The tiers *are* minute counts, so appearance_behavior_page.ts can write
++// these numbers straight into its menuOptions and there is no C++ enum to
++// keep in sync (contrast kHeliumAddressBarMode, whose .ts carries a "must
++// be kept in sync" comment). 0 means Never.
++//
++// Arc's own set, measured 2026-08-25 from its binary's AutoArchiveType
++// cases: 6h / 12h / 24h / 7d / 30d / Never. The user dropped 6h, added 3d,
++// and set the default to 24h (Arc on this machine is 12h) -- a deliberate
++// divergence, not an approximation.
++inline constexpr int kArchiveNeverMinutes = 0;
++inline constexpr int kArchive12Hours = 12 * 60;
++inline constexpr int kArchive24Hours = 24 * 60;
++inline constexpr int kArchive3Days = 3 * 24 * 60;
++inline constexpr int kArchive7Days = 7 * 24 * 60;
++inline constexpr int kArchive30Days = 30 * 24 * 60;
++inline constexpr int kArchiveDefaultMinutes = kArchive24Hours;
++
++// A year. Nothing sane is above this; the cap exists so a hand-edited pref
++// cannot overflow base::Minutes().
++inline constexpr int kArchiveMaxMinutes = 365 * 24 * 60;
++
++// Negative -> Never. The pref is an integer the user can hand-edit, and
++// every read goes through here.
++inline int ClampArchiveMinutes(int minutes) {
++  if (minutes <= 0) {
++    return kArchiveNeverMinutes;
++  }
++  return std::min(minutes, kArchiveMaxMinutes);
++}
++
++// One tab as the sweep found it. Deliberately plain data: this header is
++// compiled into helium_workspace_unittests, which has neither //content nor
++// //chrome/browser/ui in its deps.
++struct ArchiveTabState {
++  // Identity that survives the sweep's two passes. The plan is executed
++  // after the read pass returns, by which time indices have moved.
++  tabs::TabHandle handle;
++
++  // WebContents::GetLastActiveTime(). Wall clock, and it survives a
++  // restart: the session file stores it (session_types.h) and
++  // session_restore.cc feeds it back into the restored tab. That matters
++  // more than it looks -- with the default at 24h, almost every archive
++  // happens across a restart, because few people leave a browser running
++  // for a day.
++  base::Time last_active;
++
++  // TabStripModel::GetActiveTab(): the tab the user is looking at.
++  bool is_active = false;
++  // GetVisibility() == VISIBLE. Not the same question as |is_active|: the
++  // other half of a split view is on screen without being active.
++  bool is_visible = false;
++  // TabInterface::IsSplit(). Belt to |is_visible|'s braces -- whether a
++  // split's inactive half ever gets WasShown() is not something this fork
++  // has measured, so neither signal is trusted alone.
++  bool is_split = false;
++
++  // WorkspaceService::IsWorkspaceTab(): bound to a sidebar entry, so not one
++  // of the unpinned tabs at all. This is also the user's escape hatch --
++  // Cmd+D makes a tab permanent.
++  bool is_workspace_entry = false;
++
++  // IsCurrentlyAudible() && !IsAudioMuted(). A muted tab is not bothering
++  // anyone and gets no protection.
++  bool is_audible = false;
++  // Picture-in-picture on screen, or the tab is being captured (screen
++  // share, recording). Closing the source mid-meeting is expensive enough
++  // to be worth one bool.
++  bool is_media_active = false;
++
++  // helium_workspace::IsBlankNewTabState(): showing nothing, with nothing
++  // behind it. Never worth closing -- and closing one is actively harmful,
++  // because TabStripModel does not file a blank new tab with
++  // TabRestoreService. Counting it made the Clear toast's Undo reach one
++  // entry too far back and resurrect a tab from an *earlier* clear
++  // (observed 2026-08-25).
++  bool is_blank_new_tab = false;
++
++  // Any frame's RenderFrameHost::CouldDisplayBeforeUnloadDialog(), i.e. a
++  // beforeunload handler *and* sticky user activation.
++  //
++  // Deliberately not WebContents::NeedToFireBeforeUnloadOrUnloadEvents():
++  // that one is true for unload/pagehide/*visibilitychange* handlers too,
++  // and half the web registers visibilitychange for analytics, which would
++  // spare nearly every tab and quietly turn this feature off.
++  bool could_prompt = false;
++};
++
++// Why a tab was spared. Exists so the probe and the unit tests can assert
++// the *reason*, not just the outcome. The order is the precedence order:
++// a tab that is both an entry and audible always reports kSidebarEntry,
++// which is what makes the probe's per-reason counts deterministic.
++enum class ArchiveSkipReason {
++  kNone = 0,       // not spared -- close it
++  kDisabled,       // the tier is Never
++  kSidebarEntry,   // bound to a sidebar entry, so not an unpinned tab
++  kBlankNewTab,   // an empty new tab page; nothing to archive
++  kActive,        // the tab the user is on
++  kVisible,       // on screen without being active (split view)
++  kSplit,         // part of a split view
++  kAudible,       // playing sound
++  kMediaActive,   // picture-in-picture, or being captured
++  kBeforeUnload,  // would put up a "Leave site?" dialog
++  kTooRecent,     // has not aged past the tier yet
++};
++
++struct ArchivePlan {
++  // In strip order. The caller closes them back to front, re-resolving each
++  // index, because closing can run unload handlers and shift what is left.
++  std::vector<tabs::TabHandle> to_close;
++
++  // True when |to_close| covers every tab in the window.
++  //
++  // PlanAutoArchive() never sets it -- see the comment on that function.
++  // PlanCloseUnpinned() can: it closes the active tab too. Closing
++  // the last tab is already handled downstream (TabStripModel::
++  // CloseWebContentsAt hands back a blank new tab rather than letting the
++  // window vanish); this flag exists so the rule is stated in one place and
++  // can be asserted without a browser.
++  bool empties_window = false;
++};
++
++// The protections that apply no matter which gesture asked. Shared by the
++// timer sweep and by the explicit "close unpinned tabs" command so the two
++// can never drift apart.
++//
++// |could_prompt| is deliberately NOT checked here -- see
++// ClassifyForAutoArchive. It is the one protection the two gestures
++// disagree about.
++inline ArchiveSkipReason ClassifyProtections(const ArchiveTabState& tab) {
++  if (tab.is_workspace_entry) {
++    return ArchiveSkipReason::kSidebarEntry;
++  }
++  if (tab.is_blank_new_tab) {
++    return ArchiveSkipReason::kBlankNewTab;
++  }
++  if (tab.is_split) {
++    return ArchiveSkipReason::kSplit;
++  }
++  if (tab.is_audible) {
++    return ArchiveSkipReason::kAudible;
++  }
++  if (tab.is_media_active) {
++    return ArchiveSkipReason::kMediaActive;
++  }
++  return ArchiveSkipReason::kNone;
++}
++
++// The timer sweep's question.
++//
++// |threshold_minutes| is the raw pref; it is clamped here, so a caller that
++// forgot cannot arm a negative deadline. The age test is >=, matching Arc:
++// across 120 automatic archives its floor is exactly 12.00h with nothing
++// below it.
++//
++// A |last_active| in the future (clock moved backwards, machine resumed
++// from suspend with a corrected clock) reads as kTooRecent. Erring towards
++// "leave it alone" is the only safe direction for something that closes
++// tabs unattended.
++inline ArchiveSkipReason ClassifyForAutoArchive(const ArchiveTabState& tab,
++                                                base::Time now,
++                                                int threshold_minutes) {
++  const int minutes = ClampArchiveMinutes(threshold_minutes);
++  if (minutes == kArchiveNeverMinutes) {
++    return ArchiveSkipReason::kDisabled;
++  }
++  const ArchiveSkipReason protection = ClassifyProtections(tab);
++  if (protection != ArchiveSkipReason::kNone) {
++    return protection;
++  }
++  // Only the unattended sweep honours this. Nobody is watching, so a page
++  // that would put up a "Leave site?" dialog gets left alone. The explicit
++  // command does the opposite -- see ClassifyForCloseUnpinned.
++  if (tab.could_prompt) {
++    return ArchiveSkipReason::kBeforeUnload;
++  }
++  if (tab.is_active) {
++    return ArchiveSkipReason::kActive;
++  }
++  if (tab.is_visible) {
++    return ArchiveSkipReason::kVisible;
++  }
++  if (tab.last_active > now ||
++      now - tab.last_active < base::Minutes(minutes)) {
++    return ArchiveSkipReason::kTooRecent;
++  }
++  return ArchiveSkipReason::kNone;
++}
++
++// The explicit "close unpinned tabs" command's question: the shared
++// protections, minus the active-tab rule, minus age, and -- the part that
++// matters -- minus |could_prompt|.
++//
++// Honouring |could_prompt| here is what made YouTube unclosable (user
++// 2026-08-26, on the homepage with no video playing). Its cause is
++// structural, not incidental: has_before_unload_handler_ is only cleared on
++// a *cross-document* navigation (render_frame_host_impl.cc), and YouTube is
++// a single-page app, so one registration lasts the tab's whole life. Sticky
++// activation propagates to every same-origin frame, so one click anywhere
++// on the page arms all of them.
++//
++// The user asked for these tabs to go. A page holding unsaved work still
++// gets to object -- Chromium puts up its own confirmation dialog on the way
++// out, which is the right place to change your mind.
++inline ArchiveSkipReason ClassifyForCloseUnpinned(const ArchiveTabState& tab) {
++  return ClassifyProtections(tab);
++}
++
++// |window_tabs| must be *every* tab in the window, active one included, in
++// strip order.
++//
++// That is not a convenience: "never empties the window" is a theorem about
++// this input, not a check performed on the output. A non-empty strip has
++// exactly one active tab; if it is an unpinned tab the kActive rule spares
++// it, and if it is a sidebar entry kSidebarEntry spares it. The two cases
++// are exhaustive, so at least one tab always survives and empties_window
++// stays false. Hand this function a pre-filtered list and that guarantee is
++// gone.
++inline ArchivePlan PlanAutoArchive(base::span<const ArchiveTabState> window_tabs,
++                                   base::Time now,
++                                   int threshold_minutes) {
++  ArchivePlan plan;
++  for (const ArchiveTabState& tab : window_tabs) {
++    if (ClassifyForAutoArchive(tab, now, threshold_minutes) ==
++        ArchiveSkipReason::kNone) {
++      plan.to_close.push_back(tab.handle);
++    }
++  }
++  plan.empties_window =
++      !window_tabs.empty() && plan.to_close.size() == window_tabs.size();
++  return plan;
++}
++
++// Same contract on |window_tabs| as above. Unlike the sweep, this one can
++// come back covering the whole window.
++inline ArchivePlan PlanCloseUnpinned(
++    base::span<const ArchiveTabState> window_tabs) {
++  ArchivePlan plan;
++  for (const ArchiveTabState& tab : window_tabs) {
++    if (ClassifyForCloseUnpinned(tab) == ArchiveSkipReason::kNone) {
++      plan.to_close.push_back(tab.handle);
++    }
++  }
++  plan.empties_window =
++      !window_tabs.empty() && plan.to_close.size() == window_tabs.size();
++  return plan;
++}
++
++// ---- live-object glue -----------------------------------------------------
++//
++// Declared here, defined in workspace_archive_policy.cc, which is *not*
++// built into helium_workspace_unittests -- it needs //content. Same split
++// workspace_pin_semantics.h uses, and for the same reason.
++
++// Reads one tab into the plain-data form above. |active| is the window's
++// active tab, compared by pointer.
++ArchiveTabState SampleTab(tabs::TabInterface* tab,
++                          const tabs::TabInterface* active,
++                          const WorkspaceService& service);
++
++// Every tab in |browser|, in strip order -- the whole window, which is what
++// PlanAutoArchive()'s "never empties the window" guarantee rests on.
++std::vector<ArchiveTabState> SampleWindow(BrowserWindowInterface* browser,
++                                          const WorkspaceService& service);
++
++// Closes what |plan| named, re-resolving every handle against the live
++// model first: this runs after the read pass returned, and closing a tab
++// can run unload handlers that move everything after it.
++//
++// Returns nothing on purpose. "How many closed" is not knowable here --
++// tabs with unload handlers close asynchronously, long after this returns.
++// Ask TabRestoreService instead.
++void ExecuteArchivePlan(BrowserWindowInterface* browser,
++                        const ArchivePlan& plan);
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_POLICY_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_policy_unittest.cc
+@@ -0,0 +1,394 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
++
++#include <limits>
++#include <memory>
++#include <vector>
++
++#include "base/time/time.h"
++#include "components/tabs/public/mock_tab_interface.h"
++#include "testing/gmock/include/gmock/gmock.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium_workspace {
++namespace {
++
++using ::testing::ElementsAre;
++
++// This is the only place the "close tabs unattended" rules are actually
++// held. Everything below the pure layer -- the timer, the sweep, the
++// keyboard shortcut -- can only get these wrong by not calling them.
++class WorkspaceArchivePolicyTest : public testing::Test {
++ protected:
++  // Distinct, resolvable handles. The policy only ever copies them, but
++  // using real ones keeps the tests honest about identity.
++  tabs::TabHandle NewHandle() {
++    tabs_.push_back(std::make_unique<tabs::MockTabInterface>());
++    return tabs_.back()->GetHandle();
++  }
++
++  // A plain unpinned tab, last touched |age| ago.
++  ArchiveTabState Aged(base::TimeDelta age) {
++    ArchiveTabState tab;
++    tab.handle = NewHandle();
++    tab.last_active = now_ - age;
++    return tab;
++  }
++
++  const base::Time now_ = base::Time::Now();
++
++ private:
++  std::vector<std::unique_ptr<tabs::MockTabInterface>> tabs_;
++};
++
++// ---- tiers ----------------------------------------------------------------
++
++// The tiers are minute counts, and appearance_behavior_page.ts writes the
++// same numbers. A typo here is a tier that silently means something else.
++TEST_F(WorkspaceArchivePolicyTest, TierValuesAreTheMinuteCounts) {
++  EXPECT_EQ(720, kArchive12Hours);
++  EXPECT_EQ(1440, kArchive24Hours);
++  EXPECT_EQ(4320, kArchive3Days);
++  EXPECT_EQ(10080, kArchive7Days);
++  EXPECT_EQ(43200, kArchive30Days);
++  EXPECT_EQ(0, kArchiveNeverMinutes);
++}
++
++// The user moved the default off Arc's 12h on 2026-08-25. Nothing should
++// quietly move it back while "matching the reference browser".
++TEST_F(WorkspaceArchivePolicyTest, DefaultTierIs24Hours) {
++  EXPECT_EQ(kArchive24Hours, kArchiveDefaultMinutes);
++}
++
++TEST_F(WorkspaceArchivePolicyTest, ClampFoldsNonPositiveToNever) {
++  EXPECT_EQ(kArchiveNeverMinutes, ClampArchiveMinutes(0));
++  EXPECT_EQ(kArchiveNeverMinutes, ClampArchiveMinutes(-1));
++  EXPECT_EQ(kArchiveNeverMinutes,
++            ClampArchiveMinutes(std::numeric_limits<int>::min()));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, ClampHasAnUpperBound) {
++  EXPECT_EQ(kArchiveMaxMinutes,
++            ClampArchiveMinutes(std::numeric_limits<int>::max()));
++  EXPECT_EQ(kArchive30Days, ClampArchiveMinutes(kArchive30Days));
++}
++
++// ---- the age test ---------------------------------------------------------
++
++// Arc's floor across 120 automatic archives is exactly 12.00h with nothing
++// under it, so the comparison is >=, not >.
++TEST_F(WorkspaceArchivePolicyTest, ExactlyAtThresholdArchives) {
++  const ArchiveTabState tab = Aged(base::Minutes(kArchive12Hours));
++  EXPECT_EQ(ArchiveSkipReason::kNone,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, OneSecondUnderThresholdSpared) {
++  const ArchiveTabState tab =
++      Aged(base::Minutes(kArchive12Hours) - base::Seconds(1));
++  EXPECT_EQ(ArchiveSkipReason::kTooRecent,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++// A pref someone hand-edited to a value no menu offers still works: the
++// value *is* the minute count, there is no enum to fall off.
++TEST_F(WorkspaceArchivePolicyTest, ArbitraryThresholdIsHonored) {
++  EXPECT_EQ(ArchiveSkipReason::kNone,
++            ClassifyForAutoArchive(Aged(base::Minutes(91)), now_, 90));
++  EXPECT_EQ(ArchiveSkipReason::kTooRecent,
++            ClassifyForAutoArchive(Aged(base::Minutes(89)), now_, 90));
++}
++
++// Clock moved backwards, or the machine resumed with a corrected clock.
++// "Leave it alone" is the only safe direction for an unattended close.
++TEST_F(WorkspaceArchivePolicyTest, FutureLastActiveSpared) {
++  ArchiveTabState tab = Aged(base::TimeDelta());
++  tab.last_active = now_ + base::Hours(1);
++  EXPECT_EQ(ArchiveSkipReason::kTooRecent,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, NeverThresholdDisablesEverything) {
++  const ArchiveTabState tab = Aged(base::Days(30));
++  EXPECT_EQ(ArchiveSkipReason::kDisabled,
++            ClassifyForAutoArchive(tab, now_, kArchiveNeverMinutes));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, NegativeThresholdIsNever) {
++  const ArchiveTabState tab = Aged(base::Days(30));
++  EXPECT_EQ(ArchiveSkipReason::kDisabled,
++            ClassifyForAutoArchive(tab, now_, -1));
++}
++
++// ---- the six protections --------------------------------------------------
++
++TEST_F(WorkspaceArchivePolicyTest, ActiveTabNeverArchived) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.is_active = true;
++  EXPECT_EQ(ArchiveSkipReason::kActive,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++// Not the same question as active: the other half of a split view is on
++// screen without being the active tab.
++TEST_F(WorkspaceArchivePolicyTest, VisibleNonActiveTabSpared) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.is_visible = true;
++  EXPECT_EQ(ArchiveSkipReason::kVisible,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++// Whether a split's inactive half ever gets WasShown() is unmeasured in
++// this fork, so is_split guards it independently of is_visible.
++TEST_F(WorkspaceArchivePolicyTest, SplitTabSpared) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.is_split = true;
++  EXPECT_EQ(ArchiveSkipReason::kSplit,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, SidebarEntryTabIsNotUnpinned) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.is_workspace_entry = true;
++  EXPECT_EQ(ArchiveSkipReason::kSidebarEntry,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++// A blank new tab page holds nothing, and TabStripModel does not file one
++// with TabRestoreService -- so archiving one is both pointless and, via the
++// Clear toast's Undo count, actively wrong.
++TEST_F(WorkspaceArchivePolicyTest, BlankNewTabSpared) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.is_blank_new_tab = true;
++  EXPECT_EQ(ArchiveSkipReason::kBlankNewTab,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++  EXPECT_EQ(ArchiveSkipReason::kBlankNewTab, ClassifyForCloseUnpinned(tab));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, AudibleTabSpared) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.is_audible = true;
++  EXPECT_EQ(ArchiveSkipReason::kAudible,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, MediaActiveTabSpared) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.is_media_active = true;
++  EXPECT_EQ(ArchiveSkipReason::kMediaActive,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++// The unattended sweep spares it -- nobody is watching, so a page that
++// would put up a "Leave site?" dialog gets left alone.
++TEST_F(WorkspaceArchivePolicyTest, BeforeUnloadTabSparedBySweep) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.could_prompt = true;
++  EXPECT_EQ(ArchiveSkipReason::kBeforeUnload,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++}
++
++// ...but the explicit command must NOT. This is the one that made YouTube
++// unclosable: it is a single-page app, so its beforeunload registration
++// survives every in-page navigation, and one click anywhere on the page
++// arms sticky activation across all its same-origin frames. Honouring the
++// flag here meant the tab could never be closed again for the rest of its
++// life (user 2026-08-26).
++TEST_F(WorkspaceArchivePolicyTest, BeforeUnloadTabIsClosedByExplicitCommand) {
++  ArchiveTabState tab = Aged(base::Minutes(1));
++  tab.could_prompt = true;
++  EXPECT_EQ(ArchiveSkipReason::kNone, ClassifyForCloseUnpinned(tab));
++
++  std::vector<ArchiveTabState> tabs = {tab};
++  EXPECT_THAT(PlanCloseUnpinned(tabs).to_close, ElementsAre(tab.handle));
++}
++
++// The probe counts tabs per reason, so a tab that trips several rules must
++// always report the same one.
++TEST_F(WorkspaceArchivePolicyTest, SkipReasonPrecedenceIsStable) {
++  ArchiveTabState tab = Aged(base::Days(30));
++  tab.is_workspace_entry = true;
++  tab.is_audible = true;
++  tab.could_prompt = true;
++  tab.is_active = true;
++  EXPECT_EQ(ArchiveSkipReason::kSidebarEntry,
++            ClassifyForAutoArchive(tab, now_, kArchive12Hours));
++  EXPECT_EQ(ArchiveSkipReason::kSidebarEntry, ClassifyForCloseUnpinned(tab));
++}
++
++// ---- PlanAutoArchive ------------------------------------------------------
++
++TEST_F(WorkspaceArchivePolicyTest, PlanPreservesStripOrder) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 5; ++i) {
++    tabs.push_back(Aged(base::Days(30)));
++  }
++  tabs[0].is_active = true;
++  const ArchivePlan plan = PlanAutoArchive(tabs, now_, kArchive12Hours);
++  EXPECT_THAT(plan.to_close,
++              ElementsAre(tabs[1].handle, tabs[2].handle, tabs[3].handle,
++                          tabs[4].handle));
++}
++
++// The theorem: a non-empty strip has exactly one active tab, and either
++// rule kActive or rule kSidebarEntry spares it. Both branches below.
++TEST_F(WorkspaceArchivePolicyTest, PlanNeverEmptiesWindow) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 8; ++i) {
++    tabs.push_back(Aged(base::Days(30)));
++  }
++  tabs[3].is_active = true;
++  const ArchivePlan plan = PlanAutoArchive(tabs, now_, kArchive12Hours);
++  EXPECT_EQ(7u, plan.to_close.size());
++  EXPECT_FALSE(plan.empties_window);
++}
++
++TEST_F(WorkspaceArchivePolicyTest, PlanNeverEmptiesWindowWhenActiveIsEntryTab) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 8; ++i) {
++    tabs.push_back(Aged(base::Days(30)));
++  }
++  tabs[0].is_active = true;
++  tabs[0].is_workspace_entry = true;
++  const ArchivePlan plan = PlanAutoArchive(tabs, now_, kArchive12Hours);
++  EXPECT_EQ(7u, plan.to_close.size());
++  EXPECT_FALSE(plan.empties_window);
++}
++
++TEST_F(WorkspaceArchivePolicyTest, SingleTabWindowIsNeverTouched) {
++  std::vector<ArchiveTabState> tabs = {Aged(base::Days(30))};
++  tabs[0].is_active = true;
++  const ArchivePlan plan = PlanAutoArchive(tabs, now_, kArchive12Hours);
++  EXPECT_TRUE(plan.to_close.empty());
++  EXPECT_FALSE(plan.empties_window);
++}
++
++TEST_F(WorkspaceArchivePolicyTest, EmptyWindowYieldsEmptyPlan) {
++  const ArchivePlan plan = PlanAutoArchive({}, now_, kArchive12Hours);
++  EXPECT_TRUE(plan.to_close.empty());
++  EXPECT_FALSE(plan.empties_window);
++}
++
++TEST_F(WorkspaceArchivePolicyTest, DisabledThresholdYieldsEmptyPlan) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 5; ++i) {
++    tabs.push_back(Aged(base::Days(30)));
++  }
++  const ArchivePlan plan = PlanAutoArchive(tabs, now_, kArchiveNeverMinutes);
++  EXPECT_TRUE(plan.to_close.empty());
++  EXPECT_FALSE(plan.empties_window);
++}
++
++// No hidden state: the sweep runs this every five minutes.
++TEST_F(WorkspaceArchivePolicyTest, PlanIsPure) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 4; ++i) {
++    tabs.push_back(Aged(base::Days(30)));
++  }
++  tabs[0].is_active = true;
++  const ArchivePlan first = PlanAutoArchive(tabs, now_, kArchive12Hours);
++  const ArchivePlan second = PlanAutoArchive(tabs, now_, kArchive12Hours);
++  EXPECT_EQ(first.to_close, second.to_close);
++  EXPECT_EQ(first.empties_window, second.empties_window);
++}
++
++// One of each, so a rule that stops working shows up as a count change.
++TEST_F(WorkspaceArchivePolicyTest, MixedWindowPicksOnlyEligible) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 8; ++i) {
++    tabs.push_back(Aged(base::Days(30)));
++  }
++  tabs[0].is_active = true;
++  tabs[1].is_audible = true;
++  tabs[2].could_prompt = true;
++  tabs[3].is_workspace_entry = true;
++  tabs[4].last_active = now_ - base::Minutes(5);  // too recent
++  tabs[5].is_blank_new_tab = true;
++  // tabs[6..7] are eligible.
++  const ArchivePlan plan = PlanAutoArchive(tabs, now_, kArchive12Hours);
++  EXPECT_THAT(plan.to_close, ElementsAre(tabs[6].handle, tabs[7].handle));
++  EXPECT_FALSE(plan.empties_window);
++}
++
++// ---- PlanCloseUnpinned ----------------------------------------------------
++
++// The command means what it says. The active-tab rule belongs to the sweep.
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedClosesTheActiveTab) {
++  std::vector<ArchiveTabState> tabs = {Aged(base::Minutes(1))};
++  tabs[0].is_active = true;
++  const ArchivePlan plan = PlanCloseUnpinned(tabs);
++  EXPECT_THAT(plan.to_close, ElementsAre(tabs[0].handle));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedIgnoresAge) {
++  std::vector<ArchiveTabState> tabs = {Aged(base::Seconds(1))};
++  const ArchivePlan plan = PlanCloseUnpinned(tabs);
++  EXPECT_THAT(plan.to_close, ElementsAre(tabs[0].handle));
++}
++
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedSparesSidebarEntries) {
++  std::vector<ArchiveTabState> tabs = {Aged(base::Minutes(1)),
++                                       Aged(base::Minutes(1))};
++  tabs[0].is_workspace_entry = true;
++  const ArchivePlan plan = PlanCloseUnpinned(tabs);
++  EXPECT_THAT(plan.to_close, ElementsAre(tabs[1].handle));
++  EXPECT_FALSE(plan.empties_window);
++}
++
++// What the explicit command still spares: sound, media, and the other half
++// of a split (closing that one collapses the split under the user).
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedSparesAudibleMediaAndSplit) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 3; ++i) {
++    tabs.push_back(Aged(base::Minutes(1)));
++  }
++  tabs[0].is_audible = true;
++  tabs[1].is_split = true;
++  tabs[2].is_media_active = true;
++  const ArchivePlan plan = PlanCloseUnpinned(tabs);
++  EXPECT_TRUE(plan.to_close.empty());
++  EXPECT_FALSE(plan.empties_window);
++}
++
++// The one case where the window would go empty. A replacement blank tab is
++// opened first; the flag is how that rule stays assertable here.
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedOfWholeWindowSetsEmptiesWindow) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 3; ++i) {
++    tabs.push_back(Aged(base::Minutes(1)));
++  }
++  tabs[0].is_active = true;
++  const ArchivePlan plan = PlanCloseUnpinned(tabs);
++  EXPECT_EQ(3u, plan.to_close.size());
++  EXPECT_TRUE(plan.empties_window);
++}
++
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedWithSidebarEntriesDoesNotEmptyWindow) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 3; ++i) {
++    tabs.push_back(Aged(base::Minutes(1)));
++  }
++  tabs[2].is_workspace_entry = true;
++  const ArchivePlan plan = PlanCloseUnpinned(tabs);
++  EXPECT_EQ(2u, plan.to_close.size());
++  EXPECT_FALSE(plan.empties_window);
++}
++
++// Running it on a window that holds only sidebar entries must do nothing at
++// all -- no flash, no stray new tab.
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedWithNothingToCloseIsNoOp) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 2; ++i) {
++    tabs.push_back(Aged(base::Minutes(1)));
++    tabs.back().is_workspace_entry = true;
++  }
++  const ArchivePlan plan = PlanCloseUnpinned(tabs);
++  EXPECT_TRUE(plan.to_close.empty());
++  EXPECT_FALSE(plan.empties_window);
++}
++
++}  // namespace
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_service.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_service.cc
+@@ -0,0 +1,161 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_archive_service.h"
++
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/check.h"
++#include "base/command_line.h"
++#include "base/functional/bind.h"
++#include "base/strings/string_number_conversions.h"
++#include "chrome/browser/lifetime/browser_shutdown.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
++#include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
++#include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "components/prefs/pref_service.h"
++#include "components/sessions/core/session_id.h"
++
++namespace helium_workspace {
++namespace {
++
++// Acceptance levers, off unless asked for. Declared here rather than in
++// chrome_switches.h for the same reason --helium-drag-perf is declared in
++// workspace_sidebar_view.cc: one fewer shared upstream file in the patch.
++//
++// Without these the default tier is 24 hours, so an acceptance run would
++// have to wait a day.
++constexpr char kThresholdSwitch[] = "helium-today-archive-minutes";
++constexpr char kSweepSecondsSwitch[] = "helium-today-archive-sweep-seconds";
++
++int SwitchValueOr(const char* name, int fallback) {
++  const base::CommandLine* const command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (!command_line->HasSwitch(name)) {
++    return fallback;
++  }
++  int value = 0;
++  if (!base::StringToInt(command_line->GetSwitchValueASCII(name), &value)) {
++    return fallback;
++  }
++  return value;
++}
++
++}  // namespace
++
++WorkspaceArchiveService::WorkspaceArchiveService(Profile* profile)
++    : profile_(profile) {
++  threshold_override_minutes_ = SwitchValueOr(kThresholdSwitch, -1);
++  const int sweep_seconds = SwitchValueOr(kSweepSecondsSwitch, 0);
++  if (sweep_seconds > 0) {
++    sweep_interval_ = base::Seconds(sweep_seconds);
++  }
++
++  pref_change_registrar_.Init(profile_->GetPrefs());
++  pref_change_registrar_.Add(
++      prefs::kWorkspaceTodayArchiveMinutes,
++      base::BindRepeating(&WorkspaceArchiveService::ApplyThreshold,
++                          base::Unretained(this)));
++  ApplyThreshold();
++}
++
++WorkspaceArchiveService::~WorkspaceArchiveService() = default;
++
++void WorkspaceArchiveService::Shutdown() {
++  // Stop, and do *not* run one last sweep. WorkspaceService::Shutdown()
++  // flushes its debounced write on the way out because losing a write loses
++  // data; closing tabs on the way out is the opposite trade -- and by then
++  // TabRestoreService may already be gone, which would take the tabs out of
++  // Cmd+Shift+T with them.
++  sweep_timer_.Stop();
++  pref_change_registrar_.RemoveAll();
++}
++
++int WorkspaceArchiveService::ThresholdMinutes() const {
++  if (threshold_override_minutes_ >= 0) {
++    return ClampArchiveMinutes(threshold_override_minutes_);
++  }
++  return ClampArchiveMinutes(profile_->GetPrefs()->GetInteger(
++      prefs::kWorkspaceTodayArchiveMinutes));
++}
++
++void WorkspaceArchiveService::ApplyThreshold() {
++  if (ThresholdMinutes() == kArchiveNeverMinutes) {
++    sweep_timer_.Stop();
++    return;
++  }
++  if (sweep_timer_.IsRunning()) {
++    return;
++  }
++  // Start() waits a full interval before the first run, and that wait is
++  // the grace period: sweeping the instant the browser comes up would close
++  // a pile of restored tabs before the user has looked at the window, and
++  // would do it while session restore is still adding tabs. Anything the
++  // user touches in those five minutes refreshes its own clock and is
++  // spared.
++  sweep_timer_.Start(FROM_HERE, sweep_interval_,
++                     base::BindRepeating(&WorkspaceArchiveService::Sweep,
++                                         base::Unretained(this)));
++}
++
++void WorkspaceArchiveService::SweepNowForTesting() {
++  Sweep();
++}
++
++void WorkspaceArchiveService::Sweep() {
++  // If the profile is being torn down, TabRestoreService may already have
++  // shut down, and CreateHistoricalTab then quietly drops the tab instead of
++  // filing it. An unrecoverable close is the one failure this feature may
++  // not have.
++  if (browser_shutdown::HasShutdownStarted()) {
++    return;
++  }
++  const int minutes = ThresholdMinutes();
++  if (minutes == kArchiveNeverMinutes) {
++    return;
++  }
++  WorkspaceService* const service =
++      WorkspaceServiceFactory::GetForProfile(profile_);
++  ProfileBrowserCollection* const collection =
++      ProfileBrowserCollection::GetForProfile(profile_);
++  if (!service || !collection) {
++    return;
++  }
++
++  // Pass one is read-only. ForEach hands out raw pointers from a snapshot
++  // and explicitly does not track what closes during iteration, so nothing
++  // here may close a tab.
++  const base::Time now = base::Time::Now();
++  std::vector<std::pair<SessionID, ArchivePlan>> plans;
++  collection->ForEach([&](BrowserWindowInterface* browser) {
++    if (browser->GetType() != BrowserWindowInterface::TYPE_NORMAL ||
++        browser->IsDeleteScheduled()) {
++      return true;
++    }
++    ArchivePlan plan =
++        PlanAutoArchive(SampleWindow(browser, *service), now, minutes);
++    // The active tab is always spared, and every non-empty strip has one,
++    // so a sweep can never take a window down. Asserted at the call site
++    // because the proof lives in the pure layer's contract.
++    CHECK(!plan.empties_window);
++    if (!plan.to_close.empty()) {
++      plans.emplace_back(browser->GetSessionID(), std::move(plan));
++    }
++    return true;
++  });
++
++  // Pass two resolves everything again: a window or a tab may have gone
++  // away while pass one was still walking.
++  for (const auto& [session_id, plan] : plans) {
++    ExecuteArchivePlan(collection->FindBrowserWithID(session_id), plan);
++  }
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_service.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_service.h
+@@ -0,0 +1,75 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_SERVICE_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_SERVICE_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++#include "components/keyed_service/core/keyed_service.h"
++#include "components/prefs/pref_change_registrar.h"
++
++class Profile;
++
++namespace helium_workspace {
++
++// helium-fork M4: closes unpinned sidebar tabs untouched for longer
++// than helium.workspace.today_archive_minutes.
++//
++// Why its own service rather than a few lines in WorkspaceService: that
++// class takes nothing but a PrefService* on purpose (see its header), which
++// is what lets helium_workspace_unittests build it directly. Enumerating
++// windows needs //content and //chrome/browser/ui, neither of which that
++// target has -- adding them would cost the whole lightweight test suite.
++//
++// Why not one timer per window: WorkspaceTabController comes and goes with
++// its window (tearing a tab out builds a new one), so a timer living there
++// would reset its phase every time, and "when will this tab be swept" would
++// depend on which window it happens to be in. Cmd+Shift+K *is* window
++// scoped and does live there -- WorkspaceTabController::CloseUnpinnedTabs().
++class WorkspaceArchiveService : public KeyedService {
++ public:
++  // Arc sweeps every five minutes (measured 2026-08-25: its sweep timestamps
++  // are all five-minute multiples off a per-run offset). Matching it keeps
++  // the overshoot bounded by the interval.
++  static constexpr base::TimeDelta kDefaultSweepInterval = base::Minutes(5);
++
++  explicit WorkspaceArchiveService(Profile* profile);
++  WorkspaceArchiveService(const WorkspaceArchiveService&) = delete;
++  WorkspaceArchiveService& operator=(const WorkspaceArchiveService&) = delete;
++  ~WorkspaceArchiveService() override;
++
++  // KeyedService:
++  void Shutdown() override;
++
++  // Runs a sweep now. Public for the probe's sake as well as tests -- the
++  // real cadence is far too slow to drive an acceptance run.
++  void SweepNowForTesting();
++
++  bool IsTimerRunningForTesting() const { return sweep_timer_.IsRunning(); }
++
++ private:
++  // The pref, clamped, unless --helium-today-archive-minutes overrode it.
++  int ThresholdMinutes() const;
++
++  // Starts, restarts or stops the timer to match the current tier. Never
++  // means stopped, not "running but returning early" -- a permanently armed
++  // timer keeps the process out of some idle states for nothing.
++  void ApplyThreshold();
++
++  void Sweep();
++
++  const raw_ptr<Profile> profile_;
++  PrefChangeRegistrar pref_change_registrar_;
++  base::RepeatingTimer sweep_timer_;
++
++  // Test/probe overrides from the command line. -1 means "not overridden".
++  int threshold_override_minutes_ = -1;
++  base::TimeDelta sweep_interval_ = kDefaultSweepInterval;
++};
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_SERVICE_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_service_factory.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_service_factory.cc
+@@ -0,0 +1,67 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_archive_service_factory.h"
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/browser_manager_service_factory.h"
++#include "chrome/browser/ui/helium_workspace/workspace_archive_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++
++namespace helium_workspace {
++
++// static
++WorkspaceArchiveService* WorkspaceArchiveServiceFactory::GetForProfile(
++    Profile* profile) {
++  return static_cast<WorkspaceArchiveService*>(
++      GetInstance()->GetServiceForBrowserContext(profile, true));
++}
++
++// static
++WorkspaceArchiveServiceFactory* WorkspaceArchiveServiceFactory::GetInstance() {
++  static base::NoDestructor<WorkspaceArchiveServiceFactory> instance;
++  return instance.get();
++}
++
++WorkspaceArchiveServiceFactory::WorkspaceArchiveServiceFactory()
++    : ProfileKeyedServiceFactory(
++          "HeliumWorkspaceArchiveService",
++          // The same selection WorkspaceServiceFactory uses, and here it is
++          // load-bearing rather than merely consistent: TabRestoreService is
++          // kOriginalOnly too and DCHECKs off-the-record profiles, so an
++          // incognito tab closed by a sweep would reach neither Cmd+Shift+T
++          // nor history. Closing a tab nobody can get back is the one thing
++          // this feature must never do.
++          ProfileSelections::Builder()
++              .WithRegular(ProfileSelection::kOriginalOnly)
++              .WithGuest(ProfileSelection::kNone)
++              .WithSystem(ProfileSelection::kNone)
++              .WithAshInternals(ProfileSelection::kNone)
++              .Build()) {
++  // IsWorkspaceTab() decides what counts as a Today tab.
++  DependsOn(WorkspaceServiceFactory::GetInstance());
++  // Owns the ProfileBrowserCollection the sweep walks.
++  DependsOn(BrowserManagerServiceFactory::GetInstance());
++  // Must outlive us, or a swept tab never reaches Cmd+Shift+T.
++  DependsOn(TabRestoreServiceFactory::GetInstance());
++}
++
++WorkspaceArchiveServiceFactory::~WorkspaceArchiveServiceFactory() = default;
++
++std::unique_ptr<KeyedService>
++WorkspaceArchiveServiceFactory::BuildServiceInstanceForBrowserContext(
++    content::BrowserContext* context) const {
++  return std::make_unique<WorkspaceArchiveService>(
++      Profile::FromBrowserContext(context));
++}
++
++bool WorkspaceArchiveServiceFactory::ServiceIsCreatedWithBrowserContext()
++    const {
++  // Nothing in the UI ever asks for this service, so without this it would
++  // simply never exist and the sweep would never run.
++  return true;
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_service_factory.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_service_factory.h
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_SERVICE_FACTORY_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_SERVICE_FACTORY_H_
++
++#include <memory>
++
++#include "base/no_destructor.h"
++#include "chrome/browser/profiles/profile_keyed_service_factory.h"
++
++class Profile;
++
++namespace helium_workspace {
++
++class WorkspaceArchiveService;
++
++class WorkspaceArchiveServiceFactory : public ProfileKeyedServiceFactory {
++ public:
++  static WorkspaceArchiveService* GetForProfile(Profile* profile);
++  static WorkspaceArchiveServiceFactory* GetInstance();
++
++  WorkspaceArchiveServiceFactory(const WorkspaceArchiveServiceFactory&) =
++      delete;
++  WorkspaceArchiveServiceFactory& operator=(
++      const WorkspaceArchiveServiceFactory&) = delete;
++
++ private:
++  friend base::NoDestructor<WorkspaceArchiveServiceFactory>;
++
++  WorkspaceArchiveServiceFactory();
++  ~WorkspaceArchiveServiceFactory() override;
++
++  // ProfileKeyedServiceFactory:
++  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
++      content::BrowserContext* context) const override;
++  bool ServiceIsCreatedWithBrowserContext() const override;
++};
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_SERVICE_FACTORY_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ 
++#include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
+ #include "components/pref_registry/pref_registry_syncable.h"
+ 
+ namespace helium_workspace::prefs {
+@@ -12,6 +13,8 @@ void RegisterProfilePrefs(user_prefs::Pr
+   registry->RegisterListPref(kWorkspaceEntries);
+   registry->RegisterBooleanPref(kWorkspaceMigratedFromPinnedTabs, false);
+   registry->RegisterBooleanPref(kWorkspaceSpaceCollapsed, false);
++  registry->RegisterIntegerPref(kWorkspaceTodayArchiveMinutes,
++                                kArchiveDefaultMinutes);
+ }
+ 
+ }  // namespace helium_workspace::prefs
+Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.h
++++ src/chrome/browser/ui/helium_workspace/workspace_prefs.h
+@@ -29,6 +29,24 @@ inline constexpr char kWorkspaceMigrated
+ inline constexpr char kWorkspaceSpaceCollapsed[] =
+     "helium.workspace.space_collapsed";
+ 
++// How long an unpinned sidebar tab may sit untouched before it is closed
++// (the way back is History or the reopen-closed-tab shortcut).
++//
++// ⚠ The key still says "today_archive" while the UI no longer says "Today"
++// anywhere (user 2026-08-26: with the tier set to Never the tabs are not
++// from today at all). Renaming a pref that is already on disk would
++// silently reset whatever tier the user had chosen, which is worse than an
++// inconsistent key nobody sees.
++//
++// Integer *minutes*; 0 means Never.
++//
++// The value is the tier: appearance_behavior_page.ts writes 720 / 1440 /
++// 4320 / 10080 / 43200 / 0 straight into its menu, so there is no C++ enum
++// to keep in sync and adding a tier later is a data change. The tiers and
++// the default live in workspace_archive_policy.h.
++inline constexpr char kWorkspaceTodayArchiveMinutes[] =
++    "helium.workspace.today_archive_minutes";
++
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+ 
+ }  // namespace helium_workspace::prefs

@@ -1,0 +1,694 @@
+Index: src/chrome/app/chrome_command_ids.h
+===================================================================
+--- src.orig/chrome/app/chrome_command_ids.h
++++ src/chrome/app/chrome_command_ids.h
+@@ -118,6 +118,7 @@
+ #define IDC_CTRL_S_SHORTCUT             34090
+ #define IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN 34091
+ #define IDC_HELIUM_WS_TOGGLE_PIN        34092
++#define IDC_HELIUM_WS_CLOSE_UNPINNED_TABS 34093
+ // helium-fork: the Arc shell's address bar modes, offered from the window
+ // context menu's layout submenu (the settings page writes the same pref).
+ #define IDC_HELIUM_ADDRESS_BAR_DOCKED   34094
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -1976,6 +1976,12 @@ are declared in tools/grit/grit_args.gni
+       <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_TOGGLE_PIN" desc="Command name shown on the Settings shortcuts page for pinning or unpinning the current tab in the workspace sidebar.">
+         Pin or unpin tab
+       </message>
++      <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_CLOSE_UNPINNED_TABS" desc="Command name shown on the Settings shortcuts page for closing every tab in the sidebar that is not a saved sidebar entry.">
++        Close Unpinned Tabs
++      </message>
++      <message name="IDS_HELIUM_CLOSE_UNPINNED_TABS" desc="Window menu item that closes every tab in the sidebar that is not a saved sidebar entry.">
++        Close Unpinned Tabs
++      </message>
+       <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
+         Toggle developer tools
+       </message>
+@@ -19407,6 +19413,12 @@ Please help our engineers fix this probl
+       <message name="IDS_READING_LIST_TOAST_BODY" desc="Text on a toast notification that is shown when one or more items are added to the reading list [ICU Syntax]">
+         {PAGES, plural, =1 {Page added to reading list} other {Pages added to reading list}}
+       </message>
++      <message name="IDS_HELIUM_UNPINNED_TABS_CLOSED_BODY" desc="Text shown after the user closes the sidebar's unpinned tabs [ICU Syntax]">
++        {TABS, plural, =1 {1 tab closed} other {# tabs closed}}
++      </message>
++      <message name="IDS_HELIUM_UNPINNED_TABS_CLOSED_UNDO" desc="Button that reopens the tabs the user just closed.">
++        Undo
++      </message>
+       <message name="IDS_READING_LIST_TOAST_BUTTON" desc="Button on a toast notification that allows a user to open a reading list entry.">
+         Open
+       </message>
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -4147,6 +4147,8 @@ static_library("ui") {
+       "views/tabs/vertical/helium_media_strip_controller.h",
+       "views/tabs/vertical/helium_media_strip_view.cc",
+       "views/tabs/vertical/helium_media_strip_view.h",
++      "views/tabs/vertical/helium_undo_bar_view.cc",
++      "views/tabs/vertical/helium_undo_bar_view.h",
+       "views/frame/web_contents_close_handler.cc",
+       "views/frame/web_contents_close_handler.h",
+       "views/frame/web_contents_close_handler_delegate.h",
+Index: src/chrome/browser/ui/browser_command_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_command_controller.cc
++++ src/chrome/browser/ui/browser_command_controller.cc
+@@ -1510,6 +1510,13 @@ void BrowserCommandController::HandleCom
+       }
+       break;
+     }
++    case IDC_HELIUM_WS_CLOSE_UNPINNED_TABS: {
++      if (auto* workspace_controller =
++              helium_workspace::WorkspaceTabController::From(browser_)) {
++        workspace_controller->CloseUnpinnedTabs();
++      }
++      break;
++    }
+     // Hosted App commands
+     case IDC_COPY_URL:
+       CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
+@@ -2065,6 +2072,8 @@ void BrowserCommandController::InitComma
+                                          false);
+   command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_TOGGLE_PIN,
+                                          normal_window);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS,
++                                         normal_window);
+   command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
+ 
+   // Safety Hub commands.
+Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
++++ src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+@@ -213,6 +213,8 @@ std::optional<BrowserShortcutCommandLabe
+       return Label(IDS_SHORTCUT_COMMAND_TOGGLE_ZEN_MODE_TOP_CHROME_PIN);
+     case IDC_HELIUM_WS_TOGGLE_PIN:
+       return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_TOGGLE_PIN);
++    case IDC_HELIUM_WS_CLOSE_UNPINNED_TABS:
++      return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_CLOSE_UNPINNED_TABS);
+     case IDC_CARET_BROWSING_TOGGLE:
+       return Label(IDS_SETTINGS_ENABLE_CARET_BROWSING_TITLE);
+     case IDC_CLEAR_BROWSING_DATA:
+@@ -258,6 +260,15 @@ std::vector<int> GetBrowserShortcutComma
+   commands.push_back(ShouldUseCopyPageUrlLabel(prefs) ? IDC_DEV_TOOLS_INSPECT
+                                                       : IDC_COPY_URL);
+   commands.push_back(IDC_FORCE_PASTE);
++  // helium-fork M4-r1: deliberately has no default key. Cmd+Shift+K, the
++  // first choice, collided with shortcuts some sites bind themselves
++  // (user 2026-08-26), and nothing in Chromium or Helium binds a K on mac
++  // to copy instead -- so the command ships unbound and the user assigns
++  // one here if they want it. Listing it here is what puts it on the page
++  // at all: with no entry in any accelerator table it would otherwise
++  // never reach defaults_, and AssignAcceleratorToCommand() would answer
++  // kUnknownCommand.
++  commands.push_back(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS);
+   return commands;
+ }
+ 
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -13,7 +13,14 @@
+ #include "base/strings/string_view_util.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "chrome/browser/tab_list/tab_removed_reason.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_tabstrip.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "components/sessions/core/tab_restore_service.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_favicon.h"
+@@ -243,6 +250,80 @@ void WorkspaceTabController::CloseEntryT
+                                        TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+ }
+ 
++namespace {
++
++// The id of TabRestoreService's most recent entry, or InvalidValue() when it
++// has none. Undo rewinds to whatever this was before the command ran.
++SessionID RestoreWatermark(sessions::TabRestoreService* service) {
++  if (!service || service->entries().empty()) {
++    return SessionID::InvalidValue();
++  }
++  return service->entries().front()->id;
++}
++
++}  // namespace
++
++void WorkspaceTabController::CloseUnpinnedTabs() {
++  WorkspaceService* const service = service_;
++  if (!service) {
++    return;
++  }
++  // SampleWindow() reads the whole strip, entry tabs included -- the plan
++  // functions need every tab to reason about emptying the window.
++  const ArchivePlan plan =
++      PlanCloseUnpinned(SampleWindow(browser_window_, *service));
++  if (plan.to_close.empty()) {
++    // A window holding nothing but sidebar entries. Do nothing at all: no
++    // toast, no stray new tab.
++    return;
++  }
++
++  // Taken before anything closes. Closing tabs one at a time files one
++  // TabRestoreService entry each, so the reopen-closed-tab accelerator would
++  // have to be pressed once per tab; this watermark is what lets one Undo
++  // put the whole gesture back.
++  undo_watermark_ = RestoreWatermark(
++      TabRestoreServiceFactory::GetForProfile(browser_window_->GetProfile()));
++
++  ExecuteArchivePlan(browser_window_, plan);
++
++  // The offer to put them back goes at the bottom of the sidebar, where the
++  // tabs were (user 2026-08-26). It reads its own count from
++  // TabRestoreService rather than being told one, so tabs that close
++  // asynchronously are included as they land.
++  if (BrowserView* const browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_window_)) {
++    if (VerticalTabStripRegionView* const region =
++            browser_view->vertical_tab_strip_region_view()) {
++      region->ShowUndoBarForWatermark(undo_watermark_);
++    }
++  }
++}
++
++void WorkspaceTabController::UndoLastCloseUnpinnedTabs() {
++  sessions::TabRestoreService* const service =
++      TabRestoreServiceFactory::GetForProfile(browser_window_->GetProfile());
++  if (!service) {
++    return;
++  }
++  const SessionID watermark = undo_watermark_;
++  undo_watermark_ = SessionID::InvalidValue();
++
++  // chrome::RestoreTab is what the reopen-closed-tab accelerator runs,
++  // including its handling of a service that has not finished loading.
++  // Rewind until the most recent entry is the one that was most recent
++  // before the command ran.
++  while (RestoreWatermark(service) != watermark) {
++    const size_t before = service->entries().size();
++    chrome::RestoreTab(browser_window_);
++    if (service->entries().size() >= before) {
++      // Nothing was consumed -- the service may still be loading, or the
++      // entry could not be restored. Stop rather than spin.
++      break;
++    }
++  }
++}
++
+ void WorkspaceTabController::ResetEntryTab(const std::string& entry_id) {
+   TabStripModel* model = browser_window_->GetTabStripModel();
+   const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -13,6 +13,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_collection_observer.h"
++#include "components/sessions/core/session_id.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "ui/base/models/image_model.h"
+ #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+@@ -77,6 +78,26 @@ class WorkspaceTabController : public Ta
+   // live tab -- that is the whole point.
+   void ResetEntryTab(const std::string& entry_id);
+ 
++  // helium-fork M4: IDC_HELIUM_WS_CLOSE_UNPINNED_TABS. Closes this window's
++  // unpinned tabs -- everything not bound to a sidebar entry -- sparing only
++  // what is playing sound, showing media, or is half of a split. Unlike the
++  // timer sweep it does close the active tab, and it does not spare a page
++  // that would ask "Leave site?" (that page still gets to object, through
++  // Chromium's own dialog on the way out).
++  //
++  // Other windows are untouched (user 2026-08-25).
++  void CloseUnpinnedTabs();
++
++  // Undo for the last CloseUnpinnedTabs() in this window. Reopens tabs until
++  // TabRestoreService is back to where it stood before that command ran.
++  //
++  // Deliberately not "reopen N tabs": N is not knowable at the time. A page
++  // with an unload/pagehide handler anywhere in its frame tree closes
++  // asynchronously, so CloseWebContentsAt() has returned long before the tab
++  // is really gone -- and counting the calls instead over-counted, which sent
++  // Undo one entry too far back and resurrected tabs from an earlier run.
++  void UndoLastCloseUnpinnedTabs();
++
+   // Puts the tab at |index| straight into Favorites: records (or adopts) the
+   // entry and binds the tab to it. Arc lets an ordinary tab become a favorite
+   // in one step; promoting an existing Pinned entry is
+@@ -88,6 +109,7 @@ class WorkspaceTabController : public Ta
+   // Binds tabs already open in this window to entries with the same URL, so
+   // a restored session does not show the same page twice.
+   void AdoptTabsInWindow();
++
+   // The single-tab half of that sweep: binds |tab| to an entry with the same
+   // URL that has no tab in this window yet, and says whether it did. Every
+   // arrival that is not OpenEntry()'s own runs through it (see the kInserted
+@@ -146,6 +168,11 @@ class WorkspaceTabController : public Ta
+   // Last favicon written back per bound tab, so navigation only pays for PNG
+   // encoding when the icon actually changed rather than on every title tick.
+   std::map<tabs::TabHandle, ui::ImageModel> last_favicon_;
++  // Where TabRestoreService stood just before the last CloseUnpinnedTabs()
++  // in this window: the id of what was then its most recent entry, or
++  // InvalidValue() if it had none. Undo rewinds to exactly this point, which
++  // is correct whether the tabs closed synchronously or not.
++  SessionID undo_watermark_ = SessionID::InvalidValue();
+ 
+   ui::ScopedUnownedUserData<WorkspaceTabController> scoped_unowned_user_data_;
+   base::WeakPtrFactory<WorkspaceTabController> weak_factory_{this};
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -302,6 +302,12 @@ class BrowserView : public BrowserWindow
+   // browsers even if it is not the active TabStrip. Prefer to use
+   // VerticalTabsBrowserTestMixin or VerticalTabsInteractiveTestMixin to be
+   // automatically placed into VerticalTabs mode.
++  // helium-fork M4-r1: the sidebar's undo bar lives in here, and the
++  // workspace controller needs to raise it.
++  VerticalTabStripRegionView* vertical_tab_strip_region_view() {
++    return vertical_tab_strip_region_view_.get();
++  }
++
+   VerticalTabStripRegionView* vertical_tab_strip_region_view_for_testing()
+       const {
+     return vertical_tab_strip_region_view_.get();
+Index: src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/system_menu_model_builder.cc
++++ src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+@@ -182,6 +182,15 @@ void SystemMenuModelBuilder::BuildSystem
+                                   IDS_BROWSER_LAYOUT_MENU,
+                                   browser_layout_menu_contents_.get());
+ 
++    // helium-fork M4: Cmd+Shift+K has no other home. The sidebar has no
++    // Today header row to hover a Clear button on the way Arc does -- there
++    // is no Today title anywhere in the tree, only the divider in
++    // tab_strip_view.cc -- and the tab context menu is the wrong scope
++    // (it means "this tab") as well as being a metrics-linted enum.
++    // The window menu is where a window-scoped command belongs.
++    model->AddItemWithStringId(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS,
++                               IDS_HELIUM_CLOSE_UNPINNED_TABS);
++
+     model->AddItemWithStringId(IDC_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL,
+                                IDS_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL);
+   }
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -63,6 +63,7 @@
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h"
+ #include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_view.h"
++#include "chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "components/tabs/public/tab_group.h"
+@@ -215,6 +216,20 @@ VerticalTabStripRegionView::VerticalTabS
+   media_strip_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+   media_strip_shadow_->SetShadowCornerRadius(helium::kMediaStripCornerRadius);
+   media_strip_shadow_->SetVisible(false);
++  // helium-fork M4-r1: "N tabs closed / Undo", where the tabs used to be
++  // (user 2026-08-26 -- the toast at the top-right of the window was easy
++  // to miss and a long way from the thing it was talking about).
++  //
++  // Ordinary flex child with the default preferred/preferred spec: it
++  // neither shrinks nor grows, so its height comes out of the bottom
++  // container's slack and nothing above it moves. It must not sit inside
++  // the reserved band below the media capsule -- that one is spoken for.
++  undo_bar_ = AddChildView(std::make_unique<HeliumUndoBarView>(browser_view->browser()));
++  undo_bar_->SetProperty(
++      views::kMarginsKey,
++      gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding, 0,
++                        region_horizontal_padding));
++
+   media_strip_ = AddChildView(std::make_unique<HeliumMediaStripView>(
+       media_strip_controller_.get(),
+       base::BindRepeating(
+@@ -789,6 +804,12 @@ void VerticalTabStripRegionView::OnBound
+   UpdateMediaStripVisibility();
+ }
+ 
++void VerticalTabStripRegionView::ShowUndoBarForWatermark(SessionID watermark) {
++  if (undo_bar_) {
++    undo_bar_->ShowForWatermark(watermark);
++  }
++}
++
+ void VerticalTabStripRegionView::OnMediaStripModelChanged() {
+   SyncMediaCapsules();
+   if (media_strip_) {
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -38,6 +38,7 @@ class HeliumMediaScrimView;
+ class HeliumMediaStripController;
+ class HeliumMediaStripExpandedView;
+ class HeliumMediaStripView;
++class HeliumUndoBarView;
+ class VerticalTabStripBottomContainer;
+ class HeliumCardShadowView;
+ class WorkspaceEntryDragOverlay;
+@@ -68,6 +69,11 @@ class VerticalTabStripRegionView final
+   METADATA_HEADER(VerticalTabStripRegionView, BaseTabStripRegionView)
+ 
+  public:
++  // helium-fork M4-r1: raises the sidebar-bottom "N tabs closed / Undo"
++  // bar for whatever has been closed since |watermark|. Called by
++  // WorkspaceTabController, which owns the command and the watermark.
++  void ShowUndoBarForWatermark(SessionID watermark);
++
+   DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kAnimationCompletedEvent);
+ 
+   // TODO(crbug.com/465833741): Replace constant with derived value based on
+@@ -303,6 +309,7 @@ class VerticalTabStripRegionView final
+   // child added last so it paints above the tab list and never reflows it.
+   // See chrome/browser/ui/helium/arc_media_strip.h for the whole spec.
+   std::unique_ptr<HeliumMediaStripController> media_strip_controller_;
++  raw_ptr<HeliumUndoBarView> undo_bar_ = nullptr;
+   raw_ptr<HeliumMediaStripView> media_strip_ = nullptr;
+   raw_ptr<HeliumMediaStripExpandedView> media_strip_panel_ = nullptr;
+   // The strip's and the panel's floating-card shadows: sibling
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
+@@ -0,0 +1,194 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h"
++
++#include <algorithm>
++#include <memory>
++
++#include "base/functional/bind.h"
++#include "base/strings/utf_string_conversions.h"
++#include "chrome/browser/sessions/tab_restore_service_factory.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_media_strip.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
++#include "chrome/browser/ui/layout_constants.h"
++#include "chrome/grit/generated_resources.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/canvas.h"
++#include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/label.h"
++
++namespace {
++
++// The toast this replaces stayed up for eight seconds when it carried an
++// action button; keeping that means the two never felt different.
++constexpr base::TimeDelta kDismissDelay = base::Seconds(8);
++
++constexpr int kFadeMs = 200;
++constexpr int kHorizontalInset = 10;
++
++}  // namespace
++
++HeliumUndoBarView::HeliumUndoBarView(BrowserWindowInterface* browser)
++    : views::AnimationDelegateViews(this), browser_(browser) {
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++  layer()->SetOpacity(0.0f);
++  SetVisible(false);
++
++  shown_animation_.SetSlideDuration(base::Milliseconds(kFadeMs));
++
++  label_ = AddChildView(std::make_unique<views::Label>());
++  label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  label_->SetAutoColorReadabilityEnabled(false);
++  // ⛔ Subpixel text may only be drawn onto an opaque surface, and Label
++  // DCHECKs it (label.cc, PaintText). This bar owns a layer that spends the
++  // fade at partial opacity, so it never qualifies -- leaving this on
++  // aborted the browser the first time the bar was shown. The media capsule
++  // beside it is in the same position for the same reason.
++  label_->SetSubpixelRenderingEnabled(false);
++
++  undo_button_ = AddChildView(std::make_unique<views::LabelButton>(
++      base::BindRepeating(&HeliumUndoBarView::OnUndoPressed,
++                          base::Unretained(this)),
++      l10n_util::GetStringUTF16(IDS_HELIUM_UNPINNED_TABS_CLOSED_UNDO)));
++  undo_button_->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
++  undo_button_->SetTextSubpixelRenderingEnabled(false);
++
++  if (sessions::TabRestoreService* const service =
++          TabRestoreServiceFactory::GetForProfile(browser_->GetProfile())) {
++    restore_observation_.Observe(service);
++  }
++}
++
++HeliumUndoBarView::~HeliumUndoBarView() = default;
++
++void HeliumUndoBarView::ShowForWatermark(SessionID watermark) {
++  watermark_ = watermark;
++  UpdateLabel();
++  SetShown(true);
++  dismiss_timer_.Start(FROM_HERE, kDismissDelay,
++                       base::BindOnce(&HeliumUndoBarView::Dismiss,
++                                      base::Unretained(this)));
++}
++
++void HeliumUndoBarView::Dismiss() {
++  dismiss_timer_.Stop();
++  SetShown(false);
++}
++
++void HeliumUndoBarView::SetShown(bool shown) {
++  if (shown_ == shown) {
++    return;
++  }
++  shown_ = shown;
++  if (shown) {
++    // Visible from the first frame; the fade is opacity only, so the one
++    // layout change happens exactly here.
++    SetVisible(true);
++    shown_animation_.Show();
++  } else {
++    shown_animation_.Hide();
++  }
++}
++
++int HeliumUndoBarView::ClosedSinceWatermark() const {
++  sessions::TabRestoreService* const service =
++      TabRestoreServiceFactory::GetForProfile(browser_->GetProfile());
++  if (!service) {
++    return 0;
++  }
++  int count = 0;
++  for (const auto& entry : service->entries()) {
++    if (entry->id == watermark_) {
++      break;
++    }
++    ++count;
++  }
++  return count;
++}
++
++void HeliumUndoBarView::UpdateLabel() {
++  label_->SetText(l10n_util::GetPluralStringFUTF16(
++      IDS_HELIUM_UNPINNED_TABS_CLOSED_BODY, ClosedSinceWatermark()));
++}
++
++void HeliumUndoBarView::OnUndoPressed() {
++  if (helium_workspace::WorkspaceTabController* const controller =
++          helium_workspace::WorkspaceTabController::From(browser_)) {
++    controller->UndoLastCloseUnpinnedTabs();
++  }
++  Dismiss();
++}
++
++gfx::Size HeliumUndoBarView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  // Same height as the media capsule below it, so the sidebar's bottom edge
++  // keeps one rhythm. Width comes from the sidebar; the flex spec is
++  // preferred/preferred, so this view neither shrinks nor grows and the
++  // space is taken from the bottom container's slack -- the new tab button
++  // above it does not move.
++  return gfx::Size(0, helium::kMediaStripRowHeight);
++}
++
++void HeliumUndoBarView::Layout(PassKey) {
++  const int undo_width =
++      undo_button_->GetPreferredSize(views::SizeBounds()).width();
++  const int available = std::max(0, width() - 2 * kHorizontalInset);
++  const int label_width = std::max(0, available - undo_width);
++  label_->SetBounds(kHorizontalInset, 0, label_width, height());
++  undo_button_->SetBounds(kHorizontalInset + label_width, 0,
++                          std::min(undo_width, available), height());
++}
++
++void HeliumUndoBarView::OnPaintBackground(gfx::Canvas* canvas) {
++  const ui::ColorProvider* const provider = GetColorProvider();
++  const SkColor sidebar =
++      provider ? provider->GetColor(kColorToolbar) : SK_ColorWHITE;
++  cc::PaintFlags flags;
++  flags.setAntiAlias(true);
++  flags.setColor(helium::GetSidebarFloatingCardColor(sidebar));
++  canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()),
++                        helium::kMediaStripCornerRadius, flags);
++}
++
++void HeliumUndoBarView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  if (const ui::ColorProvider* const provider = GetColorProvider()) {
++    label_->SetEnabledColor(provider->GetColor(kColorTabForegroundActiveFrameActive));
++  }
++}
++
++void HeliumUndoBarView::AnimationProgressed(const gfx::Animation* animation) {
++  layer()->SetOpacity(static_cast<float>(animation->GetCurrentValue()));
++}
++
++void HeliumUndoBarView::AnimationEnded(const gfx::Animation* animation) {
++  layer()->SetOpacity(static_cast<float>(animation->GetCurrentValue()));
++  if (animation->GetCurrentValue() == 0.0) {
++    SetVisible(false);
++  }
++}
++
++void HeliumUndoBarView::TabRestoreServiceChanged(
++    sessions::TabRestoreService* service) {
++  // Asynchronously-closed tabs land here, after the command returned. This
++  // is why the count is read from the service and never carried.
++  if (shown_) {
++    UpdateLabel();
++  }
++}
++
++void HeliumUndoBarView::TabRestoreServiceDestroyed(
++    sessions::TabRestoreService* service) {
++  restore_observation_.Reset();
++}
++
++BEGIN_METADATA(HeliumUndoBarView)
++END_METADATA
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
+@@ -0,0 +1,105 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_UNDO_BAR_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_UNDO_BAR_VIEW_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/timer/timer.h"
++#include "components/sessions/core/session_id.h"
++#include "components/sessions/core/tab_restore_service.h"
++#include "components/sessions/core/tab_restore_service_observer.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/animation/slide_animation.h"
++#include "ui/views/animation/animation_delegate_views.h"
++#include "ui/views/view.h"
++
++class BrowserWindowInterface;
++
++namespace views {
++class Label;
++class LabelButton;
++}  // namespace views
++
++// helium-fork M4-r1: "N tabs closed · Undo", at the bottom of the sidebar.
++//
++// This replaces the toast that used to appear at the top-right of the
++// window. The user asked for it here (2026-08-26): it is where the tabs
++// were, so it is where the offer to put them back belongs, and it is far
++// more noticeable than a corner toast.
++//
++// Two things it deliberately does not do:
++//
++//  - It never counts closes itself. Tabs whose pages have unload handlers
++//    close asynchronously, well after the command returns, so any number
++//    taken at that moment is wrong (and being wrong there is what made the
++//    old Undo reach back into an earlier run). Instead it watches
++//    TabRestoreService and reports how many entries have appeared since the
++//    watermark, which is right whenever it is asked.
++//
++//  - It never changes the layout while fading. Visibility flips once at
++//    each end of the fade and the animation drives layer opacity only --
++//    the same shape HeliumMediaStripView uses. Anything else would run
++//    InvalidateLayout() every frame, and that marks all the way up to the
++//    RootView.
++class HeliumUndoBarView : public views::View,
++                          public views::AnimationDelegateViews,
++                          public sessions::TabRestoreServiceObserver {
++  METADATA_HEADER(HeliumUndoBarView, views::View)
++
++ public:
++  explicit HeliumUndoBarView(BrowserWindowInterface* browser);
++  HeliumUndoBarView(const HeliumUndoBarView&) = delete;
++  HeliumUndoBarView& operator=(const HeliumUndoBarView&) = delete;
++  ~HeliumUndoBarView() override;
++
++  // Shows the bar for the tabs closed since |watermark| (the id of what was
++  // TabRestoreService's most recent entry before the command ran, or an
++  // invalid id if it had none).
++  void ShowForWatermark(SessionID watermark);
++
++  // Hides it early -- after Undo is pressed, or when the window changes out
++  // from under it.
++  void Dismiss();
++
++  bool IsShowing() const { return shown_; }
++
++ private:
++  void SetShown(bool shown);
++  int ClosedSinceWatermark() const;
++  void UpdateLabel();
++  void OnUndoPressed();
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  void Layout(PassKey) override;
++  void OnPaintBackground(gfx::Canvas* canvas) override;
++  void OnThemeChanged() override;
++
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
++  // sessions::TabRestoreServiceObserver:
++  void TabRestoreServiceChanged(sessions::TabRestoreService* service) override;
++  void TabRestoreServiceDestroyed(
++      sessions::TabRestoreService* service) override;
++
++  const raw_ptr<BrowserWindowInterface> browser_;
++  raw_ptr<views::Label> label_ = nullptr;
++  raw_ptr<views::LabelButton> undo_button_ = nullptr;
++
++  SessionID watermark_ = SessionID::InvalidValue();
++  bool shown_ = false;
++  base::OneShotTimer dismiss_timer_;
++  gfx::SlideAnimation shown_animation_{this};
++
++  base::ScopedObservation<sessions::TabRestoreService,
++                          sessions::TabRestoreServiceObserver>
++      restore_observation_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_UNDO_BAR_VIEW_H_
