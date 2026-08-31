@@ -1,0 +1,2506 @@
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -385,6 +385,7 @@ static_library("ui") {
+     "helium/arc_media_strip.h",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_omnibox_panel.h",
++    "helium/arc_sidebar_split.h",
+     "helium/arc_sidebar_surface.h",
+     "helium/arc_toolbar_host.h",
+     "helium/helium_layout_state_controller.cc",
+@@ -413,6 +414,7 @@ static_library("ui") {
+     "helium_workspace/workspace_service_factory.h",
+     "helium_workspace/workspace_tab_controller.cc",
+     "helium_workspace/workspace_tab_controller.h",
++    "helium_workspace/workspace_url_drop.h",
+     "idle_bubble.h",
+     "managed_ui.cc",
+     "managed_ui.h",
+@@ -6066,6 +6068,8 @@ test("helium_workspace_unittests") {
+     "helium/arc_media_strip_unittest.cc",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_minimal_field_state_unittest.cc",
++    "helium/arc_sidebar_split.h",
++    "helium/arc_sidebar_split_unittest.cc",
+     "helium/arc_sidebar_surface.h",
+     "helium/arc_sidebar_surface_unittest.cc",
+     "helium/arc_toolbar_host.h",
+@@ -6091,6 +6095,8 @@ test("helium_workspace_unittests") {
+     "helium_workspace/workspace_service.cc",
+     "helium_workspace/workspace_service.h",
+     "helium_workspace/workspace_service_unittest.cc",
++    "helium_workspace/workspace_url_drop.h",
++    "helium_workspace/workspace_url_drop_unittest.cc",
+   ]
+   deps = [
+     "//base",
+--- /dev/null
++++ b/chrome/browser/ui/helium/arc_sidebar_split.h
+@@ -0,0 +1,57 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SPLIT_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SPLIT_H_
++
++// helium-fork: how TabStripView divides its height between its two scroll
++// views -- the pinned surface (favorites grid + folder header + pinned rows)
++// and the Today list.
++//
++// User spec 2026-08-30 (M3.12-r1): the pinned surface is fixed -- fully
++// visible, never scrolling -- unless its own content is what overflows; Today
++// is the one flexible element, absorbing every change through its own
++// scrolling. This replaces upstream's half-split, which viewport-clamped the
++// pinned surface at half the strip whenever Today was tall and sent the
++// favorites grid scrolling off the top.
++//
++// Header-only and free of //ui/views so it pins in the lightweight test
++// target.
++namespace helium {
++
++// What Today keeps when the pinned surface could fill the strip. A target,
++// not a fit: the strip's actual row pitch adds inter-row padding, so the
++// third row shows partially cut -- which doubles as the scroll affordance.
++inline constexpr int kSidebarTodayReserveRows = 3;
++
++// Never more than Today actually wants: a one-tab Today reserves one row,
++// an empty Today reserves nothing (the pinned surface may take it all).
++inline constexpr int SidebarTodayReserve(int today_preferred_height,
++                                         int today_row_height) {
++  const int cap = kSidebarTodayReserveRows * today_row_height;
++  const int preferred = today_preferred_height > 0 ? today_preferred_height : 0;
++  return preferred < cap ? preferred : cap;
++}
++
++// The pinned scroll viewport: full content height when it fits above the
++// Today reserve; clamped to what the reserve leaves when it does not, which
++// makes the pinned surface internally scrollable -- favorites included, the
++// user's accepted exception ("除非 pinned 塞满"). Floored at
++// `pinned_minimum_height` like the rule it replaces.
++inline constexpr int SidebarPinnedViewportHeight(int pinned_preferred_height,
++                                                 int today_preferred_height,
++                                                 int available_height,
++                                                 int today_row_height,
++                                                 int pinned_minimum_height) {
++  const int reserve =
++      SidebarTodayReserve(today_preferred_height, today_row_height);
++  const int budget = available_height - reserve;
++  const int height =
++      pinned_preferred_height < budget ? pinned_preferred_height : budget;
++  return height > pinned_minimum_height ? height : pinned_minimum_height;
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SPLIT_H_
+--- /dev/null
++++ b/chrome/browser/ui/helium/arc_sidebar_split_unittest.cc
+@@ -0,0 +1,74 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_sidebar_split.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++constexpr int kRow = 34;  // LayoutConstant::kVerticalTabHeight.
++
++// The user's common case: pinned fits, so it is fixed at full content height
++// no matter how tall Today is -- upstream's half rule would have clamped
++// this to 300.
++TEST(ArcSidebarSplitTest, PinnedGetsFullHeightWhenItFits) {
++  EXPECT_EQ(200, SidebarPinnedViewportHeight(
++                     /*pinned_preferred_height=*/200,
++                     /*today_preferred_height=*/500,
++                     /*available_height=*/600, kRow,
++                     /*pinned_minimum_height=*/60));
++}
++
++// The exception clause: pinned itself overflows, so it clamps to what
++// Today's reserve leaves and scrolls internally.
++TEST(ArcSidebarSplitTest, OverfullPinnedClampsToAvailableMinusReserve) {
++  EXPECT_EQ(600 - 3 * kRow, SidebarPinnedViewportHeight(
++                                /*pinned_preferred_height=*/900,
++                                /*today_preferred_height=*/500,
++                                /*available_height=*/600, kRow,
++                                /*pinned_minimum_height=*/60));
++}
++
++// A one-row Today only reserves its own height -- no dead gap under the
++// pinned surface.
++TEST(ArcSidebarSplitTest, ShortTodayReservesOnlyItsOwnHeight) {
++  EXPECT_EQ(40, SidebarTodayReserve(/*today_preferred_height=*/40, kRow));
++  EXPECT_EQ(600 - 40, SidebarPinnedViewportHeight(
++                          /*pinned_preferred_height=*/900,
++                          /*today_preferred_height=*/40,
++                          /*available_height=*/600, kRow,
++                          /*pinned_minimum_height=*/60));
++}
++
++TEST(ArcSidebarSplitTest, EmptyTodayReservesNothing) {
++  EXPECT_EQ(0, SidebarTodayReserve(/*today_preferred_height=*/0, kRow));
++  EXPECT_EQ(600, SidebarPinnedViewportHeight(
++                     /*pinned_preferred_height=*/900,
++                     /*today_preferred_height=*/0,
++                     /*available_height=*/600, kRow,
++                     /*pinned_minimum_height=*/60));
++}
++
++// Tiny windows: the minimum wins even when the budget goes to zero or below.
++TEST(ArcSidebarSplitTest, FloorsAtPinnedMinimum) {
++  EXPECT_EQ(60, SidebarPinnedViewportHeight(
++                    /*pinned_preferred_height=*/900,
++                    /*today_preferred_height=*/500,
++                    /*available_height=*/80, kRow,
++                    /*pinned_minimum_height=*/60));
++  EXPECT_EQ(60, SidebarPinnedViewportHeight(
++                    /*pinned_preferred_height=*/900,
++                    /*today_preferred_height=*/500,
++                    /*available_height=*/0, kRow,
++                    /*pinned_minimum_height=*/60));
++}
++
++TEST(ArcSidebarSplitTest, NegativeTodayPreferredTreatedAsZero) {
++  EXPECT_EQ(0, SidebarTodayReserve(/*today_preferred_height=*/-10, kRow));
++}
++
++}  // namespace
++}  // namespace helium
+--- a/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ b/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+@@ -364,6 +364,73 @@ TEST_F(WorkspaceServiceTest, MoveEntryCl
+ 
+ // An id that resolves to nothing (a race with removal in another window)
+ // is a visible no-op, not a crash and not a phantom insert.
++// M3.12: what a dropped URL does to the model. There is no "add at index"
++// API and there does not need to be -- AddEntry appends and MoveEntry then
++// places it -- but the two only compose because MoveEntry counts the target
++// slot with the moved entry already removed, which is exactly the index the
++// sidebar's hit math produces over the list as it looked before the add.
++TEST_F(WorkspaceServiceTest, DroppedUrlLandsAtThePlannedRowSlot) {
++  for (const char* url : {"https://a.example/", "https://b.example/",
++                          "https://c.example/"}) {
++    ASSERT_FALSE(service_
++                     ->AddEntry(WorkspaceEntry::Section::kPinned, GURL(url), u"")
++                     .empty());
++  }
++
++  // Dropped between A and B: the hit math answers 1 over the three rows on
++  // screen, and slot 1 is where it has to end up.
++  const std::string dropped = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://new.example/"), u"New");
++  ASSERT_FALSE(dropped.empty());
++  ASSERT_TRUE(service_->MoveEntry(dropped, WorkspaceEntry::Section::kPinned, 1));
++  EXPECT_THAT(SectionUrls(*service_, WorkspaceEntry::Section::kPinned),
++              ElementsAre("https://a.example/", "https://new.example/",
++                          "https://b.example/", "https://c.example/"));
++
++  // Both ends of the range the hit math can produce: 0 and "after the last".
++  const std::string top = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://top.example/"), u"Top");
++  ASSERT_TRUE(service_->MoveEntry(top, WorkspaceEntry::Section::kPinned, 0));
++  const std::string end = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://end.example/"), u"End");
++  ASSERT_TRUE(service_->MoveEntry(end, WorkspaceEntry::Section::kPinned, 5));
++  EXPECT_THAT(SectionUrls(*service_, WorkspaceEntry::Section::kPinned),
++              ElementsAre("https://top.example/", "https://a.example/",
++                          "https://new.example/", "https://b.example/",
++                          "https://c.example/", "https://end.example/"));
++}
++
++// The same composition in the grid, plus the refusal the user chose to keep:
++// `Dia:` has no favorites cap (2026-08-26, ~20 and still adding) but ours
++// stays at 12, and a dropped URL has to hit it the same way a dragged row
++// does -- AddEntry returns an empty id and nothing else runs.
++TEST_F(WorkspaceServiceTest, DroppedUrlLandsInTheGridAndStopsAtTheCap) {
++  ASSERT_FALSE(service_
++                   ->AddEntry(WorkspaceEntry::Section::kFavorite,
++                              GURL("https://one.example/"), u"One")
++                   .empty());
++  const std::string dropped = service_->AddEntry(
++      WorkspaceEntry::Section::kFavorite, GURL("https://two.example/"), u"Two");
++  ASSERT_FALSE(dropped.empty());
++  // Slot 0: dropped on the left of the only capsule there.
++  ASSERT_TRUE(
++      service_->MoveEntry(dropped, WorkspaceEntry::Section::kFavorite, 0));
++  EXPECT_THAT(SectionUrls(*service_, WorkspaceEntry::Section::kFavorite),
++              ElementsAre("https://two.example/", "https://one.example/"));
++
++  while (service_->CountFavorites() < WorkspaceService::kMaxFavorites) {
++    ASSERT_FALSE(service_
++                     ->AddEntry(WorkspaceEntry::Section::kFavorite,
++                                GURL("https://filler.example/"), u"F")
++                     .empty());
++  }
++  EXPECT_TRUE(service_
++                  ->AddEntry(WorkspaceEntry::Section::kFavorite,
++                             GURL("https://thirteenth.example/"), u"No")
++                  .empty());
++  EXPECT_EQ(WorkspaceService::kMaxFavorites, service_->CountFavorites());
++}
++
+ TEST_F(WorkspaceServiceTest, MoveEntryRejectsUnknownIds) {
+   const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
+                                            GURL("https://a.example/"), u"A");
+--- /dev/null
++++ b/chrome/browser/ui/helium_workspace/workspace_url_drop.h
+@@ -0,0 +1,43 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_URL_DROP_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_URL_DROP_H_
++
++#include <optional>
++
++#include "url/gurl.h"
++#include "url/url_constants.h"
++
++namespace helium_workspace {
++
++// M3.12: what the sidebar is willing to turn into an entry when a URL is
++// dropped on it.
++//
++// `Dia:` (measured 2026-08-26) takes anything the pasteboard offers as a URL,
++// including plain files dragged out of Finder -- `plain-url.txt` and
++// `not-a-url.md` both became entries pointing at their `file://` URLs. So the
++// only filtering here is the one upstream applies at every other URL drop
++// target: a `javascript:` URL must never become a stored, clickable entry,
++// because that turns one drag into a self-XSS that survives a restart
++// (home_button.cc:203-207 refuses it for the same reason on the same kind of
++// drop, and it is the only scheme upstream singles out there).
++//
++// Returns the URL to store, or nullopt if the payload is not something an
++// entry may point at. Deliberately not a bare bool: the caller stores what
++// comes back, so anything this function decides to rewrite later travels with
++// the verdict instead of being reapplied at each call site.
++inline std::optional<GURL> NormalizeDroppedUrl(const GURL& url) {
++  if (!url.is_valid() || url.is_empty()) {
++    return std::nullopt;
++  }
++  if (url.SchemeIs(url::kJavaScriptScheme)) {
++    return std::nullopt;
++  }
++  return url;
++}
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_URL_DROP_H_
+--- /dev/null
++++ b/chrome/browser/ui/helium_workspace/workspace_url_drop_unittest.cc
+@@ -0,0 +1,50 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_url_drop.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium_workspace {
++namespace {
++
++TEST(WorkspaceUrlDropTest, OrdinaryPageUrlsAreAccepted) {
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("https://example.com/a?b=c#d")),
++            GURL("https://example.com/a?b=c#d"));
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("http://example.com/")),
++            GURL("http://example.com/"));
++}
++
++TEST(WorkspaceUrlDropTest, FileUrlsAreAccepted) {
++  // `Dia:` 2026-08-26: dragging plain-url.txt and not-a-url.md out of Finder
++  // both produced entries, so files are in scope rather than filtered out.
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("file:///tmp/not-a-url.md")),
++            GURL("file:///tmp/not-a-url.md"));
++}
++
++TEST(WorkspaceUrlDropTest, JavascriptUrlsAreRefused) {
++  // A stored entry is clickable forever; a javascript: URL in one would be a
++  // self-XSS that outlives the drag.
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("javascript:alert(1)")), std::nullopt);
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("JavaScript:alert(1)")), std::nullopt);
++}
++
++TEST(WorkspaceUrlDropTest, InvalidAndEmptyUrlsAreRefused) {
++  EXPECT_EQ(NormalizeDroppedUrl(GURL()), std::nullopt);
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("")), std::nullopt);
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("not a url at all")), std::nullopt);
++}
++
++TEST(WorkspaceUrlDropTest, OtherSchemesAreNotSecondGuessed) {
++  // Only javascript: is singled out. Anything else the platform managed to
++  // parse into a valid URL is the user's business -- refusing more would be
++  // us inventing policy `Dia:` does not have.
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("chrome://settings/")),
++            GURL("chrome://settings/"));
++  EXPECT_EQ(NormalizeDroppedUrl(GURL("mailto:someone@example.com")),
++            GURL("mailto:someone@example.com"));
++}
++
++}  // namespace
++}  // namespace helium_workspace
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -237,12 +237,7 @@ VerticalTabStripRegionView::VerticalTabS
+             region->OnMediaCapsuleHovered(region->media_strip_);
+           },
+           base::Unretained(this))));
+-  media_strip_->SetProperty(
+-      views::kMarginsKey,
+-      gfx::Insets::TLBR(
+-          kBottomContainerGap, region_horizontal_padding,
+-          8 + GetLayoutConstant(LayoutConstant::kVerticalTabHeight),
+-          region_horizontal_padding));
++  UpdateMediaStripReservedSpace(/*floating_capsules=*/0);
+ 
+   // r5: the floating half of the stack -- capsules for sessions beyond the
+   // first, over the tab rows. A plain positioning host: no layer of its own
+@@ -623,9 +618,11 @@ void VerticalTabStripRegionView::OnWidge
+ //
+ // ⚠ These all have a base implementation: BaseTabStripRegionView routes the
+ // *link* drop (drag a URL onto the strip to open it) through the very same
+-// five methods. Every one of them must fall through when the payload is not
+-// a workspace entry, or link drops onto the sidebar quietly stop working --
+-// there is nothing in the entry drag that would ever tell you.
++// five methods. Every one of them must fall through when neither of our
++// sessions is live (M3.12-r2: URL sessions are ours too, via the parallel
++// HasWorkspaceUrlDragSession), or the remaining BrowserRootView drops --
++// text/paste-and-go drags, a link whose first touch is a gap -- quietly
++// stop working; there is nothing in the entry drag that would ever tell you.
+ 
+ UnpinnedTabContainerView* VerticalTabStripRegionView::TodayDropContainer()
+     const {
+@@ -645,6 +642,11 @@ bool VerticalTabStripRegionView::HasWork
+   return sidebar && sidebar->HasEntryDragSession();
+ }
+ 
++bool VerticalTabStripRegionView::HasWorkspaceUrlDragSession() const {
++  WorkspaceSidebarView* const sidebar = WorkspaceDragSidebar();
++  return sidebar && sidebar->HasUrlDragSession();
++}
++
+ bool VerticalTabStripRegionView::IsWorkspaceEntryDrag(
+     const ui::OSExchangeData& data) const {
+   // Session first: reading the payload means unpickling the OSExchangeData,
+@@ -662,6 +664,14 @@ bool VerticalTabStripRegionView::GetDrop
+   const bool base_wants =
+       BaseTabStripRegionView::GetDropFormats(formats, format_types);
+   format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
++  // M3.12-r2: a URL session may wander into the gaps this view owns (the
++  // separator band, the padding beside the scrollers, the tail below Today);
++  // without the URL bit the walk would skip us there and the session would
++  // read as a true exit. |= because the base call above ran first. CanDrop
++  // still gates the claim to live sessions only -- a fresh link entering
++  // through a gap keeps going to BrowserRootView.
++  *formats |= ui::OSExchangeData::URL;
++  format_types->insert(ui::ClipboardFormatType::UrlType());
+   return base_wants || true;
+ }
+ 
+@@ -670,12 +680,13 @@ bool VerticalTabStripRegionView::AreDrop
+ }
+ 
+ bool VerticalTabStripRegionView::CanDrop(const ui::OSExchangeData& data) {
+-  return IsWorkspaceEntryDrag(data) || BaseTabStripRegionView::CanDrop(data);
++  return IsWorkspaceEntryDrag(data) || HasWorkspaceUrlDragSession() ||
++         BaseTabStripRegionView::CanDrop(data);
+ }
+ 
+ void VerticalTabStripRegionView::OnDragEntered(
+     const ui::DropTargetEvent& event) {
+-  if (!HasWorkspaceEntryDragSession()) {
++  if (!HasWorkspaceEntryDragSession() && !HasWorkspaceUrlDragSession()) {
+     BaseTabStripRegionView::OnDragEntered(event);
+     return;
+   }
+@@ -688,7 +699,8 @@ int VerticalTabStripRegionView::OnDragUp
+   // Only the session is consulted here, never the payload: a live entry
+   // session and a link drag cannot both be in flight, so this tells the two
+   // apart without touching the pasteboard once per frame.
+-  if (!HasWorkspaceEntryDragSession()) {
++  const bool url_session = HasWorkspaceUrlDragSession();
++  if (!HasWorkspaceEntryDragSession() && !url_session) {
+     return BaseTabStripRegionView::OnDragUpdated(event);
+   }
+   UnpinnedTabContainerView* const today = TodayDropContainer();
+@@ -696,25 +708,39 @@ int VerticalTabStripRegionView::OnDragUp
+       tab_strip_view_ ? tab_strip_view_->GetPinnedTabsContainer() : nullptr;
+   WorkspaceSidebarView* const sidebar =
+       pinned ? pinned->workspace_view() : nullptr;
+-  if (!today || !sidebar) {
++  if (!today || !sidebar || !tab_strip_view_) {
+     return ui::DragDropTypes::DRAG_NONE;
+   }
+-  // Everything below the sidebar belongs to Today -- including the band the
+-  // separator sits in, which is inside neither container. The handover is
+-  // pinned to the sidebar's *own* bottom edge so the two sides share one
+-  // boundary with no gap: measured against the pinned container's bottom
+-  // instead, the pointer spent ~90ms in between where nobody held a slot and
+-  // nobody moved the card, which is exactly the snag the crossing had
+-  // (user 2026-08-25).
+-  gfx::Point sidebar_bottom(0, sidebar->GetLocalBounds().bottom());
+-  views::View::ConvertPointToTarget(sidebar, this, &sidebar_bottom);
+-  if (event.location().y() < sidebar_bottom.y()) {
++  // Everything below the pinned scroller belongs to Today -- including the
++  // band the separator sits in, which is inside neither container -- so the
++  // two sides share one boundary with no gap (measured against the pinned
++  // container's bottom instead, the pointer spent ~90ms in between where
++  // nobody held a slot and nobody moved the card, user 2026-08-25).
++  // M3.12-r2: the boundary is the *scroller's* bottom, not the sidebar
++  // contents' -- once the pinned surface can genuinely scroll, the contents
++  // bottom converts to a line below the visible scroller and left a dead
++  // band over the separator.
++  views::ScrollView* const scroller = tab_strip_view_->pinned_tabs_scroll_view();
++  gfx::Point scroller_top(0, scroller->bounds().y());
++  gfx::Point scroller_bottom(0, scroller->bounds().bottom());
++  views::View::ConvertPointToTarget(tab_strip_view_, this, &scroller_top);
++  views::View::ConvertPointToTarget(tab_strip_view_, this, &scroller_bottom);
++  if (event.location().y() < scroller_bottom.y()) {
+     today->OnDragExited();
++    if (url_session && event.location().y() >= scroller_top.y()) {
++      // Beside the pinned scroller (padding / scrollbar strip): still the
++      // gesture's home ground, so a teardown the sidebar's own exit just
++      // scheduled must not fire. Above the scroller top (address row, top
++      // container) nothing bumps -- that is a true exit and the deferred
++      // teardown is welcome to end the session there.
++      sidebar->KeepUrlDragSessionAlive();
++    }
+     return ui::DragDropTypes::DRAG_NONE;
+   }
+   gfx::Point point = event.location();
+   views::View::ConvertPointToTarget(this, today, &point);
+   // Handed over unclamped -- Today clamps only what the row lookup needs.
++  // (For a URL session the keep-alive rides OnTodayDragUpdate.)
+   return today->HandleWorkspaceEntryDragAt(point);
+ }
+ 
+@@ -729,8 +755,9 @@ void VerticalTabStripRegionView::OnDragE
+ 
+ views::View::DropCallback VerticalTabStripRegionView::GetDropCallback(
+     const ui::DropTargetEvent& event) {
+-  // Once per gesture -- the full check is fine here.
+-  if (!IsWorkspaceEntryDrag(event.data())) {
++  // Once per gesture -- the full check is fine here. (IsWorkspaceEntryDrag
++  // short-circuits on the session, so a URL session never reads the payload.)
++  if (!IsWorkspaceEntryDrag(event.data()) && !HasWorkspaceUrlDragSession()) {
+     return BaseTabStripRegionView::GetDropCallback(event);
+   }
+   UnpinnedTabContainerView* const today = TodayDropContainer();
+@@ -788,12 +815,6 @@ void VerticalTabStripRegionView::Layout(
+     media_strip_panel_->SetAnchor(anchor,
+                                   MaxMediaPanelHeightFor(anchor, hovered));
+   }
+-
+-  // Ensure that we update the drop arrow position so that it does not render in
+-  // the collapsed state when expand on hover is active.
+-  if (drop_arrow_) {
+-    drop_arrow_->SetIndex(drop_arrow_->index());
+-  }
+ }
+ 
+ void VerticalTabStripRegionView::OnBoundsChanged(
+@@ -1015,11 +1036,41 @@ void VerticalTabStripRegionView::UpdateM
+   if (media_scrim_) {
+     media_scrim_->SetShown(stack_shown);
+   }
++  UpdateMediaStripReservedSpace(stack_shown ? overlay_capsules_.size() : 0);
+   if (!shown) {
+     SetMediaStripExpanded(false);
+   }
+ }
+ 
++void VerticalTabStripRegionView::UpdateMediaStripReservedSpace(
++    size_t floating_capsules) {
++  if (!media_strip_) {
++    return;
++  }
++  // M3.12-r1: the floating capsules take their space from the flow instead
++  // of covering the Today rows -- the sidebar's "banners take space from the
++  // flexible element" rule (user 2026-08-30). Resting stack height only: a
++  // hover panel's expansion is a transient popup and stays an overlay, or
++  // every tween frame would relayout the strip.
++  const int stack_height = helium::MediaStripOverlayStackHeight(
++      static_cast<int>(floating_capsules), helium::kMediaStripNoHover,
++      helium::kMediaStripRowHeight);
++  const int region_horizontal_padding =
++      GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
++  const gfx::Insets margins = gfx::Insets::TLBR(
++      kBottomContainerGap + stack_height, region_horizontal_padding,
++      8 + GetLayoutConstant(LayoutConstant::kVerticalTabHeight),
++      region_horizontal_padding);
++  const gfx::Insets* current = media_strip_->GetProperty(views::kMarginsKey);
++  if (current && *current == margins) {
++    return;
++  }
++  media_strip_->SetProperty(views::kMarginsKey, margins);
++  // LayoutManagerBase only watches kViewIgnoredByLayoutKey; a margin change
++  // must invalidate by hand.
++  InvalidateLayout();
++}
++
+ void VerticalTabStripRegionView::SetMediaStripExpanded(bool expanded) {
+   if (!media_strip_panel_) {
+     return;
+@@ -1182,7 +1233,11 @@ VerticalTabStripRegionView::GetExpandOnH
+ 
+ void VerticalTabStripRegionView::HandleDragUpdate(
+     const std::optional<BrowserRootView::DropIndex>& index) {
+-  SetLinkDropArrow(index);
++  // helium-fork M3.12-r1: no drop arrow in the sidebar. A link lands at the
++  // end of Today wherever it is released, so an arrow tracking the pointer
++  // would point at the wrong spot; the pinned area's slots are
++  // indicator-free by the same convention. (`Dia:`'s Today-area indicator
++  // was not measured -- this is our own call.)
+   UpdateExpandOnHoverState(true);
+   if (is_expanded_on_hover_ && !link_drag_lock_) {
+     link_drag_lock_ =
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -149,6 +149,10 @@ class VerticalTabStripRegionView final
+   // Cheap per-frame discriminator; IsWorkspaceEntryDrag() additionally reads
+   // the payload and is only for the once-per-gesture calls.
+   bool HasWorkspaceEntryDragSession() const;
++  // M3.12-r2: the same question for a URL session -- Today and the dead
++  // space under it host those too now. Parallel predicate on purpose
++  // (pitfalls M3.12 #0: readers must stay kind-aware).
++  bool HasWorkspaceUrlDragSession() const;
+   bool IsWorkspaceEntryDrag(const ui::OSExchangeData& data) const;
+ 
+  public:
+@@ -345,6 +349,11 @@ class VerticalTabStripRegionView final
+ 
+   void OnMediaStripModelChanged();
+   void UpdateMediaStripVisibility();
++  // M3.12-r1: keeps the base capsule's top margin equal to the resting
++  // height of the floating stack, so the capsules occupy flow space instead
++  // of covering the Today rows. `floating_capsules` is the number of *shown*
++  // overlay capsules (0 when the width gate hides the stack).
++  void UpdateMediaStripReservedSpace(size_t floating_capsules);
+   void SetMediaStripExpanded(bool expanded);
+   void OnMediaStripPointerLeft();
+   void SyncMediaCapsules();
+--- a/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ b/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -72,6 +72,8 @@ source_set("impl") {
+     "workspace_entry_drag_data.h",
+     "workspace_entry_drag_overlay.cc",
+     "workspace_entry_drag_overlay.h",
++    "workspace_favorites_band_view.cc",
++    "workspace_favorites_band_view.h",
+     "workspace_sidebar_view.cc",
+     "workspace_sidebar_view.h",
+   ]
+--- a/chrome/browser/ui/views/tabs/common/tab_group_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_group_view.cc
+@@ -381,60 +381,6 @@ const TabCollectionNode* TabGroupView::G
+   return nullptr;
+ }
+ 
+-std::optional<BrowserRootView::DropIndex> TabGroupView::GetLinkDropIndex(
+-    const gfx::Point& loc_in_group) {
+-  if (!collection_node_) {
+-    return std::nullopt;
+-  }
+-  // Use the vertical position to find the child view being dragged over.
+-  if (loc_in_group.y() < group_header_->bounds().bottom()) {
+-    // Determine whether the drop is on the leading (top) or trailing
+-    // (bottom) half of the header. If in the top half, then we the drag
+-    // is considered to be above the group.
+-    const bool is_leading =
+-        loc_in_group.y() < group_header_->bounds().CenterPoint().y();
+-    return GetDragHandler().GetLinkDropIndexForNode(
+-        *collection_node_, is_leading
+-                               ? std::make_optional(DragPositionHint::kBefore)
+-                               : std::nullopt);
+-  }
+-
+-  for (const auto& child_node : collection_node_->children()) {
+-    auto* view = child_node->view();
+-    CHECK(view);
+-    if (loc_in_group.y() > view->bounds().bottom()) {
+-      continue;
+-    }
+-
+-    gfx::Point loc_in_child =
+-        views::View::ConvertPointToTarget(this, view, loc_in_group);
+-
+-    // If the drag is over the margins from the edges of the tab, then
+-    // consider this drag as a before/after rather than over.
+-    constexpr double kDragOverMargins = 0.2;
+-    std::optional<DragPositionHint> hint;
+-    if (loc_in_child.y() < view->height() * kDragOverMargins) {
+-      hint = DragPositionHint::kBefore;
+-    } else if (loc_in_child.y() > view->height() * (1 - kDragOverMargins)) {
+-      hint = DragPositionHint::kAfter;
+-    } else if (child_node->type() == TabCollectionNode::Type::SPLIT) {
+-      // If landing in the middle of the split, let the split view decide which
+-      // tab to replace.
+-      auto* split_view = views::AsViewClass<SplitTabView>(view);
+-      gfx::Point loc_in_split =
+-          views::View::ConvertPointToTarget(this, split_view, loc_in_group);
+-      return split_view->GetLinkDropIndex(loc_in_split);
+-    } else {
+-      hint = std::nullopt;
+-    }
+-    return GetDragHandler().GetLinkDropIndexForNode(*child_node, hint);
+-  }
+-
+-  // Fallback to the end of the group.
+-  return GetDragHandler().GetLinkDropIndexForNode(*collection_node_,
+-                                                  DragPositionHint::kAfter);
+-}
+-
+ void TabGroupView::InitHeaderDrag(const ui::LocatedEvent& event) {
+   CHECK(collection_node_);
+   const ui::ListSelectionModel original_selection_model =
+--- a/chrome/browser/ui/views/tabs/common/tab_group_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_group_view.h
+@@ -7,7 +7,6 @@
+ 
+ #include "base/callback_list.h"
+ #include "base/memory/raw_ptr.h"
+-#include "chrome/browser/ui/views/frame/browser_root_view.h"
+ #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_group_header_view.h"
+@@ -77,9 +76,6 @@ class TabGroupView : public views::View,
+ 
+   bool IsCollapsed() const;
+ 
+-  std::optional<BrowserRootView::DropIndex> GetLinkDropIndex(
+-      const gfx::Point& point_in_local_coords);
+-
+   const TabCollectionNode* collection_node() const { return collection_node_; }
+ 
+   TabGroupHeaderView* group_header() { return group_header_; }
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
+@@ -71,6 +71,22 @@ class VerticalTabStripLinkDragTest
+     return region_view()->GetDropIndex(event);
+   }
+ 
++  // helium-fork M3.12-r1/r2: this pins the BrowserRootView FALLBACK path
++  // (GetDropIndex), which never replaces a tab and always appends at the
++  // end. Since r2 a real URL drag over Today is claimed by the workspace
++  // session (slot + positional drop, user ruling 2026-08-30) and never gets
++  // here; what still does: text/paste-and-go drags, and a link whose first
++  // touch is the dead tail before any session exists.
++  void ExpectAppendAtEnd(views::View* view, const gfx::Point& loc_in_view) {
++    auto drop_index = GetDropIndexAt(view, loc_in_view);
++    ASSERT_TRUE(drop_index.has_value());
++    EXPECT_EQ(drop_index->index, tab_strip_model()->count());
++    EXPECT_EQ(drop_index->relative_to_index,
++              BrowserRootView::DropIndex::RelativeToIndex::kInsertBeforeIndex);
++    EXPECT_EQ(drop_index->group_inclusion,
++              BrowserRootView::DropIndex::GroupInclusion::kDontIncludeInGroup);
++  }
++
+   std::vector<TabView*> WaitForTabs(size_t count) {
+     std::vector<TabView*> tab_views;
+     EXPECT_TRUE(base::test::RunUntil([&]() {
+@@ -138,58 +154,39 @@ class VerticalTabStripLinkDragTest
+           gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED);
+ };
+ 
+-IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropBeforeAndAfterTabs) {
++IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, AnyBandAppendsAtEnd) {
+   EnsureTabCount(3);
+   auto tab_views = WaitForTabs(3);
+ 
+-  // Drop at the top of the first tab.
+-  {
+-    gfx::Point location(tab_views[0]->width() / 2, 2);
+-    auto drop_index = GetDropIndexAt(tab_views[0], location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 0);
+-  }
+-
+-  // Drop at the bottom of the first tab.
+-  {
+-    gfx::Point location(tab_views[0]->width() / 2, tab_views[0]->height() - 2);
+-    auto drop_index = GetDropIndexAt(tab_views[0], location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 1);
+-  }
++  // Top band of the first tab.
++  ExpectAppendAtEnd(tab_views[0], gfx::Point(tab_views[0]->width() / 2, 2));
+ 
+-  // Drop at the bottom of the last tab.
+-  {
+-    gfx::Point location(tab_views[2]->width() / 2, tab_views[2]->height() - 2);
+-    auto drop_index = GetDropIndexAt(tab_views[2], location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 3);
+-  }
++  // Bottom band of the first tab.
++  ExpectAppendAtEnd(
++      tab_views[0],
++      gfx::Point(tab_views[0]->width() / 2, tab_views[0]->height() - 2));
++
++  // Bottom band of the last tab.
++  ExpectAppendAtEnd(
++      tab_views[2],
++      gfx::Point(tab_views[2]->width() / 2, tab_views[2]->height() - 2));
+ }
+ 
+-IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInMiddleToReplace) {
++IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest,
++                       MiddleOfRowAppendsNotReplaces) {
+   EnsureTabCount(3);
+   auto tab_views = WaitForTabs(3);
+ 
+-  // Drop in the middle of the first tab.
+-  {
+-    gfx::Point location(tab_views[0]->width() / 2, tab_views[0]->height() / 2);
+-    auto drop_index = GetDropIndexAt(tab_views[0], location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 0);
+-    EXPECT_EQ(drop_index->relative_to_index,
+-              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
+-  }
+-
+-  // Drop in the middle of the second tab.
+-  {
+-    gfx::Point location(tab_views[1]->width() / 2, tab_views[1]->height() / 2);
+-    auto drop_index = GetDropIndexAt(tab_views[1], location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 1);
+-    EXPECT_EQ(drop_index->relative_to_index,
+-              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
+-  }
++  // Middle of the first tab -- upstream answered kReplaceIndex here, which
++  // navigated the hovered tab away.
++  ExpectAppendAtEnd(
++      tab_views[0],
++      gfx::Point(tab_views[0]->width() / 2, tab_views[0]->height() / 2));
++
++  // Middle of the second tab.
++  ExpectAppendAtEnd(
++      tab_views[1],
++      gfx::Point(tab_views[1]->width() / 2, tab_views[1]->height() / 2));
+ }
+ 
+ IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInSplitTabs) {
+@@ -202,64 +199,21 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripL
+ 
+   auto* split_view = WaitForSplitView();
+ 
+-  // Drop at the top of the split tab -> before split.
+-  {
+-    gfx::Point location(split_view->width() / 2, 2);
+-    auto drop_index = GetDropIndexAt(split_view, location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 0);
+-    EXPECT_EQ(drop_index->relative_to_index,
+-              BrowserRootView::DropIndex::RelativeToIndex::kInsertBeforeIndex);
+-  }
+-
+-  // Drop at the bottom of the split tab -> after split.
+-  {
+-    gfx::Point location(split_view->width() / 2, split_view->height() - 2);
+-    auto drop_index = GetDropIndexAt(split_view, location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 2);
+-    EXPECT_EQ(drop_index->relative_to_index,
+-              BrowserRootView::DropIndex::RelativeToIndex::kInsertBeforeIndex);
+-  }
+-
+-  // Drop in the middle of the first tab in the split -> replace tab 0.
+-  {
+-    gfx::Point location(split_view->width() / 4, split_view->height() / 2);
+-    auto drop_index = GetDropIndexAt(split_view, location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 0);
+-    EXPECT_EQ(drop_index->relative_to_index,
+-              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
+-  }
+-
+-  // Drop in the middle of the second tab in the split -> replace tab 1.
+-  {
+-    gfx::Point location(3 * split_view->width() / 4, split_view->height() / 2);
+-    auto drop_index = GetDropIndexAt(split_view, location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 1);
+-    EXPECT_EQ(drop_index->relative_to_index,
+-              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
+-  }
+-
+-  // Drop in the middle of the split view horizontally and vertically.
+-  {
+-    // Just to the left of the center point -> replace tab 0.
+-    gfx::Point location(split_view->width() / 2 - 1, split_view->height() / 2);
+-    auto drop_index = GetDropIndexAt(split_view, location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 0);
+-    EXPECT_EQ(drop_index->relative_to_index,
+-              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
+-
+-    // Just to the right of the center point -> replace tab 1.
+-    location.set_x(split_view->width() / 2 + 1);
+-    drop_index = GetDropIndexAt(split_view, location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 1);
+-    EXPECT_EQ(drop_index->relative_to_index,
+-              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
+-  }
++  // A split gets no special treatment: every band and both halves append.
++  ExpectAppendAtEnd(split_view, gfx::Point(split_view->width() / 2, 2));
++  ExpectAppendAtEnd(
++      split_view, gfx::Point(split_view->width() / 2, split_view->height() - 2));
++  ExpectAppendAtEnd(
++      split_view, gfx::Point(split_view->width() / 4, split_view->height() / 2));
++  ExpectAppendAtEnd(
++      split_view,
++      gfx::Point(3 * split_view->width() / 4, split_view->height() / 2));
++  ExpectAppendAtEnd(
++      split_view,
++      gfx::Point(split_view->width() / 2 - 1, split_view->height() / 2));
++  ExpectAppendAtEnd(
++      split_view,
++      gfx::Point(split_view->width() / 2 + 1, split_view->height() / 2));
+ }
+ 
+ IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInGroups) {
+@@ -270,36 +224,16 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripL
+ 
+   auto* group_view = WaitForGroupView();
+ 
+-  // Drop at the top of the group header -> before group.
+-  {
+-    gfx::Point location(group_view->group_header()->width() / 2, 2);
+-    auto drop_index = GetDropIndexAt(group_view->group_header(), location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 0);
+-    EXPECT_EQ(drop_index->group_inclusion,
+-              BrowserRootView::DropIndex::GroupInclusion::kDontIncludeInGroup);
+-  }
+-
+-  // Drop at the bottom of the group header -> inside group at start.
+-  {
+-    gfx::Point location(group_view->group_header()->width() / 2,
+-                        group_view->group_header()->height() - 2);
+-    auto drop_index = GetDropIndexAt(group_view->group_header(), location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 0);
+-    EXPECT_EQ(drop_index->group_inclusion,
+-              BrowserRootView::DropIndex::GroupInclusion::kIncludeInGroup);
+-  }
+-
+-  // Drop at the bottom of the last tab in the group -> ungrouped.
+-  {
+-    gfx::Point location(tab_views[1]->width() / 2, tab_views[1]->height() - 2);
+-    auto drop_index = GetDropIndexAt(tab_views[1], location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 2);
+-    EXPECT_EQ(drop_index->group_inclusion,
+-              BrowserRootView::DropIndex::GroupInclusion::kDontIncludeInGroup);
+-  }
++  // Groups get no special treatment: header bands and grouped tabs all
++  // append at the end, outside the group.
++  ExpectAppendAtEnd(group_view->group_header(),
++                    gfx::Point(group_view->group_header()->width() / 2, 2));
++  ExpectAppendAtEnd(group_view->group_header(),
++                    gfx::Point(group_view->group_header()->width() / 2,
++                               group_view->group_header()->height() - 2));
++  ExpectAppendAtEnd(
++      tab_views[1],
++      gfx::Point(tab_views[1]->width() / 2, tab_views[1]->height() - 2));
+ }
+ 
+ IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInCollapsedGroups) {
+@@ -316,22 +250,12 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripL
+ 
+   auto* group_view = WaitForGroupView(/*collapsed=*/true);
+ 
+-  // Drop at the top of the collapsed group header -> before group.
+-  {
+-    gfx::Point location(group_view->group_header()->width() / 2, 2);
+-    auto drop_index = GetDropIndexAt(group_view->group_header(), location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 0);
+-  }
+-
+-  // Drop at the bottom of the collapsed group header -> after group.
+-  {
+-    gfx::Point location(group_view->group_header()->width() / 2,
+-                        group_view->group_header()->height() - 2);
+-    auto drop_index = GetDropIndexAt(group_view->group_header(), location);
+-    ASSERT_TRUE(drop_index.has_value());
+-    EXPECT_EQ(drop_index->index, 2);
+-  }
++  // Both halves of a collapsed group header append at the end.
++  ExpectAppendAtEnd(group_view->group_header(),
++                    gfx::Point(group_view->group_header()->width() / 2, 2));
++  ExpectAppendAtEnd(group_view->group_header(),
++                    gfx::Point(group_view->group_header()->width() / 2,
++                               group_view->group_header()->height() - 2));
+ }
+ 
+ IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInPinnedTabs) {
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -10,6 +10,7 @@
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_sidebar_split.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -22,6 +23,8 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_utils.h"
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_scroll_bar.h"
+ #include "components/tabs/public/tab_group.h"
+@@ -112,6 +115,13 @@ TabStripView::TabStripView(TabCollection
+   SetLayoutManager(std::make_unique<views::DelegatingLayoutManager>(this));
+   SetProperty(views::kElementIdentifierKey, kTabStripElementId);
+ 
++  // helium-fork M3.12-r2: the favorites grid lives above the pinned
++  // scroller, fixed -- it never scrolls (user ruling 2026-08-30). The
++  // sidebar inside the scroller keeps all the logic and lays this band's
++  // children itself; wiring happens in AddScrollViewContents.
++  favorites_band_ =
++      AddChildView(std::make_unique<WorkspaceFavoritesBandView>());
++
+   pinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
+       views::ScrollView::ScrollWithLayers::kEnabled));
+   SetScrollViewProperties(pinned_tabs_scroll_view_);
+@@ -169,6 +179,16 @@ views::ProposedLayout TabStripView::Calc
+   const int unpinned_preferred_height =
+       unpinned_tabs_scroll_view_->GetPreferredSize(size_bounds).height();
+ 
++  // helium-fork M3.12-r2: the fixed favorites band comes off the top before
++  // anything else -- it never scrolls (user 2026-08-30). Its trailing gap is
++  // inside it, so the pinned scroller starts flush below.
++  int band_height = 0;
++  if (favorites_band_) {
++    band_height =
++        favorites_band_->GetPreferredSize(pinned_tab_container_size_bounds)
++            .height();
++  }
++
+   // If the height is bounded, calculate the available space for laying out the
+   // pinned and unpinned containers.
+   int remaining_height = 0;
+@@ -178,25 +198,47 @@ views::ProposedLayout TabStripView::Calc
+     // whenever the pinned section is present -- matching where it is placed
+     // below. Keying this off Today's contents as well would under-reserve the
+     // moment Today emptied.
+-    if (pinned_preferred_height != 0) {
++    if (pinned_preferred_height != 0 || band_height != 0) {
+       remaining_height -= kTabsSeparatorVerticalPadding;
+       remaining_height -= tabs_separator_->GetPreferredSize().height() +
+                           kTabsSeparatorVerticalPadding;
+     }
+     // Clamp the remaining height to 0 if we have less space.
+     remaining_height = std::max(remaining_height, 0);
++    // The band is capped so a degenerate rail width (one tile per row)
++    // cannot squeeze the pinned floor and Today's reserve out of the strip;
++    // past the cap it clips its tiles rather than scroll -- the never-
++    // scrolls ruling holds, the strip just cannot honor it losslessly there.
++    const int band_cap =
++        std::max(0, remaining_height -
++                        helium::SidebarTodayReserve(
++                            unpinned_preferred_height,
++                            GetLayoutConstant(LayoutConstant::kVerticalTabHeight)) -
++                        pinned_tabs_container_view_->GetMinimumSize().height());
++    band_height = std::min(band_height, band_cap);
++    remaining_height -= band_height;
++  }
++
++  if (favorites_band_) {
++    layouts.child_layouts.emplace_back(
++        favorites_band_.get(), band_height > 0,
++        gfx::Rect(region_horizontal_padding, y,
++                  pinned_tab_container_size_bounds.width().value(),
++                  band_height));
++    y += band_height;
+   }
+ 
+   // Place the pinned container.
+   int pinned_container_height = pinned_preferred_height;
+   if (size_bounds.height().is_bounded()) {
+-    // The pinned container height should not be larger than half the available
+-    // space unless the unpinned container will not fill that space. Also make
+-    // sure the height is at least the minimum.
+-    pinned_container_height = std::max(
+-        std::min(pinned_preferred_height,
+-                 std::max(remaining_height / 2,
+-                          remaining_height - unpinned_preferred_height)),
++    // helium-fork M3.12-r1: pinned is fixed-first -- full content height
++    // unless it alone overflows -- and Today keeps a small reserve and
++    // scrolls. Replaces upstream's half-split, which clamped the pinned
++    // viewport at remaining/2 and scrolled the favorites off the top
++    // whenever Today was tall (user 2026-08-30).
++    pinned_container_height = helium::SidebarPinnedViewportHeight(
++        pinned_preferred_height, unpinned_preferred_height, remaining_height,
++        GetLayoutConstant(LayoutConstant::kVerticalTabHeight),
+         pinned_tabs_container_view_->GetMinimumSize().height());
+     remaining_height -= pinned_container_height;
+   }
+@@ -477,6 +519,12 @@ bool TabStripView::IsPositionInWindowCap
+       continue;
+     }
+ 
++    // M3.12-r2: the favorites band is content, not caption -- a click on a
++    // tile must never start a window drag (same standing as the scroll
++    // contents it used to live in).
++    if (child == favorites_band_) {
++      return false;
++    }
+     auto* scroll_view = views::AsViewClass<views::ScrollView>(child);
+     if (!scroll_view) {
+       return true;
+@@ -517,7 +565,14 @@ views::View* TabStripView::AddScrollView
+   auto* container = views::AsViewClass<PinnedTabContainerView>(view.get());
+   CHECK(container);
+   pinned_tabs_container_view_ = container;
+-  return pinned_tabs_scroll_view_->SetContents(std::move(view));
++  views::View* const contents =
++      pinned_tabs_scroll_view_->SetContents(std::move(view));
++  // Wire the band to the sidebar now that it exists -- before the first
++  // widget-attached layout and before AddedToWidget's entry sync, so the
++  // grid tiles are created straight into the band.
++  container->workspace_view()->SetFavoritesBand(favorites_band_);
++  favorites_band_->SetWorkspaceDragHost(container->workspace_view());
++  return contents;
+ }
+ 
+ void TabStripView::RemoveScrollViewContents(views::View* view) {
+@@ -527,6 +582,10 @@ void TabStripView::RemoveScrollViewConte
+     return;
+   }
+   if (views::IsViewClass<PinnedTabContainerView>(view)) {
++    views::AsViewClass<PinnedTabContainerView>(view)
++        ->workspace_view()
++        ->SetFavoritesBand(nullptr);
++    favorites_band_->SetWorkspaceDragHost(nullptr);
+     pinned_tabs_container_view_ = nullptr;
+     pinned_tabs_scroll_view_->SetContents(nullptr);
+     return;
+--- a/chrome/browser/ui/views/tabs/common/tab_strip_view.h
++++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+@@ -16,6 +16,7 @@
+ class TabCollectionNode;
+ class PinnedTabContainerView;
+ class UnpinnedTabContainerView;
++class WorkspaceFavoritesBandView;
+ 
+ namespace views {
+ class ScrollView;
+@@ -47,6 +48,9 @@ class TabStripView final : public views:
+   views::ScrollView* unpinned_tabs_scroll_view() {
+     return unpinned_tabs_scroll_view_;
+   }
++  // helium-fork M3.12-r2: the fixed favorites band above the pinned
++  // scroller.
++  WorkspaceFavoritesBandView* favorites_band() { return favorites_band_; }
+ 
+   void SetCollapsedState(bool is_collapsed);
+   void SetIsAnimatingSize(bool is_animating);
+@@ -99,6 +103,7 @@ class TabStripView final : public views:
+   void HideHoverCardOnScroll();
+ 
+   raw_ptr<TabCollectionNode> collection_node_ = nullptr;
++  raw_ptr<WorkspaceFavoritesBandView> favorites_band_ = nullptr;
+   raw_ptr<views::ScrollView> pinned_tabs_scroll_view_ = nullptr;
+   raw_ptr<PinnedTabContainerView> pinned_tabs_container_view_ = nullptr;
+   raw_ptr<views::Separator> tabs_separator_ = nullptr;
+--- a/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
++++ b/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+@@ -24,6 +24,7 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_data.h"
+ #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
++#include "ui/base/clipboard/clipboard_format_type.h"
+ #include "ui/base/dragdrop/drag_drop_types.h"
+ #include "ui/base/dragdrop/drop_target_event.h"
+ #include "ui/base/dragdrop/os_exchange_data.h"
+@@ -90,7 +91,7 @@ class UnpinnedTabContainerViewTargeter :
+     // last row plainly means "put it at the end", and the default rule --
+     // only the rows themselves are hittable -- makes that release land on
+     // nothing and silently cancel the drag.
+-    if (view_->HasWorkspaceEntryDrag()) {
++    if (view_->HasWorkspaceEntryDrag() || view_->HasWorkspaceUrlDrag()) {
+       return view_->GetLocalBounds().Intersects(rect);
+     }
+     gfx::Rect content_bounds;
+@@ -399,63 +400,12 @@ UnpinnedTabContainerView::GetLinkDropInd
+   if (!collection_node_) {
+     return std::nullopt;
+   }
+-  const helium_workspace::WorkspaceService* workspace_service =
+-      GetWorkspaceService();
+-  for (auto& child_node : collection_node_->children()) {
+-    auto* view = child_node->view();
+-    CHECK(view);
+-    // helium-fork: entry tabs have no bounds here, so they can never be a
+-    // drop target in Today.
+-    if (IsWorkspaceEntryTab(workspace_service, view)) {
+-      continue;
+-    }
+-    if (loc_in_container.y() >= view->bounds().bottom()) {
+-      continue;
+-    }
+-
+-    if (child_node->type() == TabCollectionNode::Type::GROUP) {
+-      auto* group_view = views::AsViewClass<TabGroupView>(view);
+-      if (group_view->IsCollapsed()) {
+-        gfx::Point loc_in_group = views::View::ConvertPointToTarget(
+-            this, group_view, loc_in_container);
+-        const bool is_leading =
+-            loc_in_group.y() <
+-            group_view->group_header()->bounds().CenterPoint().y();
+-        return GetDragHandler().GetLinkDropIndexForNode(
+-            *group_view->collection_node(),
+-            is_leading ? DragPositionHint::kBefore : DragPositionHint::kAfter);
+-      }
+-      // Recursive call into the group view.
+-      gfx::Point loc_in_group =
+-          views::View::ConvertPointToTarget(this, group_view, loc_in_container);
+-      return group_view->GetLinkDropIndex(loc_in_group);
+-    }
+-
+-    gfx::Point loc_in_child =
+-        views::View::ConvertPointToTarget(this, view, loc_in_container);
+-
+-    // If the drag is over the margins from the edges of the tab, then
+-    // consider this drag as a before/after rather than over.
+-    constexpr double kDragOverMargins = 0.2;
+-    std::optional<DragPositionHint> hint;
+-    if (loc_in_child.y() < view->height() * kDragOverMargins) {
+-      hint = DragPositionHint::kBefore;
+-    } else if (loc_in_child.y() > view->height() * (1 - kDragOverMargins)) {
+-      hint = DragPositionHint::kAfter;
+-    } else if (child_node->type() == TabCollectionNode::Type::SPLIT) {
+-      // If landing in the middle of the split, let the split view decide which
+-      // tab to replace.
+-      auto* split_view = views::AsViewClass<SplitTabView>(view);
+-      gfx::Point loc_in_split =
+-          views::View::ConvertPointToTarget(this, split_view, loc_in_container);
+-      return split_view->GetLinkDropIndex(loc_in_split);
+-    } else {
+-      hint = std::nullopt;
+-    }
+-    return GetDragHandler().GetLinkDropIndexForNode(*child_node, hint);
+-  }
+-
+-  // Fallback to the end of the container.
++  // helium-fork M3.12-r1: an external link dropped anywhere in Today -- on a
++  // row, between rows, or in the blank tail -- appends a new tab at the end.
++  // Never "replace this tab", never a positional insert (`Dia:` measured
++  // 2026-08-26 g5/g6: end of Today, activated). Upstream's 20/60/20 band
++  // rule answered kReplaceIndex for the middle of a row, which navigated the
++  // hovered tab away.
+   return GetDragHandler().GetLinkDropIndexForNode(*collection_node_,
+                                                   std::nullopt);
+ }
+@@ -498,6 +448,10 @@ bool UnpinnedTabContainerView::HasWorksp
+   return workspace_drag_host_ && workspace_drag_host_->HasEntryDragSession();
+ }
+ 
++bool UnpinnedTabContainerView::HasWorkspaceUrlDrag() const {
++  return workspace_drag_host_ && workspace_drag_host_->HasUrlDragSession();
++}
++
+ std::optional<UnpinnedTabContainerView::EntryDropSpot>
+ UnpinnedTabContainerView::EntryDropSpotAt(const gfx::Point& loc) {
+   if (!collection_node_) {
+@@ -538,6 +492,11 @@ bool UnpinnedTabContainerView::GetDropFo
+     int* formats,
+     std::set<ui::ClipboardFormatType>* format_types) {
+   format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
++  // M3.12-r2: Today hosts external URL drags too (slot + positional drop,
++  // user ruling 2026-08-30). Assignment, not |= -- callers do not all zero
++  // it first (pitfalls M3.12 #3).
++  *formats = ui::OSExchangeData::URL;
++  format_types->insert(ui::ClipboardFormatType::UrlType());
+   return true;
+ }
+ 
+@@ -546,13 +505,23 @@ bool UnpinnedTabContainerView::AreDropTy
+ }
+ 
+ bool UnpinnedTabContainerView::CanDrop(const ui::OSExchangeData& data) {
+-  // ⛔ Session, not payload -- see WorkspaceSidebarView::CanDrop. Unpickling
+-  // here is an NSPasteboard round trip on every boundary crossing.
+-  return HasWorkspaceEntryDrag();
++  // ⛔ Session first, payload second -- see WorkspaceSidebarView::CanDrop.
++  // Unpickling here is an NSPasteboard round trip on every boundary
++  // crossing; once a session exists it answers, so a gesture pays for one
++  // read no matter which of our targets it entered through.
++  if (HasWorkspaceEntryDrag() || HasWorkspaceUrlDrag()) {
++    return true;
++  }
++  return data.HasURL(ui::FilenameToURLPolicy::CONVERT_FILENAMES);
+ }
+ 
+ void UnpinnedTabContainerView::OnDragEntered(
+     const ui::DropTargetEvent& event) {
++  // A link can enter Today without ever touching the sidebar; the session
++  // still lives there (one session, one host -- M3.11 轮3 rule).
++  if (workspace_drag_host_) {
++    workspace_drag_host_->EnsureUrlDragSession();
++  }
+   OnDragUpdated(event);
+ }
+ 
+@@ -587,8 +556,14 @@ int UnpinnedTabContainerView::HandleWork
+       *this, point_in_this,
+       spot ? std::optional<int>(spot->tab_index) : std::nullopt,
+       spot ? spot->row_position : 0u);
+-  return accepted ? ui::DragDropTypes::DRAG_MOVE
+-                  : ui::DragDropTypes::DRAG_NONE;
++  if (!accepted) {
++    return ui::DragDropTypes::DRAG_NONE;
++  }
++  // Copy for a link, move for our own entry -- not cosmetic: macOS masks the
++  // answer against the source's allowed operations, and a web link's source
++  // typically forbids Move.
++  return HasWorkspaceUrlDrag() ? ui::DragDropTypes::DRAG_COPY
++                               : ui::DragDropTypes::DRAG_MOVE;
+ }
+ 
+ views::View::DropCallback
+--- a/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
++++ b/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+@@ -75,6 +75,9 @@ class UnpinnedTabContainerView
+   // True while a sidebar entry is airborne. Public because the event
+   // targeter, which is not a member, has to ask.
+   bool HasWorkspaceEntryDrag() const;
++  // M3.12-r2: same question for an external URL session (Today hosts those
++  // too now); kept separate so readers stay kind-aware (pitfalls M3.12 #0).
++  bool HasWorkspaceUrlDrag() const;
+   // The same drag handling, addressed by a point in this view's coordinates
+   // rather than by an event. VerticalTabStripRegionView forwards the dead
+   // space *under* Today through here: that space belongs to the region (this
+@@ -125,9 +128,10 @@ class UnpinnedTabContainerView
+     size_t row_position = 0;
+   };
+   // Midpoint rule -- land before the first row whose centre is below the
+-  // pointer. Deliberately not GetLinkDropIndex(): that one can answer
+-  // "replace this tab", which an entry drop never means (`Dia:` always
+-  // opens a slot between rows, measured 2026-08-24).
++  // pointer. Distinct from GetLinkDropIndex() by design: entry drops are
++  // positional (`Dia:` opens a slot between rows, measured 2026-08-24),
++  // while link drops always append at the end of Today (`Dia:` measured
++  // 2026-08-26 g5/g6).
+   std::optional<EntryDropSpot> EntryDropSpotAt(const gfx::Point& loc);
+ 
+   // helium-fork: the profile's workspace model, or null (off-the-record
+--- /dev/null
++++ b/chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.cc
+@@ -0,0 +1,98 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h"
++
++#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_data.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
++#include "ui/base/clipboard/clipboard_format_type.h"
++#include "ui/base/dragdrop/drag_drop_types.h"
++#include "ui/base/dragdrop/drop_target_event.h"
++#include "ui/base/dragdrop/os_exchange_data.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++
++WorkspaceFavoritesBandView::WorkspaceFavoritesBandView() = default;
++
++WorkspaceFavoritesBandView::~WorkspaceFavoritesBandView() = default;
++
++void WorkspaceFavoritesBandView::SetWorkspaceDragHost(
++    WorkspaceSidebarView* sidebar) {
++  sidebar_ = sidebar;
++}
++
++gfx::Size WorkspaceFavoritesBandView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  if (!sidebar_) {
++    return gfx::Size();
++  }
++  const int width = available_size.width().is_bounded()
++                        ? available_size.width().value()
++                        : sidebar_->width();
++  return gfx::Size(width, sidebar_->BandSegmentHeight(width));
++}
++
++gfx::Size WorkspaceFavoritesBandView::GetMinimumSize() const {
++  return gfx::Size(0, sidebar_ ? sidebar_->BandMinimumHeight() : 0);
++}
++
++bool WorkspaceFavoritesBandView::GetDropFormats(
++    int* formats,
++    std::set<ui::ClipboardFormatType>* format_types) {
++  // The grid's drop surface for both kinds -- same recipe as the sidebar's
++  // own registration. Assignment, not |= (pitfalls M3.12 #3).
++  format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
++  *formats = ui::OSExchangeData::URL;
++  format_types->insert(ui::ClipboardFormatType::UrlType());
++  return true;
++}
++
++bool WorkspaceFavoritesBandView::AreDropTypesRequired() {
++  return true;
++}
++
++bool WorkspaceFavoritesBandView::CanDrop(const ui::OSExchangeData& data) {
++  if (!sidebar_) {
++    return false;
++  }
++  // Session first, one payload read second (pitfalls M3.12 #4).
++  if (sidebar_->HasEntryDragSession() || sidebar_->HasUrlDragSession()) {
++    return true;
++  }
++  return data.HasURL(ui::FilenameToURLPolicy::CONVERT_FILENAMES);
++}
++
++void WorkspaceFavoritesBandView::OnDragEntered(
++    const ui::DropTargetEvent& event) {
++  if (!sidebar_) {
++    return;
++  }
++  sidebar_->EnsureUrlDragSession();
++  OnDragUpdated(event);
++}
++
++int WorkspaceFavoritesBandView::OnDragUpdated(
++    const ui::DropTargetEvent& event) {
++  return sidebar_ ? sidebar_->OnBandDragUpdated(*this, event.location())
++                  : ui::DragDropTypes::DRAG_NONE;
++}
++
++void WorkspaceFavoritesBandView::OnDragExited() {
++  if (sidebar_) {
++    // Same semantics as leaving the sidebar itself: hole closes, session
++    // stays (URL sessions get the deferred teardown there).
++    sidebar_->OnDragExited();
++  }
++}
++
++views::View::DropCallback WorkspaceFavoritesBandView::GetDropCallback(
++    const ui::DropTargetEvent& event) {
++  return sidebar_ ? sidebar_->GetDropCallback(event) : base::NullCallback();
++}
++
++void WorkspaceFavoritesBandView::RemovedFromWidget() {
++  sidebar_ = nullptr;
++}
++
++BEGIN_METADATA(WorkspaceFavoritesBandView)
++END_METADATA
+--- /dev/null
++++ b/chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h
+@@ -0,0 +1,62 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FAVORITES_BAND_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FAVORITES_BAND_VIEW_H_
++
++#include <set>
++
++#include "base/memory/raw_ptr.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/views/view.h"
++
++class WorkspaceSidebarView;
++
++// helium-fork M3.12-r2: the fixed favorites band. The user ruled the grid
++// never scrolls (2026-08-30), and the translucent sidebar cannot hide rows
++// behind a sticky overlay, so the grid genuinely lives outside the pinned
++// scroller -- this view sits above it as a plain TabStripView child.
++//
++// A dumb host on purpose: WorkspaceSidebarView keeps every piece of logic --
++// entry sync, the single drag session, the unified layout in one "virtual"
++// coordinate space with the grid at y=0 -- and sets this view's children's
++// bounds directly (band-local coordinates ARE the virtual grid segment). No
++// layout manager here, deliberately: the default Layout only propagates into
++// children needing internal layout and never touches their bounds, so
++// nothing re-lays the tiles behind the sidebar's back. This view only
++// (a) hosts the tiles and the empty-grid placeholder, (b) answers size
++// questions by asking the sidebar, and (c) forwards drops into the session
++// -- the same shape as UnpinnedTabContainerView's Today forwarding.
++class WorkspaceFavoritesBandView : public views::View {
++  METADATA_HEADER(WorkspaceFavoritesBandView, views::View)
++
++ public:
++  WorkspaceFavoritesBandView();
++  WorkspaceFavoritesBandView(const WorkspaceFavoritesBandView&) = delete;
++  WorkspaceFavoritesBandView& operator=(const WorkspaceFavoritesBandView&) =
++      delete;
++  ~WorkspaceFavoritesBandView() override;
++
++  void SetWorkspaceDragHost(WorkspaceSidebarView* sidebar);
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  gfx::Size GetMinimumSize() const override;
++  bool GetDropFormats(int* formats,
++                      std::set<ui::ClipboardFormatType>* format_types) override;
++  bool AreDropTypesRequired() override;
++  bool CanDrop(const ui::OSExchangeData& data) override;
++  void OnDragEntered(const ui::DropTargetEvent& event) override;
++  int OnDragUpdated(const ui::DropTargetEvent& event) override;
++  void OnDragExited() override;
++  views::View::DropCallback GetDropCallback(
++      const ui::DropTargetEvent& event) override;
++  void RemovedFromWidget() override;
++
++ private:
++  raw_ptr<WorkspaceSidebarView> sidebar_ = nullptr;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FAVORITES_BAND_VIEW_H_
+--- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ 
++#include "chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h"
++
+ #include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
+ 
+ #include <inttypes.h>
+@@ -37,6 +39,7 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
++#include "chrome/browser/ui/helium_workspace/workspace_url_drop.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+@@ -46,6 +49,8 @@
+ #include "ui/base/dragdrop/drag_drop_types.h"
+ #include "ui/base/dragdrop/drop_target_event.h"
+ #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
++#include "ui/base/clipboard/clipboard_format_type.h"
++#include "ui/base/clipboard/clipboard_url_info.h"
+ #include "ui/base/dragdrop/os_exchange_data.h"
+ #include "ui/compositor/compositor.h"
+ #include "ui/compositor/compositor_animation_observer.h"
+@@ -519,6 +524,13 @@ WorkspaceSidebarView::~WorkspaceSidebarV
+   // calls StopObservingAll(). Reaching for the widget here to do it by hand
+   // would be worse than redundant -- by this point it may already be gone.
+   service_observation_.Reset();
++  // M3.12-r2: the band may hold our tiles (they carry raw pointers to this
++  // view as delegate and drag controller); pull them home before those go
++  // stale. TabStripView normally does this earlier via SetFavoritesBand(
++  // nullptr) -- this is the belt for teardown orders that skip it.
++  if (band_) {
++    SetFavoritesBand(nullptr);
++  }
+ }
+ 
+ void WorkspaceSidebarView::AddedToWidget() {
+@@ -548,6 +560,11 @@ void WorkspaceSidebarView::RemovedFromWi
+   // 轮3: drop the cross-container pointer before the widget tears down. It
+   // and this view die together, but a raw_ptr that outlives its pointee
+   // trips the dangling detector even where nothing dereferences it.
++  // M3.12-r2: same for the band -- and pulling the tiles home here keeps
++  // their delegate pointers valid whatever order the trees come down in.
++  if (band_) {
++    SetFavoritesBand(nullptr);
++  }
+   today_container_ = nullptr;
+   service_observation_.Reset();
+   TabStripModelObserver::StopObservingAll(this);
+@@ -738,7 +755,10 @@ void WorkspaceSidebarView::SyncEntryView
+   }
+   bool structure_changed = !stale.empty();
+   for (const std::string& id : stale) {
+-    RemoveChildViewT(entry_views_[id].get());
++    // M3.12-r2: tiles live in the band, rows here -- remove from whichever
++    // parent actually holds it.
++    views::View* const gone = entry_views_[id].get();
++    gone->parent()->RemoveChildViewT(gone);
+     entry_views_.erase(id);
+     surfaced_entry_ids_.erase(id);
+   }
+@@ -748,10 +768,15 @@ void WorkspaceSidebarView::SyncEntryView
+   ordered.reserve(entries.size());
+   size_t favorites = 0;
+   for (const helium_workspace::WorkspaceEntry& entry : entries) {
++    const bool is_favorite =
++        entry.section == helium_workspace::WorkspaceEntry::Section::kFavorite;
+     auto it = entry_views_.find(entry.id);
+     WorkspaceEntryView* view = nullptr;
+     if (it == entry_views_.end()) {
+-      view = AddChildView(
++      // Created straight into its segment's host; the delegate and drag
++      // controller stay this view either way -- the band has no logic.
++      views::View* const host = is_favorite ? GridHost() : this;
++      view = host->AddChildView(
+           std::make_unique<WorkspaceEntryView>(this, profile_.get()));
+       view->set_drag_controller(this);
+       entry_views_[entry.id] = view;
+@@ -767,9 +792,26 @@ void WorkspaceSidebarView::SyncEntryView
+     view->SetEntry(entry);
+     if (was_capsule != view->renders_as_capsule()) {
+       structure_changed = true;
++      // M3.12-r2: the form flip crosses the host boundary. ⛔ Never reparent
++      // the view an OS drag session is still holding: pulling the source
++      // view out of its parent mid-session eats its OnDragDone -- and with
++      // it EndDragSession, leaving the session and the grid latch alive
++      // forever (measured 2026-08-31: tofav wrote no drag-perf line and the
++      // band stayed placeholder-tall). FinishDragSettle reconciles instead;
++      // the view is hidden_by_drag for that whole window, so the deferred
++      // mis-parenting is invisible. The stale-blend guard keeps a band-local
++      // rect from ever lerping against a scroller-local one.
++      if (!drag_ || drag_->entry_id != entry.id) {
++        views::View* const want =
++            view->renders_as_capsule() ? GridHost() : static_cast<views::View*>(this);
++        if (view->parent() != want) {
++          want->AddChildViewRaw(view);
++          drag_prev_layout_valid_ = false;
++        }
++      }
+     }
+     ordered.push_back(view);
+-    if (entry.section == helium_workspace::WorkspaceEntry::Section::kFavorite) {
++    if (is_favorite) {
+       ++favorites;
+     }
+   }
+@@ -904,7 +946,14 @@ WorkspaceSidebarView::SidebarLayout Work
+   size_t hole = 0;
+   if (drag_ && !drag_->settling) {
+     drag_index = DragEntryOrderedIndex();
+-    if (drag_index && drag_->plan_section && with_drag_hole &&
++    // M3.12: a URL drag lifts nothing out of the list, so it has no
++    // drag_index -- but it still needs the slot. That is the whole visual
++    // difference between the two kinds here: `Dia:` shows the same empty row
++    // (and the same N+1 grid reflow) whether what is coming is one of its own
++    // rows or a link from a web page (measured 2026-08-26).
++    const bool have_mover =
++        drag_index.has_value() || drag_->kind == DragKind::kExternalUrl;
++    if (have_mover && drag_->plan_section && with_drag_hole &&
+         !drag_->folder_drop) {
+       hole = drag_->plan_index;
+       hole_in_grid = *drag_->plan_section ==
+@@ -957,6 +1006,14 @@ WorkspaceSidebarView::SidebarLayout Work
+   }
+ 
+   y += FavoriteGridGap();
++  // M3.12-r2: in-session the grid segment is grow-only, like the latched
++  // height -- a released favorite's old slot pads the gap instead of pulling
++  // the header up, so the fixed band above the scroller never shrinks
++  // mid-gesture (and the rows never need negative scroller-space y).
++  if (drag_) {
++    y = std::max(y, drag_->latched_grid_segment);
++  }
++  out.grid_segment = y;
+   out.header_bounds = gfx::Rect(0, y, row_width, SpaceHeaderHeight());
+   y += SpaceHeaderHeight();
+ 
+@@ -1080,28 +1137,27 @@ gfx::Size WorkspaceSidebarView::Calculat
+   const int width = available_size.width().is_bounded()
+                         ? available_size.width().value()
+                         : GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
+-  int height = CurrentLayout(width).height;
+-  // M3.11: for the whole drag session the height only ever grows (latched at
+-  // each discrete plan change) -- per-frame drop feedback must never reach
+-  // the container's 200ms animation (M3.10-r2).
++  const SidebarLayout layout = CurrentLayout(width);
++  // M3.12-r2: this view is the rows segment only -- the grid lives in the
++  // fixed band. M3.11's rule stands per segment: for the whole drag session
++  // the height only ever grows (latched at each discrete plan change), so
++  // per-frame drop feedback never reaches the container's 200ms animation
++  // (M3.10-r2).
++  int height = layout.height - layout.grid_segment;
+   if (drag_) {
+-    height = std::max(height, drag_->latched_height);
++    height = std::max(height, drag_->latched_rows_segment);
+   }
+   return gfx::Size(width, height);
+ }
+ 
+ gfx::Size WorkspaceSidebarView::GetMinimumSize() const {
+-  // Deliberately not ComputeLayout(): at an unbounded width the grid plans a
+-  // single column, so twelve favorites would claim twelve rows of minimum
+-  // height and squeeze Today out of the strip entirely. What the sidebar
+-  // actually needs is the space header (permanent -- it is the pinned
+-  // section's visible edge), the empty-state placeholder while the grid is
+-  // empty, and one row's worth of content.
+-  int height = SpaceHeaderHeight() + FavoriteGridGap();
+-  height += favorite_count_ == 0
+-                ? FavoritesPlaceholderHeight(
+-                      GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth))
+-                : GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
++  // M3.12-r2: the rows segment only -- the grid, its placeholder and the
++  // trailing gap moved into the fixed band (BandMinimumHeight). What this
++  // view genuinely needs is the space header (permanent -- it is the pinned
++  // section's visible edge) and one row's worth of content. This is also
++  // what the pinned viewport floors on (SidebarPinnedViewportHeight via
++  // PinnedTabContainerView::GetMinimumSize).
++  int height = SpaceHeaderHeight();
+   if (ordered_entries_.size() > favorite_count_ &&
+       (!space_collapsed_ || !surfaced_entry_ids_.empty())) {
+     height +=
+@@ -1111,11 +1167,35 @@ gfx::Size WorkspaceSidebarView::GetMinim
+                    height);
+ }
+ 
++int WorkspaceSidebarView::BandSegmentHeight(int width) const {
++  return ComputeLayout(width, space_collapsed_).grid_segment;
++}
++
++int WorkspaceSidebarView::BandMinimumHeight() const {
++  // Deliberately not ComputeLayout(): at an unbounded width the grid plans a
++  // single column, so twelve favorites would claim twelve rows of minimum
++  // height and squeeze Today out of the strip entirely (the same argument
++  // GetMinimumSize always made).
++  const int content =
++      favorite_count_ == 0
++          ? FavoritesPlaceholderHeight(
++                GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth))
++          : GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteHeight);
++  return content + FavoriteGridGap();
++}
++
+ void WorkspaceSidebarView::Layout(PassKey) {
+   DragPerf* const perf = drag_perf_.get();
+   const base::TimeTicks layout_start =
+       perf ? base::TimeTicks::Now() : base::TimeTicks();
+   const SidebarLayout layout = CurrentLayout(width());
++  // M3.12-r2: the layout is in virtual space (grid at y=0); this view is the
++  // rows segment, offset by the split, and the grid children -- parented to
++  // the fixed band, whose local space IS the virtual grid segment -- take
++  // their rects untranslated. One layout pass still moves both hosts'
++  // children, so a fav↔row crossing can never be a frame apart.
++  const int split = layout.grid_segment;
++  grid_segment_ = split;
+ 
+   // helium-fork M3.10-r2: this view's own bounds can trail the layout it is
+   // drawing. PinnedTabContainerView runs a
+@@ -1128,8 +1208,9 @@ void WorkspaceSidebarView::Layout(PassKe
+   // bounds catch up. Dropping it on the tween's last frame is what blinked
+   // the bottom row(s) out for ~2 frames at the end of every open (user
+   // 2026-08-24 recording: last row gone at t=150ms and t=167ms, back at
+-  // t=183ms).
+-  const bool bounds_trail_layout = layout.height > height();
++  // t=183ms). Segment vs segment since r2 -- against the unified height this
++  // would be near-always true and strand the layers.
++  const bool bounds_trail_layout = (layout.height - split) > height();
+ 
+   if (placeholder_) {
+     placeholder_->SetVisible(layout.placeholder_visible);
+@@ -1138,11 +1219,27 @@ void WorkspaceSidebarView::Layout(PassKe
+     }
+   }
+   if (space_header_) {
+-    space_header_->SetBoundsRect(layout.header_bounds);
++    gfx::Rect header = layout.header_bounds;
++    header.Offset(0, -split);
++    space_header_->SetBoundsRect(header);
+   }
+   for (size_t i = 0; i < ordered_entries_.size(); ++i) {
+     WorkspaceEntryView* view = ordered_entries_[i].get();
+     const bool visible = layout.entry_visible[i];
++    if (i < favorite_count_) {
++      // Grid tiles: never part of the folder tween (identical endpoints),
++      // never fading -- and clearing here keeps the "no stale layer"
++      // invariant for a row that just became a capsule.
++      view->SetFolderMotion(false, 1.0f);
++      if (visible) {
++        view->SetBoundsRect(layout.entry_bounds[i]);
++      }
++      const bool hidden_by_drag =
++          drag_ && drag_->settling &&
++          ordered_entries_[i]->entry_id() == drag_->entry_id;
++      view->SetVisible(visible && !hidden_by_drag);
++      continue;
++    }
+     // Cleared before hiding, so a row never keeps the layer the folder's
+     // tween gave it. The trailing-bounds clause only *holds* a layer, never
+     // creates one: the tween is the sole place rows acquire one, and at a
+@@ -1152,7 +1249,9 @@ void WorkspaceSidebarView::Layout(PassKe
+     view->SetFolderMotion(visible && needs_layer,
+                           visible ? layout.entry_fade[i] : 1.0f);
+     if (visible) {
+-      view->SetBoundsRect(layout.entry_bounds[i]);
++      gfx::Rect row = layout.entry_bounds[i];
++      row.Offset(0, -split);
++      view->SetBoundsRect(row);
+     }
+     // While the floating card is still flying home the row it belongs to is
+     // laid out but not shown -- the card is standing in for it.
+@@ -1388,7 +1487,9 @@ void WorkspaceSidebarView::OnWillStartDr
+     drag_->plan_index =
+         drag_->from_favorite ? *index : *index - favorite_count_;
+   }
+-  drag_->latched_height = ComputeLayout(width(), space_collapsed_).height;
++  const SidebarLayout seed = ComputeLayout(width(), space_collapsed_);
++  drag_->latched_grid_segment = seed.grid_segment;
++  drag_->latched_rows_segment = seed.height - seed.grid_segment;
+   drag_->grab = pending_drag_grab_;
+   // helium-fork M3.11-r1: from here to the drop the pointer belongs to the
+   // OS drag session -- no view will ever be told the mouse left it. Sweep
+@@ -1422,6 +1523,16 @@ bool WorkspaceSidebarView::GetDropFormat
+     int* formats,
+     std::set<ui::ClipboardFormatType>* format_types) {
+   format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
++  // M3.12: and links. Registering the URL bit is the whole reason a dropped
++  // link stops falling through to BrowserRootView -- DropHelper walks up from
++  // the deepest hit view and takes the first one whose formats the payload
++  // matches (drop_helper.cc:196-208), and the root view (which opens a Today
++  // tab) is the last stop on that walk, not the first.
++  // Both halves on purpose, as multi_contents_view_drop_target_controller.cc
++  // :167-182 does: the bit is what HasAnyFormat tests, the type is what a
++  // caller enumerating format_types sees.
++  *formats = ui::OSExchangeData::URL;
++  format_types->insert(ui::ClipboardFormatType::UrlType());
+   return true;
+ }
+ 
+@@ -1430,37 +1541,65 @@ bool WorkspaceSidebarView::AreDropTypesR
+ }
+ 
+ bool WorkspaceSidebarView::CanDrop(const ui::OSExchangeData& data) {
+-  // Same-session only for now: a drag from another window has no session
+-  // (and so no preview) here; cross-window entry drags are a later round.
++  // ⛔ Ask the session before the payload. Reading a payload on mac is a
++  // cross-process pasteboard round trip -- the pickle goes through
++  // [NSPasteboard dataForType:] (os_exchange_data_provider_mac.mm:261) and
++  // HasURL *is* a full GetURLs parse (:275-277, plus disk for .url files) --
++  // and DropHelper re-walks the target chain, calling this, every time the
++  // view under the pointer changes (drop_helper.cc:176-208). Crossing rows
++  // in the sidebar does that many times a second.
+   //
+-  // ⛔ The session, never the payload. Reading the pickle means
+-  // [NSPasteboard dataForType:] -- a cross-process round trip
+-  // (os_exchange_data_provider_mac.mm:261). DropHelper re-walks the target
+-  // chain, calling this, every time the view under the pointer changes
+-  // (drop_helper.cc:176-208), which during a drag that keeps crossing the
+-  // sidebar/Today boundary is many times a second. Same argument the region
+-  // view's OnDragUpdated already runs on: a live entry session and a link
+-  // drag cannot both be in flight, and a drag started in another window
+-  // leaves no session here. The payload is read once per gesture, in
+-  // GetDropCallback's neighbourhood.
+-  return HasEntryDragSession();
++  // An entry session answers for entry drags (same-window only: a drag from
++  // another window leaves no session here and gets no preview, which is a
++  // later round), and a URL session answers for the rest of a link drag once
++  // the read below has said yes once. So the parse happens once per entry
++  // into the sidebar, not once per row crossed.
++  if (HasEntryDragSession() || HasUrlDragSession()) {
++    return true;
++  }
++  // M3.12, and the one payload read of the gesture. CONVERT_FILENAMES because
++  // `Dia:` takes files: dragging plain-url.txt and not-a-url.md out of Finder
++  // both became entries (measured 2026-08-26).
++  return data.HasURL(ui::FilenameToURLPolicy::CONVERT_FILENAMES);
+ }
+ 
+ void WorkspaceSidebarView::OnDragEntered(const ui::DropTargetEvent& event) {
+-  UpdateDragPlan(event.location());
+-  UpdateDragOverlay(event.location());
++  // No session at all means CanDrop said yes on a payload rather than on a
++  // session, i.e. a link (EnsureUrlDragSession keeps the |drag_| discipline:
++  // a session that is still settling is not "no session").
++  EnsureUrlDragSession();
++  HandleHostedDragUpdate(*this, event.location(), ToVirtual(event.location()));
+ }
+ 
+ int WorkspaceSidebarView::OnDragUpdated(const ui::DropTargetEvent& event) {
++  // M3.12-r2: this view's local space is the rows segment; the plan math
++  // stays in the unified virtual space.
++  return HandleHostedDragUpdate(*this, event.location(),
++                                ToVirtual(event.location()));
++}
++
++int WorkspaceSidebarView::OnBandDragUpdated(const views::View& source,
++                                            const gfx::Point& point_in_source) {
++  // Band-local == virtual on the grid segment: no translation.
++  return HandleHostedDragUpdate(source, point_in_source, point_in_source);
++}
++
++int WorkspaceSidebarView::HandleHostedDragUpdate(
++    const views::View& source,
++    const gfx::Point& point_in_source,
++    const gfx::Point& virtual_point) {
+   TRACE_EVENT0("ui", "WorkspaceSidebarView::OnDragUpdated");
++  if (HasUrlDragSession()) {
++    KeepUrlDragSessionAlive();
++  }
+   DragPerf* const perf = drag_perf_.get();
+   const base::TimeTicks t0 = perf ? base::TimeTicks::Now() : base::TimeTicks();
+   if (perf) {
+     DragPerfTick(t0);
+   }
+-  UpdateDragPlan(event.location());
++  UpdateDragPlan(virtual_point);
+   const base::TimeTicks t1 = perf ? base::TimeTicks::Now() : base::TimeTicks();
+-  UpdateDragOverlay(event.location());
++  UpdateDragOverlay(source, point_in_source);
+   if (perf) {
+     const base::TimeTicks t2 = base::TimeTicks::Now();
+     perf->plan_us += (t1 - t0).InMicroseconds();
+@@ -1469,11 +1608,37 @@ int WorkspaceSidebarView::OnDragUpdated(
+         static_cast<int>((t2 - t0).InMicroseconds() + perf->pending_us));
+     perf->pending_us = 0;
+   }
+-  return drag_ && drag_->plan_section ? ui::DragDropTypes::DRAG_MOVE
+-                                      : ui::DragDropTypes::DRAG_NONE;
++  if (!drag_ || !drag_->plan_section) {
++    return ui::DragDropTypes::DRAG_NONE;
++  }
++  // `Dia:` answers a dragged link with the green plus, i.e. Copy (measured
++  // 2026-08-26), which is also the rule upstream follows everywhere a URL
++  // arrives from outside: Copy or Link, never Move (bookmark_utils.cc:312-328
++  // ranks them in that order). Move is for our own rows, where the source and
++  // the target are the same model.
++  return drag_->kind == DragKind::kExternalUrl ? ui::DragDropTypes::DRAG_COPY
++                                               : ui::DragDropTypes::DRAG_MOVE;
++}
++
++gfx::Point WorkspaceSidebarView::ToVirtual(
++    const gfx::Point& point_in_this) const {
++  return gfx::Point(point_in_this.x(), point_in_this.y() + grid_segment_);
+ }
+ 
+ void WorkspaceSidebarView::OnDragExited() {
++  // M3.12-r2: a URL session crosses our own boundaries now (Today, the
++  // separator gap, the favorites band), each crossing an OnDragExited here
++  // followed by an OnDragEntered elsewhere. So the URL branch behaves like
++  // the entry branch -- close the hole, keep the session -- and a deferred,
++  // generation-counted teardown stands in for the OnDragDone a URL session
++  // does not have. ⚠ The drop path does *not* come through here
++  // (drop_helper.cc:97-122), which is why PerformUrlDrop / PerformTodayUrlDrop
++  // tear down themselves.
++  if (HasUrlDragSession()) {
++    SetDragPlan(std::nullopt, 0);
++    ScheduleUrlSessionTeardown();
++    return;
++  }
+   // The pointer left the sidebar: the hole closes, the session stays -- the
+   // frozen frame and the latched height must survive a trip across the
+   // Today container (the old container-scoped resets died exactly there).
+@@ -1482,9 +1647,20 @@ void WorkspaceSidebarView::OnDragExited(
+ 
+ views::View::DropCallback WorkspaceSidebarView::GetDropCallback(
+     const ui::DropTargetEvent& event) {
+-  if (!drag_ || !drag_->plan_section) {
++  // |settling| means the previous gesture is still flying home and the plan
++  // still on the session is that gesture's. Committing it would move an entry
++  // the user already dropped somewhere else.
++  if (!drag_ || drag_->settling || !drag_->plan_section) {
+     return base::NullCallback();
+   }
++  if (drag_->kind == DragKind::kExternalUrl) {
++    // The drop may be delivered a beat after this binding; make sure a
++    // teardown scheduled by the exit that will not come cannot race it.
++    KeepUrlDragSessionAlive();
++    return base::BindOnce(&WorkspaceSidebarView::PerformUrlDrop,
++                          weak_factory_.GetWeakPtr(), *drag_->plan_section,
++                          drag_->plan_index);
++  }
+   // Bound by value: by the time this runs the session may have been torn
+   // down by the source row's OnDragDone (see PerformEntryDrop).
+   return base::BindOnce(&WorkspaceSidebarView::PerformEntryDrop,
+@@ -1516,6 +1692,153 @@ void WorkspaceSidebarView::PerformEntryD
+   }
+ }
+ 
++// ---- M3.12: a URL dropped on the sidebar becomes an entry ----
++
++bool WorkspaceSidebarView::HasUrlDragSession() const {
++  return drag_ && drag_->kind == DragKind::kExternalUrl && !drag_->settling;
++}
++
++void WorkspaceSidebarView::EnsureUrlDragSession() {
++  // |drag_| rather than the two predicates on purpose: a session that is
++  // still settling is not "no session", and replacing it here would hand its
++  // pending FinishDragSettle the new one to tear down.
++  if (!drag_) {
++    StartUrlDragSession();
++    return;
++  }
++  if (HasUrlDragSession()) {
++    KeepUrlDragSessionAlive();
++  }
++}
++
++void WorkspaceSidebarView::KeepUrlDragSessionAlive() {
++  ++url_teardown_generation_;
++}
++
++void WorkspaceSidebarView::ScheduleUrlSessionTeardown() {
++  // Crossings between our own targets deliver exit→enter within one native
++  // callback (drop_helper.cc:66-77), so this task cannot interleave with
++  // them -- the enter's generation bump lands first. Only a true exit
++  // (window leave, ESC, drop landing somewhere that is not ours) leaves the
++  // generation untouched long enough for the task to fire.
++  const uint64_t generation = ++url_teardown_generation_;
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](base::WeakPtr<WorkspaceSidebarView> self, uint64_t generation) {
++            if (self && generation == self->url_teardown_generation_ &&
++                self->HasUrlDragSession()) {
++              self->EndDragSession();
++            }
++          },
++          weak_factory_.GetWeakPtr(), generation));
++}
++
++void WorkspaceSidebarView::StartUrlDragSession() {
++  // Same freeze as OnWillStartDragForView, and for the same reason: read the
++  // settled boundary before the session exists, because the first slot this
++  // session opens moves the header, and a boundary read off the live layout
++  // would then re-answer the hit test that opened it.
++  const int settled_boundary =
++      ComputeLayout(width(), space_collapsed_).header_bounds.y();
++
++  drag_ = std::make_unique<DragState>();
++  drag_->kind = DragKind::kExternalUrl;
++  drag_->zone_boundary_y = settled_boundary;
++  {
++    const SidebarLayout seed = ComputeLayout(width(), space_collapsed_);
++    drag_->latched_grid_segment = seed.grid_segment;
++    drag_->latched_rows_segment = seed.height - seed.grid_segment;
++  }
++  if (DragPerfRequested()) {
++    drag_perf_ = std::make_unique<DragPerf>();
++    if (ui::Compositor* const compositor =
++            GetWidget() ? GetWidget()->GetCompositor() : nullptr) {
++      drag_perf_->frame_interval_us =
++          compositor->refresh_rate() > 0.0
++              ? static_cast<int64_t>(1e6 / compositor->refresh_rate())
++              : 0;
++      drag_frame_probe_ =
++          std::make_unique<WorkspaceDragFrameProbe>(compositor, drag_perf_.get());
++    }
++  }
++  // M3.12-r2: Today shows this session's slot too, so its scrollbar and
++  // overflow indicator get the same gesture-long suppression as for entry
++  // drags. FinishDragSettle clears it unconditionally.
++  if (today_container_) {
++    today_container_->SetWorkspaceEntryDragActive(true);
++  }
++  // No overlay: the dragged thing is the OS's own link image, drawn by the
++  // source process. `Dia:` shows exactly that too -- the grey capsule with the
++  // title, the URL and a green plus, unchanged for the whole drag (2026-08-26).
++  //
++  // An OS drag session eats the mouse, so whatever row was lit when the drag
++  // arrived never gets told the pointer left it -- same reason
++  // OnWillStartDragForView sweeps before adding to the pile (M3.11-r1).
++  ClearStaleHovers();
++}
++
++void WorkspaceSidebarView::PerformUrlDrop(
++    helium_workspace::WorkspaceEntry::Section section,
++    size_t index,
++    const ui::DropTargetEvent& event,
++    ui::mojom::DragOperation& output_drag_op,
++    std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
++  output_drag_op = ui::mojom::DragOperation::kNone;
++  const std::vector<ui::ClipboardUrlInfo> urls =
++      event.data().GetURLs(ui::FilenameToURLPolicy::CONVERT_FILENAMES);
++  // One entry per drop. mac only ever writes one URL anyway
++  // (os_exchange_data_provider_mac.mm:189-191), and `Dia:` was never seen to
++  // take more than one.
++  const std::optional<GURL> url =
++      urls.empty() ? std::nullopt
++                   : helium_workspace::NormalizeDroppedUrl(urls.front().url);
++
++  // Close the hole *before* the model write, and from the frame that is on
++  // screen: the entry about to be added lands in exactly that slot, so the
++  // glide this sets up has nothing left to travel and the row simply appears
++  // where the hole was. Doing it the other way round shows the rows shut and
++  // re-open, or (writing first) one slot too many for a frame.
++  if (!drag_) {
++    return;
++  }
++  const bool collapsed_folder_drop = space_collapsed_;
++  DragPerfFinish();
++  RetargetDragYield();
++  drag_->settling = true;
++
++  if (url && service_) {
++    // AddEntry only appends, so the planned slot needs the second call. The
++    // index is "slot among that section's entries with the moved one already
++    // removed", and the moved one is the one just appended, which leaves the
++    // hit math's answer -- computed over the list as it was -- exactly right.
++    const std::string id = service_->AddEntry(section, *url, urls.front().title);
++    if (!id.empty()) {
++      service_->MoveEntry(id, section, index);
++      output_drag_op = ui::mojom::DragOperation::kCopy;
++      if (collapsed_folder_drop &&
++          section == helium_workspace::WorkspaceEntry::Section::kPinned) {
++        drop_surfaced_entry_id_ = id;
++      }
++      FinishDragSettle();
++      // `Dia:` opens and activates what was dropped (2026-08-26: the new row
++      // takes the active card, the content area navigates, the address bar
++      // goes about:blank then to the URL). That is also where its favicon and
++      // title come from, and ours arrive by the same route -- OpenEntry binds
++      // the tab, and the bind is what CaptureFavicon and the title write-back
++      // hang off. Last, because it activates a tab and this view is mid-drop.
++      OnEntryActivated(id);
++      return;
++    }
++    // Empty id = the favorites cap. `Dia:` has no cap at all (the user got to
++    // ~20), `Arc:` refuses the thirteenth; the user chose to keep our 12 and
++    // reuse the passive refusal (2026-08-26), which is what already happened
++    // upstream of here: UpdateDragPlan never gave the grid a plan, so this
++    // path is only reachable if the count changed mid-drag.
++  }
++  FinishDragSettle();
++}
++
+ // ---- M3.11 轮3: the Today half of the same session ----
+ 
+ void WorkspaceSidebarView::SetTodayContainer(
+@@ -1523,6 +1846,34 @@ void WorkspaceSidebarView::SetTodayConta
+   today_container_ = container;
+ }
+ 
++views::View* WorkspaceSidebarView::GridHost() {
++  return band_ ? static_cast<views::View*>(band_) : this;
++}
++
++void WorkspaceSidebarView::ReparentToGridHost(views::View* view) {
++  views::View* const host = GridHost();
++  if (view && view->parent() != host) {
++    host->AddChildViewRaw(view);
++  }
++}
++
++void WorkspaceSidebarView::SetFavoritesBand(WorkspaceFavoritesBandView* band) {
++  if (band_ == band) {
++    return;
++  }
++  band_ = band;
++  // Move the grid children into whichever host is current -- including back
++  // into this view on teardown (null band), so tiles never outlive the
++  // delegate they point at.
++  ReparentToGridHost(placeholder_);
++  for (size_t i = 0; i < ordered_entries_.size() && i < favorite_count_; ++i) {
++    ReparentToGridHost(ordered_entries_[i]);
++  }
++  drag_prev_layout_valid_ = false;
++  PreferredSizeChanged();
++  InvalidateLayout();
++}
++
+ bool WorkspaceSidebarView::IsDraggingThisEntry(
+     const ui::OSExchangeData& data) const {
+   const std::optional<std::string> id =
+@@ -1531,7 +1882,12 @@ bool WorkspaceSidebarView::IsDraggingThi
+ }
+ 
+ bool WorkspaceSidebarView::HasEntryDragSession() const {
+-  return drag_ && !drag_->settling;
++  // ⛔ kEntry only. UnpinnedTabContainerView and VerticalTabStripRegionView
++  // gate entry-specific behaviour on this (drop-op kMove, entry payload
++  // reads, PerformTodayDrop). URL sessions answer through the parallel
++  // HasUrlDragSession -- since M3.12-r2 Today hosts those too, but the two
++  // kinds must stay tellable apart at every reader.
++  return drag_ && drag_->kind == DragKind::kEntry && !drag_->settling;
+ }
+ 
+ bool WorkspaceSidebarView::OnTodayDragUpdate(const views::View& source,
+@@ -1542,6 +1898,9 @@ bool WorkspaceSidebarView::OnTodayDragUp
+     return false;
+   }
+   TRACE_EVENT0("ui", "WorkspaceSidebarView::OnTodayDragUpdate");
++  if (HasUrlDragSession()) {
++    KeepUrlDragSessionAlive();
++  }
+   DragPerf* const perf = drag_perf_.get();
+   const base::TimeTicks t0 = perf ? base::TimeTicks::Now() : base::TimeTicks();
+   if (perf) {
+@@ -1549,14 +1908,10 @@ bool WorkspaceSidebarView::OnTodayDragUp
+   }
+   SetTodayDragPlan(tab_index, row_position);
+   // The card is region-owned, so it keeps tracking the pointer across a
+-  // container the sidebar does not contain. Only this view knows the grab
+-  // point and the shape it should be wearing, so the conversion happens
+-  // here rather than in the container: without it the card freezes at the
+-  // sidebar's edge the moment the pointer crosses.
+-  gfx::Point point_in_sidebar = point_in_source;
+-  views::View::ConvertPointToTarget(&source, this, &point_in_sidebar);
++  // container the sidebar does not contain -- UpdateDragOverlay converts
++  // straight from the source view.
+   const base::TimeTicks t1 = perf ? base::TimeTicks::Now() : base::TimeTicks();
+-  UpdateDragOverlay(point_in_sidebar);
++  UpdateDragOverlay(source, point_in_source);
+   if (perf) {
+     const base::TimeTicks t2 = base::TimeTicks::Now();
+     perf->plan_us += (t1 - t0).InMicroseconds();
+@@ -1572,13 +1927,28 @@ void WorkspaceSidebarView::OnTodayDragEx
+   // Same contract as this view's own OnDragExited: the hole closes, the
+   // session stays. The pointer crosses this boundary mid-gesture in both
+   // directions, so tearing down here would kill the drag on the way back.
++  // For a URL session the deferred teardown decides whether this was a true
++  // exit (ESC/cancel over Today delivers only this, never OnDragDone).
+   SetTodayDragPlan(std::nullopt, 0);
++  if (HasUrlDragSession()) {
++    ScheduleUrlSessionTeardown();
++  }
+ }
+ 
+ views::View::DropCallback WorkspaceSidebarView::GetTodayDropCallback() {
+-  if (!drag_ || !drag_->plan_today_index) {
++  // |settling| for the same reason as GetDropCallback: DropHelper's cached
++  // target can still deliver a drop while the previous gesture flies home,
++  // and the plan on the session is that gesture's. (M3.12-r2 -- this guard
++  // was missing here.)
++  if (!drag_ || drag_->settling || !drag_->plan_today_index) {
+     return base::NullCallback();
+   }
++  if (drag_->kind == DragKind::kExternalUrl) {
++    KeepUrlDragSessionAlive();
++    return base::BindOnce(&WorkspaceSidebarView::PerformTodayUrlDrop,
++                          weak_factory_.GetWeakPtr(),
++                          *drag_->plan_today_index);
++  }
+   return base::BindOnce(&WorkspaceSidebarView::PerformTodayDrop,
+                         weak_factory_.GetWeakPtr(), drag_->entry_id,
+                         *drag_->plan_today_index);
+@@ -1671,6 +2041,42 @@ void WorkspaceSidebarView::PerformTodayD
+   output_drag_op = ui::mojom::DragOperation::kMove;
+ }
+ 
++void WorkspaceSidebarView::PerformTodayUrlDrop(
++    int tab_index,
++    const ui::DropTargetEvent& event,
++    ui::mojom::DragOperation& output_drag_op,
++    std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
++  output_drag_op = ui::mojom::DragOperation::kNone;
++  const std::vector<ui::ClipboardUrlInfo> urls =
++      event.data().GetURLs(ui::FilenameToURLPolicy::CONVERT_FILENAMES);
++  const std::optional<GURL> url =
++      urls.empty() ? std::nullopt
++                   : helium_workspace::NormalizeDroppedUrl(urls.front().url);
++  if (!drag_) {
++    return;
++  }
++  // Same landing order as PerformUrlDrop, owning the teardown for the same
++  // reason: the drop path skips OnDragExited and a URL session has no
++  // OnDragDone.
++  DragPerfFinish();
++  RetargetDragYield();
++  drag_->settling = true;
++  BrowserWindowInterface* const browser = GetBrowserWindow();
++  TabStripModel* const model = browser ? browser->GetTabStripModel() : nullptr;
++  if (url && browser && model) {
++    // User ruling 2026-08-30: a link dropped in Today lands AT the slot --
++    // the same interaction as the pinned rows -- and is foregrounded like
++    // the pinned URL drop. This consciously overrides `Dia:`'s measured
++    // append-at-end (g5/g6).
++    chrome::AddAndReturnTabAt(browser, *url,
++                              std::clamp(tab_index, 0, model->count()),
++                              /*foreground=*/true, /*group=*/std::nullopt,
++                              /*pinned=*/false);
++    output_drag_op = ui::mojom::DragOperation::kCopy;
++  }
++  FinishDragSettle();
++}
++
+ // ---- M3.11 entry drag: session plumbing ----
+ 
+ void WorkspaceSidebarView::AddTodayHitSample(base::TimeDelta elapsed) {
+@@ -1906,11 +2312,22 @@ void WorkspaceSidebarView::SetDragPlan(
+   if (had_today && today_container_) {
+     today_container_->InvalidateLayout();
+   }
+-  const int target_height = ComputeLayout(width(), space_collapsed_).height;
+-  if (target_height > drag_->latched_height) {
+-    // Discrete, once per plan change -- a zone crossing, not a pointer
+-    // frame -- so the container animation gets one new target, not sixty.
+-    drag_->latched_height = target_height;
++  // Discrete, once per plan change -- a zone crossing, not a pointer
++  // frame -- so the container animation gets one new target, not sixty.
++  // (The grid observation only ever fires when the grid actually grew:
++  // ComputeLayout already floors its segment on the latch.)
++  const SidebarLayout target = ComputeLayout(width(), space_collapsed_);
++  bool latch_grew = false;
++  if (target.grid_segment > drag_->latched_grid_segment) {
++    drag_->latched_grid_segment = target.grid_segment;
++    latch_grew = true;
++  }
++  const int rows_segment = target.height - target.grid_segment;
++  if (rows_segment > drag_->latched_rows_segment) {
++    drag_->latched_rows_segment = rows_segment;
++    latch_grew = true;
++  }
++  if (latch_grew) {
+     PreferredSizeChanged();
+   }
+   InvalidateLayout();
+@@ -1973,6 +2390,17 @@ void WorkspaceSidebarView::EndDragSessio
+ void WorkspaceSidebarView::FinishDragSettle() {
+   SetFolderDropTarget(false);
+   drag_.reset();
++  // M3.12-r2: land any form-flip reparent SyncEntryViews deferred while the
++  // session held the source view (see the ⛔ there). Segment-indexed, the
++  // same rule Layout applies.
++  for (size_t i = 0; i < ordered_entries_.size(); ++i) {
++    views::View* const want =
++        i < favorite_count_ ? GridHost() : static_cast<views::View*>(this);
++    if (ordered_entries_[i]->parent() != want) {
++      want->AddChildViewRaw(ordered_entries_[i].get());
++      drag_prev_layout_valid_ = false;
++    }
++  }
+   if (drag_overlay_) {
+     drag_overlay_->Stop();
+   }
+@@ -2039,24 +2467,35 @@ void WorkspaceSidebarView::ResyncHoverFr
+ 
+ gfx::Rect WorkspaceSidebarView::SettledDragTargetInOverlaySpace() {
+   gfx::Rect target;
++  bool in_band = false;
+   const std::optional<size_t> index = DragEntryOrderedIndex();
+   if (index) {
+     const SidebarLayout settled = ComputeLayout(width(), space_collapsed_);
+     if (settled.entry_visible[*index]) {
+       target = settled.entry_bounds[*index];
++      // M3.12-r2: a grid target converts through the band (its local space
++      // is the virtual grid segment); a row target through this view, whose
++      // local space is the rows segment.
++      in_band = *index < favorite_count_ && band_;
++      if (!in_band) {
++        target.Offset(0, -settled.grid_segment);
++      }
+     }
+   }
+   if (target.IsEmpty()) {
+     return target;
+   }
+   if (drag_overlay_ && drag_overlay_->parent()) {
+-    return views::View::ConvertRectToTarget(this, drag_overlay_->parent(),
++    views::View* const source =
++        in_band ? static_cast<views::View*>(band_) : this;
++    return views::View::ConvertRectToTarget(source, drag_overlay_->parent(),
+                                             target);
+   }
+   return target;
+ }
+ 
+-void WorkspaceSidebarView::UpdateDragOverlay(const gfx::Point& point_in_sidebar) {
++void WorkspaceSidebarView::UpdateDragOverlay(const views::View& source,
++                                             const gfx::Point& point_in_source) {
+   if (!drag_ || !drag_overlay_ || !drag_overlay_->active()) {
+     return;
+   }
+@@ -2064,9 +2503,9 @@ void WorkspaceSidebarView::UpdateDragOve
+     drag_->form_dirty = false;
+     RefreshDragForm();
+   }
+-  gfx::Point point = point_in_sidebar;
++  gfx::Point point = point_in_source;
+   if (drag_overlay_->parent()) {
+-    views::View::ConvertPointToTarget(this, drag_overlay_->parent(), &point);
++    views::View::ConvertPointToTarget(&source, drag_overlay_->parent(), &point);
+   }
+   drag_overlay_->SetPointer(point);
+ }
+--- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -35,6 +35,7 @@ class PrefService;
+ class Profile;
+ class TabStripModel;
+ class UnpinnedTabContainerView;
++class WorkspaceFavoritesBandView;
+ 
+ // The whole workspace sidebar: the Favorites capsule grid, the collapsible
+ // space header (which the user treats as the pinned rows' folder, M3.10),
+@@ -137,10 +138,36 @@ class WorkspaceSidebarView : public view
+   // pointer ever reaches Today, and it must survive every OnDragExited on
+   // the way across (that is why OnDragExited only closes the hole).
+   void SetTodayContainer(UnpinnedTabContainerView* container);
++  // M3.12-r2: the fixed favorites band above the pinned scroller. This view
++  // stays the brain -- it creates the grid tiles *into* the band, sets their
++  // bounds from the unified layout (band-local == virtual grid segment) and
++  // hosts the drag session the band forwards into. Passing null reparents
++  // the grid children back here (teardown order safety).
++  void SetFavoritesBand(WorkspaceFavoritesBandView* band);
++  // The band's preferred height at |width|: the unified layout's header top
++  // (grid rows or the empty-state placeholder, plus the trailing gap),
++  // floored by the in-session grid latch.
++  int BandSegmentHeight(int width) const;
++  int BandMinimumHeight() const;
++  // The band's OnDragUpdated body. Band-local coordinates are the virtual
++  // grid segment, so the plan takes the point untranslated.
++  int OnBandDragUpdated(const views::View& source,
++                        const gfx::Point& point_in_source);
+   bool IsDraggingThisEntry(const ui::OSExchangeData& data) const;
+   // Is any entry airborne right now? Asked by Today's event targeter, which
+   // has no drag data to check against.
+   bool HasEntryDragSession() const;
++  // M3.12: a link/URL drag from outside is parked in the same session.
++  bool HasUrlDragSession() const;
++  // M3.12-r2: Today (and the favorites band) host URL drags too. They call
++  // this from OnDragEntered -- it starts the session if none exists (same
++  // |drag_| discipline as the sidebar's own OnDragEntered) and otherwise
++  // cancels any teardown in flight.
++  void EnsureUrlDragSession();
++  // A URL session has no OnDragDone; it ends via a deferred teardown that
++  // every touch from one of our own drop targets cancels. Cheap (an int
++  // bump), called per drag frame.
++  void KeepUrlDragSessionAlive();
+ 
+   // ---- 轮3-r4 drag instrument (off unless --helium-drag-perf) ----
+   // Whether the timers are armed at all, so callers can skip the clock reads.
+@@ -226,8 +253,15 @@ class WorkspaceSidebarView : public view
+     gfx::Rect header_bounds;
+     bool placeholder_visible = false;
+     // M3.11: while a drag is on, the one empty slot the floating entry
+-    // would land in (sidebar coordinates). Empty when no plan is active.
++    // would land in (virtual coordinates). Empty when no plan is active.
+     gfx::Rect drag_slot_bounds;
++    // M3.12-r2: where the fixed favorites band ends and the scrolled rows
++    // segment begins, in the unified "virtual" space this whole struct is
++    // expressed in (grid at y=0). Always the *target* value, even in a
++    // blend: TabStripView sizes the band with it, and offsetting the rows
++    // by the same constant is what keeps screen positions continuous when
++    // the grid grows mid-glide.
++    int grid_segment = 0;
+   };
+ 
+   // Resolves the browser this sidebar belongs to; only valid once the widget
+@@ -270,7 +304,19 @@ class WorkspaceSidebarView : public view
+   // of which the framework guarantees (drop, ESC and capture loss alike) --
+   // the session must NOT be torn down from OnDragExited, which also fires
+   // every time the pointer crosses into the Today container.
++  // M3.12: the same session serves two kinds of drag. kExternalUrl has no
++  // entry_id, no floating card (the OS draws the link's own drag image, and
++  // a source outside this process is not ours to replace) and no
++  // OnDragDone -- it is torn down by the drop callback or by OnDragExited,
++  // both of which views guarantees (drop_helper.cc:98-135). Everything else
++  // -- the frozen zone boundary, the preview slot, the latched height, the
++  // passive full-grid refusal -- is shared, because UpdateDragPlan's entry
++  // arithmetic already degenerates to exactly the URL case when nothing is
++  // being lifted out of the list.
++  enum class DragKind { kEntry, kExternalUrl };
++
+   struct DragState {
++    DragKind kind = DragKind::kEntry;
+     std::string entry_id;
+     bool from_favorite = false;
+     // Preview target; nullopt = pointer is nowhere the entry may land
+@@ -285,9 +331,16 @@ class WorkspaceSidebarView : public view
+     // Today rows, which is what the empty slot needs.
+     std::optional<int> plan_today_index;
+     size_t plan_today_row = 0;
+-    // Grow-only preferred height for the whole session, so per-frame drop
+-    // feedback can never feed the 200ms container animation (M3.10-r2).
+-    int latched_height = 0;
++    // M3.12-r2: the grow-only latch, split per segment now that the grid
++    // and the rows live in two hosts. Same philosophy as the old single
++    // latched height (per-frame drop feedback must never feed the 200ms
++    // container animation, M3.10-r2), with one extra duty each: the grid
++    // latch keeps the fixed band from shrinking mid-gesture (ComputeLayout
++    // floors the header top on it, padding the gap), and the rows latch
++    // keeps the scroller from jumping when the hole moves from the rows
++    // into the grid.
++    int latched_grid_segment = 0;
++    int latched_rows_segment = 0;
+     // Where the grid stops and the rows begin, frozen at pick-up. It cannot
+     // be read off the live layout: entering the grid replaces the 108pt
+     // empty-state with one 44pt slot, which pulls the header up past the
+@@ -361,11 +414,26 @@ class WorkspaceSidebarView : public view
+   // Drops the highlight from any row the pointer is not actually on. Never
+   // adds one -- see the definition for why that direction is unsafe here.
+   void ClearStaleHovers();
++  // M3.12-r2 grid-band plumbing: which host grid children live in, moving a
++  // view there, and lifting a point from this view's (rows-segment) space
++  // into the unified virtual space.
++  views::View* GridHost();
++  void ReparentToGridHost(views::View* view);
++  gfx::Point ToVirtual(const gfx::Point& point_in_this) const;
++  // Shared body of this view's and the band's OnDragUpdated.
++  int HandleHostedDragUpdate(const views::View& source,
++                             const gfx::Point& point_in_source,
++                             const gfx::Point& virtual_point);
+   // Where the dragged entry's row sits in the settled layout, in the
+   // overlay's coordinates.
+   gfx::Rect SettledDragTargetInOverlaySpace();
+-  // Pushes a pointer position and the planned shape onto the overlay.
+-  void UpdateDragOverlay(const gfx::Point& point_in_sidebar);
++  // Pushes a pointer position and the planned shape onto the overlay. Takes
++  // the source view so the conversion into the region-owned overlay is
++  // physically exact no matter which host (band, this view, Today) the
++  // pointer is over -- M3.12-r2, when the grid segment left this view's
++  // coordinate space.
++  void UpdateDragOverlay(const views::View& source,
++                         const gfx::Point& point_in_source);
+   // The shape the card should wear, asked of the layout. Only run when the
+   // plan moved (DragState::form_dirty), never per pointer frame.
+   void RefreshDragForm();
+@@ -381,6 +449,33 @@ class WorkspaceSidebarView : public view
+                         ui::mojom::DragOperation& output_drag_op,
+                         std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
+ 
++  // ---- M3.12 external URL drop ----
++  // Opens a kExternalUrl session, freezing the same settled geometry
++  // OnWillStartDragForView freezes for entry drags.
++  void StartUrlDragSession();
++  // The drop: AddEntry (which appends) then MoveEntry to the planned slot,
++  // then open it. `Dia:` (2026-08-26) creates the entry *and* activates it,
++  // which is also where its favicon and title come from -- ours arrive the
++  // same way, through the bind that OpenEntry performs.
++  void PerformUrlDrop(helium_workspace::WorkspaceEntry::Section section,
++                      size_t index,
++                      const ui::DropTargetEvent& event,
++                      ui::mojom::DragOperation& output_drag_op,
++                      std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
++  // M3.12-r2: posts a generation-counted task that ends the URL session
++  // unless something bumped the generation first. Crossings between our own
++  // targets are exit→enter within one native callback (drop_helper.cc), so
++  // no task can interleave; only a true exit lets the task fire.
++  void ScheduleUrlSessionTeardown();
++  // M3.12-r2: the Today half of a URL drop -- a new tab AT the slot,
++  // foregrounded (user ruling 2026-08-30, overriding `Dia:`'s measured
++  // append-at-end). Owns its teardown like PerformUrlDrop.
++  void PerformTodayUrlDrop(
++      int tab_index,
++      const ui::DropTargetEvent& event,
++      ui::mojom::DragOperation& output_drag_op,
++      std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
++
+   // ---- M3.11 轮3 cross-boundary ----
+   // Swaps the sidebar plan for a Today plan (or back). Goes through the same
+   // snapshot-then-glide path as SetDragPlan so the rows on both sides move
+@@ -447,6 +542,12 @@ class WorkspaceSidebarView : public view
+   // 轮3: the Today container, injected by the region view alongside the
+   // overlay. Only ever used to ask it to re-lay-out when the slot moves.
+   raw_ptr<UnpinnedTabContainerView> today_container_ = nullptr;
++  // M3.12-r2: the fixed band hosting the grid tiles + placeholder, or null
++  // before TabStripView wires it (tiles then live here, as before).
++  raw_ptr<WorkspaceFavoritesBandView> band_ = nullptr;
++  // The split TabStripView last applied (= SidebarLayout::grid_segment).
++  // Cached so per-frame drop conversions never pay a ComputeLayout.
++  int grid_segment_ = 0;
+   // 轮3-r1: the entry that was dropped into the folder while it was
+   // collapsed. `Arc:` does not open the folder for it -- it leaves the
+   // folder shut and shows *only the thing you just dropped* underneath
+@@ -473,6 +574,10 @@ class WorkspaceSidebarView : public view
+   gfx::SlideAnimation drag_yield_animation_{this};
+   SidebarLayout drag_prev_layout_;
+   bool drag_prev_layout_valid_ = false;
++  // M3.12-r2: the deferred URL-session teardown's liveness token. Bumped by
++  // every touch from one of our drop targets; a scheduled teardown only
++  // fires if it still holds the value it was posted with.
++  uint64_t url_teardown_generation_ = 0;
+ 
+   base::WeakPtrFactory<WorkspaceSidebarView> weak_factory_{this};
+ };
