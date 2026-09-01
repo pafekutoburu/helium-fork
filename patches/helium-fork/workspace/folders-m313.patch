@@ -1,0 +1,3950 @@
+--- a/chrome/app/chrome_command_ids.h
++++ b/chrome/app/chrome_command_ids.h
+@@ -124,6 +124,8 @@
+ #define IDC_HELIUM_ADDRESS_BAR_DOCKED   34094
+ #define IDC_HELIUM_ADDRESS_BAR_HIDDEN   34095
+ #define IDC_HELIUM_ADDRESS_BAR_AUTO     34096
++// helium-fork M3.13: a new sidebar folder, from the window menu.
++#define IDC_HELIUM_WS_NEW_FOLDER        34097
+ 
+ // Tab group Commands
+ #define IDC_ADD_NEW_TAB_TO_GROUP      34100
+--- a/chrome/app/generated_resources.grd
++++ b/chrome/app/generated_resources.grd
+@@ -1982,6 +1982,9 @@ are declared in tools/grit/grit_args.gni
+       <message name="IDS_HELIUM_CLOSE_UNPINNED_TABS" desc="Window menu item that closes every tab in the sidebar that is not a saved sidebar entry.">
+         Close Unpinned Tabs
+       </message>
++      <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_FOLDER" desc="Command name shown on the Settings shortcuts page for creating a new folder among the pinned entries of the sidebar.">
++        New sidebar folder
++      </message>
+       <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
+         Toggle developer tools
+       </message>
+@@ -12226,6 +12229,27 @@ Check your passwords anytime in <ph name
+         <message name="IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL" desc="Hint under a pinned sidebar entry's title (and its context menu item) while the pointer is on its favicon and the tab has navigated away from the URL it was pinned at: clicking takes the tab back to that URL.">
+           Back to Pinned URL
+         </message>
++        <message name="IDS_HELIUM_WS_NEW_FOLDER" desc="The label of the window menu item that creates a new folder among the pinned entries of the vertical tab sidebar.">
++          New Folder
++        </message>
++        <message name="IDS_HELIUM_WS_FOLDER_MENU_RENAME" desc="The label of the context menu item on a sidebar folder row that starts renaming the folder in place.">
++          Rename…
++        </message>
++        <message name="IDS_HELIUM_WS_FOLDER_MENU_DELETE" desc="The label of the context menu item on a sidebar folder row that deletes the folder together with the entries inside it.">
++          Delete
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_FOLDER_TITLE" desc="Title of the confirmation dialog shown before deleting a sidebar folder that still has entries inside it.">
++          Delete your “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>” folder?
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_FOLDER_BODY" desc="Body of the confirmation dialog shown before deleting a sidebar folder that still has entries inside it: the folder's entries are removed and their open tabs closed, with a brief Undo offered afterwards.">
++          Deleting this folder closes and removes the tabs inside it. You can undo for a few seconds afterwards.
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_FOLDER_CONFIRM" desc="The confirming button of the delete-folder dialog.">
++          Delete Folder
++        </message>
++        <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
++          Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
+         </message>
+@@ -12381,6 +12405,27 @@ Check your passwords anytime in <ph name
+         <message name="IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL" desc="In Title Case: Hint under a pinned sidebar entry's title (and its context menu item) while the pointer is on its favicon and the tab has navigated away from the URL it was pinned at: clicking takes the tab back to that URL.">
+           Back to Pinned URL
+         </message>
++        <message name="IDS_HELIUM_WS_NEW_FOLDER" desc="In Title Case: The label of the window menu item that creates a new folder among the pinned entries of the vertical tab sidebar.">
++          New Folder
++        </message>
++        <message name="IDS_HELIUM_WS_FOLDER_MENU_RENAME" desc="In Title Case: The label of the context menu item on a sidebar folder row that starts renaming the folder in place.">
++          Rename…
++        </message>
++        <message name="IDS_HELIUM_WS_FOLDER_MENU_DELETE" desc="In Title Case: The label of the context menu item on a sidebar folder row that deletes the folder together with the entries inside it.">
++          Delete
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_FOLDER_TITLE" desc="In Title Case: Title of the confirmation dialog shown before deleting a sidebar folder that still has entries inside it.">
++          Delete Your “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>” Folder?
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_FOLDER_BODY" desc="In Title Case: Body of the confirmation dialog shown before deleting a sidebar folder that still has entries inside it: the folder's entries are removed and their open tabs closed, with a brief Undo offered afterwards.">
++          Deleting this folder closes and removes the tabs inside it. You can undo for a few seconds afterwards.
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_FOLDER_CONFIRM" desc="In Title Case: The confirming button of the delete-folder dialog.">
++          Delete Folder
++        </message>
++        <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="In Title Case: Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
++          Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="In Title Case: The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute Site} other {Mute Sites}}
+         </message>
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -1517,6 +1517,13 @@ void BrowserCommandController::HandleCom
+       }
+       break;
+     }
++    case IDC_HELIUM_WS_NEW_FOLDER: {
++      if (auto* workspace_controller =
++              helium_workspace::WorkspaceTabController::From(browser_)) {
++        workspace_controller->NewFolderFromMenu();
++      }
++      break;
++    }
+     // Hosted App commands
+     case IDC_COPY_URL:
+       CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
+@@ -2074,6 +2081,8 @@ void BrowserCommandController::InitComma
+                                          normal_window);
+   command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS,
+                                          normal_window);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_NEW_FOLDER,
++                                         normal_window);
+   command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
+ 
+   // Safety Hub commands.
+--- a/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
++++ b/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+@@ -215,6 +215,8 @@ std::optional<BrowserShortcutCommandLabe
+       return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_TOGGLE_PIN);
+     case IDC_HELIUM_WS_CLOSE_UNPINNED_TABS:
+       return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_CLOSE_UNPINNED_TABS);
++    case IDC_HELIUM_WS_NEW_FOLDER:
++      return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_FOLDER);
+     case IDC_CARET_BROWSING_TOGGLE:
+       return Label(IDS_SETTINGS_ENABLE_CARET_BROWSING_TITLE);
+     case IDC_CLEAR_BROWSING_DATA:
+@@ -269,6 +271,9 @@ std::vector<int> GetBrowserShortcutComma
+   // never reach defaults_, and AssignAcceleratorToCommand() would answer
+   // kUnknownCommand.
+   commands.push_back(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS);
++  // helium-fork M3.13: same story -- New Folder ships unbound, and being
++  // listed here is what makes it bindable on the shortcuts page at all.
++  commands.push_back(IDC_HELIUM_WS_NEW_FOLDER);
+   return commands;
+ }
+ 
+--- a/chrome/browser/ui/helium_workspace/workspace_entry.cc
++++ b/chrome/browser/ui/helium_workspace/workspace_entry.cc
+@@ -14,9 +14,12 @@ namespace {
+ constexpr char kKeyId[] = "id";
+ constexpr char kKeySpaceId[] = "space_id";
+ constexpr char kKeySection[] = "section";
++constexpr char kKeyKind[] = "kind";
+ constexpr char kKeyUrl[] = "url";
+ constexpr char kKeyTitle[] = "title";
+ constexpr char kKeyPosition[] = "position";
++constexpr char kKeyFolderId[] = "folder_id";
++constexpr char kKeyCollapsed[] = "collapsed";
+ constexpr char kKeyFavicon[] = "favicon";
+ constexpr char kKeyVersion[] = "version";
+ 
+@@ -35,6 +38,17 @@ base::DictValue WorkspaceEntry::ToValue(
+   dict.Set(kKeyUrl, url.spec());
+   dict.Set(kKeyTitle, title);
+   dict.Set(kKeyPosition, position);
++  // The folder keys are written only when non-default so that a folderless
++  // profile's pref stays byte-identical to what pre-M3.13 builds wrote.
++  if (kind != Kind::kSite) {
++    dict.Set(kKeyKind, static_cast<int>(kind));
++  }
++  if (!folder_id.empty()) {
++    dict.Set(kKeyFolderId, folder_id);
++  }
++  if (collapsed) {
++    dict.Set(kKeyCollapsed, true);
++  }
+   if (!favicon_png.empty()) {
+     dict.Set(kKeyFavicon, base::Base64Encode(favicon_png));
+   }
+@@ -50,15 +64,6 @@ std::optional<WorkspaceEntry> WorkspaceE
+     return std::nullopt;
+   }
+ 
+-  const std::string* url_string = dict.FindString(kKeyUrl);
+-  if (!url_string) {
+-    return std::nullopt;
+-  }
+-  GURL url(*url_string);
+-  if (!url.is_valid()) {
+-    return std::nullopt;
+-  }
+-
+   const std::optional<int> section = dict.FindInt(kKeySection);
+   if (!section ||
+       *section < static_cast<int>(Section::kFavorite) ||
+@@ -66,10 +71,33 @@ std::optional<WorkspaceEntry> WorkspaceE
+     return std::nullopt;
+   }
+ 
++  // Same policy as an out-of-range section: an unknown kind is some future
++  // feature's data, and pretending it is a site would only produce a broken
++  // row (its URL would fail below anyway). Drop the entry.
++  const int kind = dict.FindInt(kKeyKind).value_or(0);
++  if (kind < static_cast<int>(Kind::kSite) ||
++      kind > static_cast<int>(Kind::kFolder)) {
++    return std::nullopt;
++  }
++
++  // Sites require a valid URL; folders carry none.
++  GURL url;
++  if (kind == static_cast<int>(Kind::kSite)) {
++    const std::string* url_string = dict.FindString(kKeyUrl);
++    if (!url_string) {
++      return std::nullopt;
++    }
++    url = GURL(*url_string);
++    if (!url.is_valid()) {
++      return std::nullopt;
++    }
++  }
++
+   WorkspaceEntry entry;
+   entry.id = *id;
+   entry.url = std::move(url);
+   entry.section = static_cast<Section>(*section);
++  entry.kind = static_cast<Kind>(kind);
+ 
+   if (const std::string* space_id = dict.FindString(kKeySpaceId);
+       space_id && !space_id->empty()) {
+@@ -79,6 +107,19 @@ std::optional<WorkspaceEntry> WorkspaceE
+     entry.title = base::UTF8ToUTF16(*title);
+   }
+   entry.position = dict.FindInt(kKeyPosition).value_or(0);
++  // M3.13 v1 is one level deep: folders never live inside folders (a nested
++  // one from some future build flattens to top level), and only pinned sites
++  // can be children — a favorite with a folder_id lost its folder semantics
++  // when it was promoted, so drop the stale link rather than the entry.
++  if (entry.kind == Kind::kSite &&
++      entry.section == Section::kPinned) {
++    if (const std::string* folder_id = dict.FindString(kKeyFolderId)) {
++      entry.folder_id = *folder_id;
++    }
++  }
++  if (entry.is_folder()) {
++    entry.collapsed = dict.FindBool(kKeyCollapsed).value_or(false);
++  }
+   // A corrupt icon is not worth rejecting the entry over — drop it and let
+   // the view fall back to the favicon service.
+   if (const std::string* favicon = dict.FindString(kKeyFavicon)) {
+--- a/chrome/browser/ui/helium_workspace/workspace_entry.h
++++ b/chrome/browser/ui/helium_workspace/workspace_entry.h
+@@ -25,6 +25,17 @@ struct WorkspaceEntry {
+     kPinned = 1,
+   };
+ 
++  // Values are persisted; do not renumber. Kept additive on purpose: an old
++  // build reading a folder entry sees an unknown "kind" key (ignored) and a
++  // missing URL, rejects that one entry, and keeps the children as ordinary
++  // top-level rows — graceful degradation instead of silent data loss, which
++  // is why folders are NOT a third Section value (FromValue drops entries
++  // with an out-of-range section wholesale).
++  enum class Kind {
++    kSite = 0,
++    kFolder = 1,
++  };
++
+   WorkspaceEntry();
+   WorkspaceEntry(const WorkspaceEntry&);
+   WorkspaceEntry& operator=(const WorkspaceEntry&);
+@@ -36,17 +47,29 @@ struct WorkspaceEntry {
+ 
+   base::DictValue ToValue() const;
+ 
+-  // Returns std::nullopt for missing/invalid required fields (id, url,
+-  // section). Unknown fields are ignored; missing optional fields get
+-  // defaults.
++  // Returns std::nullopt for missing/invalid required fields (id, section;
++  // url for sites — folders carry none). Unknown fields are ignored; missing
++  // optional fields get defaults.
+   static std::optional<WorkspaceEntry> FromValue(const base::DictValue& dict);
+ 
++  bool is_folder() const { return kind == Kind::kFolder; }
++
+   std::string id;                  // UUID, primary key.
+   std::string space_id = "default";  // Reserved for v2 Spaces.
+   Section section = Section::kPinned;
+-  GURL url;                        // Original pinned URL (reset target).
++  Kind kind = Kind::kSite;
++  GURL url;  // Original pinned URL (reset target). Empty for folders.
+   std::u16string title;
+-  int position = 0;                // Sort key within its section.
++  // Sort key within its scope: for a top-level entry, among the section's
++  // top-level entries; for a folder child, among that folder's children.
++  // With zero folders this is exactly the old "within its section" meaning.
++  int position = 0;
++  // Id of the folder entry this one lives in; empty = top level. Only sites
++  // in kPinned may have one (M3.13 v1: one level, no nesting — folders are
++  // always top level, and FromValue flattens anything else).
++  std::string folder_id;
++  // Folder-only: drawn collapsed. Sites ignore it.
++  bool collapsed = false;
+   // Raw PNG bytes of the entry's favicon, base64-encoded in the pref. The
+   // sidebar draws entries that have no tab, so without a stored icon a cold
+   // start would show nothing but placeholders until something is clicked.
+--- a/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
++++ b/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
+@@ -133,6 +133,85 @@ TEST(WorkspaceEntryTest, UnknownFieldsIg
+   EXPECT_TRUE(WorkspaceEntry::FromValue(dict).has_value());
+ }
+ 
++WorkspaceEntry MakeFolder() {
++  WorkspaceEntry entry;
++  entry.id = "f01dercafe-0000-4000-8000-000000000001";
++  entry.section = WorkspaceEntry::Section::kPinned;
++  entry.kind = WorkspaceEntry::Kind::kFolder;
++  entry.title = u"Untitled";
++  entry.position = 5;
++  entry.collapsed = true;
++  return entry;
++}
++
++TEST(WorkspaceEntryTest, FolderRoundTripsWithoutUrl) {
++  const WorkspaceEntry original = MakeFolder();
++  const std::optional<WorkspaceEntry> decoded =
++      WorkspaceEntry::FromValue(original.ToValue());
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_TRUE(decoded->is_folder());
++  EXPECT_TRUE(decoded->url.is_empty());
++  EXPECT_EQ(decoded->title, original.title);
++  EXPECT_EQ(decoded->position, original.position);
++  EXPECT_TRUE(decoded->collapsed);
++}
++
++TEST(WorkspaceEntryTest, FolderKeysAbsentFromSiteEntries) {
++  // A folderless profile's pref must stay byte-identical to what pre-M3.13
++  // builds wrote: no kind/folder_id/collapsed keys on plain sites.
++  const base::DictValue dict = MakeEntry().ToValue();
++  EXPECT_FALSE(dict.contains("kind"));
++  EXPECT_FALSE(dict.contains("folder_id"));
++  EXPECT_FALSE(dict.contains("collapsed"));
++}
++
++TEST(WorkspaceEntryTest, ChildFolderIdRoundTripsForPinnedSitesOnly) {
++  WorkspaceEntry child = MakeEntry();
++  child.section = WorkspaceEntry::Section::kPinned;
++  child.folder_id = "f01der";
++  const std::optional<WorkspaceEntry> decoded =
++      WorkspaceEntry::FromValue(child.ToValue());
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ(decoded->folder_id, "f01der");
++
++  // A favorite lost its folder semantics when it was promoted; a stale link
++  // is dropped on load rather than the entry.
++  WorkspaceEntry favorite = MakeEntry();
++  favorite.section = WorkspaceEntry::Section::kFavorite;
++  base::DictValue dict = favorite.ToValue();
++  dict.Set("folder_id", "f01der");
++  const std::optional<WorkspaceEntry> decoded_favorite =
++      WorkspaceEntry::FromValue(dict);
++  ASSERT_TRUE(decoded_favorite.has_value());
++  EXPECT_TRUE(decoded_favorite->folder_id.empty());
++}
++
++TEST(WorkspaceEntryTest, NestedFolderFlattensOnLoad) {
++  // v1 is one level deep: a folder that some future build parented into
++  // another folder loads as a top-level folder, not as a reject.
++  base::DictValue dict = MakeFolder().ToValue();
++  dict.Set("folder_id", "some-other-folder");
++  const std::optional<WorkspaceEntry> decoded =
++      WorkspaceEntry::FromValue(dict);
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_TRUE(decoded->is_folder());
++  EXPECT_TRUE(decoded->folder_id.empty());
++}
++
++TEST(WorkspaceEntryTest, UnknownKindRejectedSiteUrlStillRequired) {
++  // An out-of-range kind is some future feature's data — same policy as an
++  // out-of-range section: drop the entry, keep the rest of the list.
++  base::DictValue future = MakeEntry().ToValue();
++  future.Set("kind", 42);
++  EXPECT_FALSE(WorkspaceEntry::FromValue(future).has_value());
++
++  // Relaxing the URL requirement for folders must not have relaxed it for
++  // sites.
++  base::DictValue site = MakeEntry().ToValue();
++  site.Set("url", "not a url");
++  EXPECT_FALSE(WorkspaceEntry::FromValue(site).has_value());
++}
++
+ // Expands a plan into the per-row column counts for readability.
+ std::vector<int> RowsFor(int count, int per_row_max = 4) {
+   const FavoritesGridPlan plan = PlanFavoritesGrid(count, per_row_max);
+--- a/chrome/browser/ui/helium_workspace/workspace_service.cc
++++ b/chrome/browser/ui/helium_workspace/workspace_service.cc
+@@ -24,14 +24,6 @@ namespace {
+ // rewritten in full every time.
+ constexpr base::TimeDelta kPersistDebounce = base::Seconds(2);
+ 
+-// Entries sort favorites-first, then by position.
+-bool EntryOrderLess(const WorkspaceEntry& a, const WorkspaceEntry& b) {
+-  if (a.section != b.section) {
+-    return a.section == WorkspaceEntry::Section::kFavorite;
+-  }
+-  return a.position < b.position;
+-}
+-
+ }  // namespace
+ 
+ WorkspaceService::WorkspaceService(PrefService* prefs) : prefs_(prefs) {
+@@ -94,16 +86,23 @@ std::string WorkspaceService::AddEntry(W
+   entry.section = section;
+   entry.url = url;
+   entry.title = title;
+-  entry.position = NextPosition(section);
++  entry.position = NextTopLevelPosition(section);
+   const std::string id = entry.id;
+   entries_.push_back(std::move(entry));
+-  std::stable_sort(entries_.begin(), entries_.end(), EntryOrderLess);
++  SortEntries();
+   PersistToPrefs();
+   NotifyChanged();
+   return id;
+ }
+ 
+ bool WorkspaceService::RemoveEntry(const std::string& id) {
++  // Removing a folder through the generic path cascades too — leaving
++  // children with a dangling folder_id would silently flatten them on the
++  // next load, which is data corruption wearing a seatbelt.
++  if (const WorkspaceEntry* entry = FindEntryById(id);
++      entry && entry->is_folder()) {
++    return !RemoveFolderAndChildren(id).empty();
++  }
+   const size_t erased = std::erase_if(
+       entries_, [&](const WorkspaceEntry& e) { return e.id == id; });
+   if (!erased) {
+@@ -176,12 +175,14 @@ bool WorkspaceService::SetEntrySection(c
+       return true;
+     }
+     if (section == WorkspaceEntry::Section::kFavorite &&
+-        CountFavorites() >= kMaxFavorites) {
++        (entry.is_folder() || CountFavorites() >= kMaxFavorites)) {
++      // The grid holds tiles, not folders (Arc rejects this too, 轮0).
+       return false;
+     }
+     entry.section = section;
+-    entry.position = NextPosition(section);
+-    std::stable_sort(entries_.begin(), entries_.end(), EntryOrderLess);
++    entry.folder_id.clear();  // leaving the pinned area leaves the folder
++    entry.position = NextTopLevelPosition(section);
++    SortEntries();
+     PersistToPrefs();
+     NotifyChanged();
+     return true;
+@@ -198,38 +199,45 @@ bool WorkspaceService::MoveEntry(const s
+     return false;
+   }
+   if (target_section == WorkspaceEntry::Section::kFavorite &&
+-      source->section != WorkspaceEntry::Section::kFavorite &&
+-      CountFavorites() >= kMaxFavorites) {
++      (source->is_folder() ||
++       (source->section != WorkspaceEntry::Section::kFavorite &&
++        CountFavorites() >= kMaxFavorites))) {
++    // Folders never enter the grid (Arc rejects this too, 轮0).
+     return false;
+   }
+ 
+   WorkspaceEntry moved = std::move(*source);
+   entries_.erase(source);
+   moved.section = target_section;
+-
+-  // entries_ is kept sorted favorites-first, so the target section is one
+-  // contiguous run; clamp |target_index| into it and splice the entry in.
+-  const size_t favorites = CountFavorites();
+-  const size_t run_begin =
+-      target_section == WorkspaceEntry::Section::kFavorite ? 0u : favorites;
+-  const size_t run_size =
+-      target_section == WorkspaceEntry::Section::kFavorite
+-          ? favorites
+-          : entries_.size() - favorites;
+-  const size_t insert_at = run_begin + std::min(target_index, run_size);
+-  entries_.insert(entries_.begin() + insert_at, std::move(moved));
+-
+-  // Renumber both sections densely. A dense numbering has no room between
+-  // neighbours, so an insert renumbers everyone; the pref is rewritten in
+-  // full on every persist anyway.
+-  int favorite_position = 0;
+-  int pinned_position = 0;
++  // This API places at the TOP LEVEL of the target section (the index
++  // contract predates folders and every existing caller means exactly
++  // that); a child moved this way leaves its folder. Into-folder moves are
++  // MoveEntryToFolder()'s business.
++  moved.folder_id.clear();
++
++  // |target_index| counts the target section's top-level entries with the
++  // moved one already removed. Open a gap at the clamped slot by renumbering
++  // that scope around it, drop the moved entry into the gap, then sort and
++  // renumber every scope densely (the pref is rewritten in full anyway).
++  std::vector<WorkspaceEntry*> scope;
+   for (WorkspaceEntry& entry : entries_) {
+-    entry.position = entry.section == WorkspaceEntry::Section::kFavorite
+-                         ? favorite_position++
+-                         : pinned_position++;
++    if (entry.section == target_section && entry.folder_id.empty()) {
++      scope.push_back(&entry);
++    }
+   }
+-  std::stable_sort(entries_.begin(), entries_.end(), EntryOrderLess);
++  const size_t slot = std::min(target_index, scope.size());
++  int scope_position = 0;
++  for (size_t i = 0; i < scope.size(); ++i) {
++    if (i == slot) {
++      ++scope_position;
++    }
++    scope[i]->position = scope_position++;
++  }
++  moved.position = static_cast<int>(slot);
++  entries_.push_back(std::move(moved));
++
++  SortEntries();
++  RenumberScopes();
+   PersistToPrefs();
+   NotifyChanged();
+   return true;
+@@ -241,6 +249,135 @@ size_t WorkspaceService::CountFavorites(
+   });
+ }
+ 
++std::string WorkspaceService::AddFolder(const std::u16string& title) {
++  WorkspaceEntry entry;
++  entry.id = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  entry.section = WorkspaceEntry::Section::kPinned;
++  entry.kind = WorkspaceEntry::Kind::kFolder;
++  entry.title = title;
++  entry.position = NextTopLevelPosition(WorkspaceEntry::Section::kPinned);
++  const std::string id = entry.id;
++  entries_.push_back(std::move(entry));
++  SortEntries();
++  PersistToPrefs();
++  NotifyChanged();
++  return id;
++}
++
++bool WorkspaceService::SetFolderCollapsed(const std::string& id,
++                                          bool collapsed) {
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.id != id) {
++      continue;
++    }
++    if (!entry.is_folder()) {
++      return false;
++    }
++    if (entry.collapsed == collapsed) {
++      return true;
++    }
++    entry.collapsed = collapsed;
++    PersistToPrefs();
++    NotifyChanged();
++    return true;
++  }
++  return false;
++}
++
++std::vector<WorkspaceEntry> WorkspaceService::RemoveFolderAndChildren(
++    const std::string& id) {
++  const WorkspaceEntry* folder = FindEntryById(id);
++  if (!folder || !folder->is_folder()) {
++    return {};
++  }
++  // entries_ is kept in display order, so one pass yields "folder first,
++  // children after" for free.
++  std::vector<WorkspaceEntry> removed;
++  for (const WorkspaceEntry& entry : entries_) {
++    if (entry.id == id || entry.folder_id == id) {
++      removed.push_back(entry);
++    }
++  }
++  std::erase_if(entries_, [&](const WorkspaceEntry& e) {
++    return e.id == id || e.folder_id == id;
++  });
++  for (const WorkspaceEntry& entry : removed) {
++    std::erase_if(tab_to_entry_, [&](const auto& pair) {
++      return pair.second == entry.id;
++    });
++  }
++  // No renumber on purpose: the vacated positions are what make an undo's
++  // RestoreEntries() land everything back in its exact slot.
++  PersistToPrefs();
++  NotifyChanged();
++  return removed;
++}
++
++bool WorkspaceService::RestoreEntries(
++    const std::vector<WorkspaceEntry>& snapshot) {
++  if (snapshot.empty()) {
++    return false;
++  }
++  for (const WorkspaceEntry& entry : snapshot) {
++    if (FindEntryById(entry.id)) {
++      return false;
++    }
++  }
++  for (const WorkspaceEntry& entry : snapshot) {
++    entries_.push_back(entry);
++  }
++  SortEntries();
++  PersistToPrefs();
++  NotifyChanged();
++  return true;
++}
++
++bool WorkspaceService::MoveEntryToFolder(const std::string& id,
++                                         const std::string& folder_id,
++                                         size_t target_index) {
++  if (folder_id.empty()) {
++    return MoveEntry(id, WorkspaceEntry::Section::kPinned, target_index);
++  }
++  const auto source = std::ranges::find_if(
++      entries_, [&](const WorkspaceEntry& e) { return e.id == id; });
++  if (source == entries_.end() || source->is_folder()) {
++    return false;  // unknown id, or no nesting
++  }
++  const WorkspaceEntry* folder = FindEntryById(folder_id);
++  if (!folder || !folder->is_folder()) {
++    return false;
++  }
++
++  WorkspaceEntry moved = std::move(*source);
++  entries_.erase(source);
++  moved.section = WorkspaceEntry::Section::kPinned;
++  moved.folder_id = folder_id;
++
++  // Same gap-at-slot technique as MoveEntry, over the folder's children.
++  std::vector<WorkspaceEntry*> scope;
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.folder_id == folder_id) {
++      scope.push_back(&entry);
++    }
++  }
++  const size_t slot = std::min(target_index, scope.size());
++  int scope_position = 0;
++  for (size_t i = 0; i < scope.size(); ++i) {
++    if (i == slot) {
++      ++scope_position;
++    }
++    scope[i]->position = scope_position++;
++  }
++  moved.position = static_cast<int>(slot);
++  entries_.push_back(std::move(moved));
++
++  SortEntries();
++  RenumberScopes();
++  PersistToPrefs();
++  NotifyChanged();
++  return true;
++}
++
+ void WorkspaceService::BindTab(tabs::TabHandle handle,
+                                const std::string& entry_id) {
+   const auto it = tab_to_entry_.find(handle);
+@@ -353,7 +490,20 @@ void WorkspaceService::LoadFromPrefs() {
+       entries_.push_back(std::move(*entry));
+     }
+   }
+-  std::stable_sort(entries_.begin(), entries_.end(), EntryOrderLess);
++  // A child whose folder entry didn't survive the load (rejected, or written
++  // by a newer build) flattens to the top level instead of dangling.
++  std::set<std::string> folder_ids;
++  for (const WorkspaceEntry& entry : entries_) {
++    if (entry.is_folder()) {
++      folder_ids.insert(entry.id);
++    }
++  }
++  for (WorkspaceEntry& entry : entries_) {
++    if (!entry.folder_id.empty() && !folder_ids.contains(entry.folder_id)) {
++      entry.folder_id.clear();
++    }
++  }
++  SortEntries();
+ }
+ 
+ void WorkspaceService::PersistToPrefs() {
+@@ -387,10 +537,63 @@ void WorkspaceService::NotifyBindingsCha
+   }
+ }
+ 
+-int WorkspaceService::NextPosition(WorkspaceEntry::Section section) const {
++void WorkspaceService::SortEntries() {
++  // Favorites first (by position). Within pinned: top-level entries by
++  // position; a folder's children sort by their folder's top position and
++  // ride right behind it, ordered among themselves by their own position.
++  // A child whose folder is gone sorts as if top level — LoadFromPrefs also
++  // clears such links, this is just the same defense inside one sort.
++  std::map<std::string, int> folder_top_position;
++  for (const WorkspaceEntry& entry : entries_) {
++    if (entry.is_folder()) {
++      folder_top_position[entry.id] = entry.position;
++    }
++  }
++  auto sort_key = [&](const WorkspaceEntry& e) {
++    const bool pinned = e.section == WorkspaceEntry::Section::kPinned;
++    const auto folder = folder_top_position.find(e.folder_id);
++    const bool child =
++        pinned && !e.folder_id.empty() && folder != folder_top_position.end();
++    const int top = child ? folder->second : e.position;
++    const int sub = child ? e.position : -1;
++    return std::make_tuple(pinned, top, child, sub);
++  };
++  std::stable_sort(entries_.begin(), entries_.end(),
++                   [&](const WorkspaceEntry& a, const WorkspaceEntry& b) {
++                     return sort_key(a) < sort_key(b);
++                   });
++}
++
++void WorkspaceService::RenumberScopes() {
++  int favorite_position = 0;
++  int top_position = 0;
++  std::map<std::string, int> child_position;
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.section == WorkspaceEntry::Section::kFavorite) {
++      entry.position = favorite_position++;
++    } else if (entry.folder_id.empty()) {
++      entry.position = top_position++;
++    } else {
++      entry.position = child_position[entry.folder_id]++;
++    }
++  }
++}
++
++int WorkspaceService::NextTopLevelPosition(
++    WorkspaceEntry::Section section) const {
+   int max_position = -1;
+   for (const WorkspaceEntry& entry : entries_) {
+-    if (entry.section == section) {
++    if (entry.section == section && entry.folder_id.empty()) {
++      max_position = std::max(max_position, entry.position);
++    }
++  }
++  return max_position + 1;
++}
++
++int WorkspaceService::NextChildPosition(const std::string& folder_id) const {
++  int max_position = -1;
++  for (const WorkspaceEntry& entry : entries_) {
++    if (entry.folder_id == folder_id) {
+       max_position = std::max(max_position, entry.position);
+     }
+   }
+--- a/chrome/browser/ui/helium_workspace/workspace_service.h
++++ b/chrome/browser/ui/helium_workspace/workspace_service.h
+@@ -102,6 +102,32 @@ class WorkspaceService : public KeyedSer
+                  size_t target_index);
+   size_t CountFavorites() const;
+ 
++  // ---- Folders (M3.13; one level deep, pinned top level only) ----
++  // Creates an expanded, empty folder at the end of the pinned top level and
++  // returns its id. Folders are entries with kind == kFolder and no URL.
++  std::string AddFolder(const std::u16string& title);
++  // Folder-only. Persists synchronously (structural, rare).
++  bool SetFolderCollapsed(const std::string& id, bool collapsed);
++  // Deletes the folder AND its children (user ruling 2026-08-31 — closest
++  // sibling of Arc's "archive the tabs inside", which we do not have).
++  // Returns the removed entries in display order (folder first) as the model
++  // half of undo; empty when |id| is not a folder. Bound tabs are unbound;
++  // closing them is the controller's business. Positions are deliberately
++  // NOT renumbered, so the holes keep the exact slots for RestoreEntries().
++  std::vector<WorkspaceEntry> RemoveFolderAndChildren(const std::string& id);
++  // Reinserts a RemoveFolderAndChildren() snapshot verbatim. The entries
++  // carry their old positions and the delete left those slots vacant, so
++  // display order comes back exactly. Fails (false) if any id already
++  // exists again.
++  bool RestoreEntries(const std::vector<WorkspaceEntry>& snapshot);
++  // Moves a pinned site into |folder_id|'s children at |target_index|
++  // (same "counted with the moved one removed" contract as MoveEntry), or
++  // back to the pinned top level when |folder_id| is empty. Refuses folders
++  // as the source (no nesting) and non-folder targets.
++  bool MoveEntryToFolder(const std::string& id,
++                         const std::string& folder_id,
++                         size_t target_index);
++
+   // ---- Runtime tab binding (never persisted) ----
+   void BindTab(tabs::TabHandle handle, const std::string& entry_id);
+   void UnbindTab(tabs::TabHandle handle);
+@@ -133,7 +159,15 @@ class WorkspaceService : public KeyedSer
+   void SchedulePersist();
+   void NotifyChanged();
+   void NotifyBindingsChanged();
+-  int NextPosition(WorkspaceEntry::Section section) const;
++  // Display order: favorites by position, then the pinned top level by
++  // position with each folder's children riding right behind their folder,
++  // ordered by their own position.
++  void SortEntries();
++  // Dense per-scope renumber (favorites / pinned top level / each folder) in
++  // display order; entries_ must already be sorted.
++  void RenumberScopes();
++  int NextTopLevelPosition(WorkspaceEntry::Section section) const;
++  int NextChildPosition(const std::string& folder_id) const;
+ 
+   const raw_ptr<PrefService> prefs_;
+ 
+--- a/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ b/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ 
+ #include <memory>
++#include <set>
+ #include <string>
+ 
+ #include "base/strings/string_number_conversions.h"
+@@ -12,6 +13,7 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/common/pref_names.h"
++#include "components/prefs/scoped_user_pref_update.h"
+ #include "components/sync_preferences/testing_pref_service_syncable.h"
+ #include "components/tabs/public/mock_tab_interface.h"
+ #include "testing/gmock/include/gmock/gmock.h"
+@@ -442,5 +444,266 @@ TEST_F(WorkspaceServiceTest, MoveEntryRe
+               ElementsAre("https://a.example/"));
+ }
+ 
++// ---- Folders (M3.13) ----
++
++// The pinned section's display order: "id" for top-level entries (sites and
++// folders alike), "folder_id/child_id" for children — the shape the sidebar
++// walks top to bottom.
++std::vector<std::string> PinnedShape(const WorkspaceService& service) {
++  std::vector<std::string> shape;
++  for (const WorkspaceEntry& entry : service.entries()) {
++    if (entry.section != WorkspaceEntry::Section::kPinned) {
++      continue;
++    }
++    shape.push_back(entry.folder_id.empty()
++                        ? entry.id
++                        : entry.folder_id + "/" + entry.id);
++  }
++  return shape;
++}
++
++TEST_F(WorkspaceServiceTest, AddFolderLandsAtTheTopLevelEnd) {
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  const std::string folder = service_->AddFolder(u"Untitled");
++  ASSERT_FALSE(folder.empty());
++
++  const WorkspaceEntry* entry = service_->FindEntryById(folder);
++  ASSERT_TRUE(entry);
++  EXPECT_TRUE(entry->is_folder());
++  EXPECT_FALSE(entry->collapsed);
++  EXPECT_TRUE(entry->url.is_empty());
++  EXPECT_THAT(PinnedShape(*service_), ElementsAre(a, folder));
++}
++
++TEST_F(WorkspaceServiceTest, ChildrenRideBehindTheirFolder) {
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  const std::string folder = service_->AddFolder(u"F");
++  const std::string b = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://b.example/"), u"B");
++  const std::string c = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://c.example/"), u"C");
++
++  // A | F | B | C  ->  move B and C into F.
++  ASSERT_TRUE(service_->MoveEntryToFolder(b, folder, 0));
++  ASSERT_TRUE(service_->MoveEntryToFolder(c, folder, 1));
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(a, folder, folder + "/" + b, folder + "/" + c));
++
++  // Into-folder index honors the same "counted with the moved one removed"
++  // contract: re-slotting C before B.
++  ASSERT_TRUE(service_->MoveEntryToFolder(c, folder, 0));
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(a, folder, folder + "/" + c, folder + "/" + b));
++
++  // MoveEntry (the pre-folder API) still means "top level": it pulls the
++  // child out of the folder — this is the drag-out-of-folder commit.
++  ASSERT_TRUE(service_->MoveEntry(b, WorkspaceEntry::Section::kPinned, 0));
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(b, a, folder, folder + "/" + c));
++}
++
++TEST_F(WorkspaceServiceTest, MoveEntryReordersAFolderWithItsChildren) {
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  const std::string folder = service_->AddFolder(u"F");
++  const std::string b = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://b.example/"), u"B");
++  const std::string c = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://c.example/"), u"C");
++  const std::string d = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://d.example/"), u"D");
++  ASSERT_TRUE(service_->MoveEntryToFolder(b, folder, 0));
++  ASSERT_TRUE(service_->MoveEntryToFolder(c, folder, 1));
++  ASSERT_THAT(PinnedShape(*service_),
++              ElementsAre(a, folder, folder + "/" + b, folder + "/" + c, d));
++
++  // The whole-folder reorder commit (M3.13-r1 drag): the folder is one
++  // top-level entry to MoveEntry, and its brood rides along.
++  ASSERT_TRUE(service_->MoveEntry(folder, WorkspaceEntry::Section::kPinned, 2));
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(a, d, folder, folder + "/" + b, folder + "/" + c));
++
++  // And to the front.
++  ASSERT_TRUE(service_->MoveEntry(folder, WorkspaceEntry::Section::kPinned, 0));
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(folder, folder + "/" + b, folder + "/" + c, a, d));
++}
++
++TEST_F(WorkspaceServiceTest, AFolderMovingPastAnotherKeepsBothBroods) {
++  const std::string folder_f = service_->AddFolder(u"F");
++  const std::string folder_g = service_->AddFolder(u"G");
++  const std::string b = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://b.example/"), u"B");
++  const std::string c = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://c.example/"), u"C");
++  ASSERT_TRUE(service_->MoveEntryToFolder(b, folder_f, 0));
++  ASSERT_TRUE(service_->MoveEntryToFolder(c, folder_g, 0));
++  ASSERT_THAT(PinnedShape(*service_),
++              ElementsAre(folder_f, folder_f + "/" + b, folder_g,
++                          folder_g + "/" + c));
++
++  ASSERT_TRUE(
++      service_->MoveEntry(folder_f, WorkspaceEntry::Section::kPinned, 1));
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(folder_g, folder_g + "/" + c, folder_f,
++                          folder_f + "/" + b));
++}
++
++TEST_F(WorkspaceServiceTest, ScopePositionsStayDenseAfterAFolderMove) {
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  const std::string folder = service_->AddFolder(u"F");
++  const std::string b = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://b.example/"), u"B");
++  const std::string c = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://c.example/"), u"C");
++  const std::string d = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://d.example/"), u"D");
++  ASSERT_TRUE(service_->MoveEntryToFolder(b, folder, 0));
++  ASSERT_TRUE(service_->MoveEntryToFolder(c, folder, 1));
++
++  ASSERT_TRUE(service_->MoveEntry(folder, WorkspaceEntry::Section::kPinned, 2));
++
++  // Positions stay dense and unique per scope: the pinned top level and the
++  // folder's children each count 0..n-1 on their own.
++  std::set<int> top_positions;
++  std::set<int> child_positions;
++  for (const WorkspaceEntry& entry : service_->entries()) {
++    if (entry.section != WorkspaceEntry::Section::kPinned) {
++      continue;
++    }
++    (entry.folder_id.empty() ? top_positions : child_positions)
++        .insert(entry.position);
++  }
++  EXPECT_THAT(top_positions, ElementsAre(0, 1, 2));
++  EXPECT_THAT(child_positions, ElementsAre(0, 1));
++}
++
++TEST_F(WorkspaceServiceTest, FoldersAndChildrenRoundTripThroughPrefs) {
++  const std::string folder = service_->AddFolder(u"F");
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++  ASSERT_TRUE(service_->SetFolderCollapsed(folder, true));
++  service_->Shutdown();
++
++  WorkspaceService reloaded(&prefs_);
++  const WorkspaceEntry* reloaded_folder = reloaded.FindEntryById(folder);
++  ASSERT_TRUE(reloaded_folder);
++  EXPECT_TRUE(reloaded_folder->is_folder());
++  EXPECT_TRUE(reloaded_folder->collapsed);
++  EXPECT_THAT(PinnedShape(reloaded), ElementsAre(folder, folder + "/" + a));
++}
++
++TEST_F(WorkspaceServiceTest, FoldersNeverEnterTheFavoritesGrid) {
++  const std::string folder = service_->AddFolder(u"F");
++  EXPECT_FALSE(
++      service_->MoveEntry(folder, WorkspaceEntry::Section::kFavorite, 0));
++  EXPECT_FALSE(
++      service_->SetEntrySection(folder, WorkspaceEntry::Section::kFavorite));
++  EXPECT_EQ(0u, service_->CountFavorites());
++}
++
++TEST_F(WorkspaceServiceTest, NoNesting) {
++  const std::string folder_a = service_->AddFolder(u"A");
++  const std::string folder_b = service_->AddFolder(u"B");
++  EXPECT_FALSE(service_->MoveEntryToFolder(folder_a, folder_b, 0));
++  EXPECT_FALSE(service_->MoveEntryToFolder(folder_a, "no-such-folder", 0));
++  // A site can only target an actual folder.
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  EXPECT_FALSE(service_->MoveEntryToFolder(a, a, 0));
++}
++
++TEST_F(WorkspaceServiceTest, PromotingAChildToFavoritesLeavesItsFolder) {
++  const std::string folder = service_->AddFolder(u"F");
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++
++  ASSERT_TRUE(service_->MoveEntry(a, WorkspaceEntry::Section::kFavorite, 0));
++  const WorkspaceEntry* entry = service_->FindEntryById(a);
++  ASSERT_TRUE(entry);
++  EXPECT_EQ(WorkspaceEntry::Section::kFavorite, entry->section);
++  EXPECT_TRUE(entry->folder_id.empty());
++}
++
++TEST_F(WorkspaceServiceTest, RemoveFolderCascadesAndTheSnapshotRestores) {
++  const std::string before = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://x.example/"), u"X");
++  const std::string folder = service_->AddFolder(u"F");
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  const std::string b = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://b.example/"), u"B");
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++  ASSERT_TRUE(service_->MoveEntryToFolder(b, folder, 1));
++  const std::string after = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://y.example/"), u"Y");
++  const auto shape_before = PinnedShape(*service_);
++
++  // A bound tab must come unbound when its entry is deleted with the folder.
++  auto tab = MakeTab("https://a.example/", window_a());
++  service_->BindTab(tab->GetHandle(), a);
++
++  const std::vector<WorkspaceEntry> snapshot =
++      service_->RemoveFolderAndChildren(folder);
++  ASSERT_EQ(3u, snapshot.size());
++  EXPECT_EQ(folder, snapshot[0].id);  // display order: folder first
++  EXPECT_THAT(PinnedShape(*service_), ElementsAre(before, after));
++  EXPECT_TRUE(service_->FindTabsForEntry(a).empty());
++
++  // Undo: everything returns to its exact slot.
++  ASSERT_TRUE(service_->RestoreEntries(snapshot));
++  EXPECT_EQ(shape_before, PinnedShape(*service_));
++  // A second restore of the same snapshot must refuse (ids exist again).
++  EXPECT_FALSE(service_->RestoreEntries(snapshot));
++}
++
++TEST_F(WorkspaceServiceTest, RemoveFolderRejectsNonFolders) {
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  EXPECT_TRUE(service_->RemoveFolderAndChildren(a).empty());
++  EXPECT_TRUE(service_->RemoveFolderAndChildren("no-such-id").empty());
++  ASSERT_TRUE(service_->FindEntryById(a));
++}
++
++TEST_F(WorkspaceServiceTest, GenericRemoveOfAFolderCascades) {
++  const std::string folder = service_->AddFolder(u"F");
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++
++  EXPECT_TRUE(service_->RemoveEntry(folder));
++  EXPECT_FALSE(service_->FindEntryById(folder));
++  EXPECT_FALSE(service_->FindEntryById(a));
++}
++
++TEST_F(WorkspaceServiceTest, DanglingFolderIdsFlattenOnLoad) {
++  const std::string folder = service_->AddFolder(u"F");
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++  service_->Shutdown();
++
++  // Simulate the folder entry not surviving a load (e.g. written by a newer
++  // build and rejected) by deleting it from the raw pref.
++  {
++    ScopedListPrefUpdate update(&prefs_, prefs::kWorkspaceEntries);
++    update->EraseIf([&](const base::Value& value) {
++      const std::string* id = value.GetDict().FindString("id");
++      return id && *id == folder;
++    });
++  }
++
++  WorkspaceService reloaded(&prefs_);
++  const WorkspaceEntry* entry = reloaded.FindEntryById(a);
++  ASSERT_TRUE(entry);
++  EXPECT_TRUE(entry->folder_id.empty());
++  EXPECT_THAT(PinnedShape(reloaded), ElementsAre(a));
++}
++
+ }  // namespace
+ }  // namespace helium_workspace
+--- a/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ b/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ 
++#include <map>
+ #include <string>
+ #include <vector>
+ 
+@@ -20,6 +21,9 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
++#include "chrome/grit/generated_resources.h"
++#include "ui/base/l10n/l10n_util.h"
+ #include "components/sessions/core/tab_restore_service.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+@@ -301,14 +305,17 @@ void WorkspaceTabController::CloseUnpinn
+ }
+ 
+ void WorkspaceTabController::UndoLastCloseUnpinnedTabs() {
++  const SessionID watermark = undo_watermark_;
++  undo_watermark_ = SessionID::InvalidValue();
++  RewindTabRestoreTo(watermark);
++}
++
++void WorkspaceTabController::RewindTabRestoreTo(SessionID watermark) {
+   sessions::TabRestoreService* const service =
+       TabRestoreServiceFactory::GetForProfile(browser_window_->GetProfile());
+   if (!service) {
+     return;
+   }
+-  const SessionID watermark = undo_watermark_;
+-  undo_watermark_ = SessionID::InvalidValue();
+-
+   // chrome::RestoreTab is what the reopen-closed-tab accelerator runs,
+   // including its handling of a service that has not finished loading.
+   // Rewind until the most recent entry is the one that was most recent
+@@ -324,6 +331,126 @@ void WorkspaceTabController::UndoLastClo
+   }
+ }
+ 
++void WorkspaceTabController::NewFolderFromMenu() {
++  if (!service_) {
++    return;
++  }
++  // Arc's defaults, all three (轮0 2026-08-31): named "Untitled", landed at
++  // the end, and straight into inline rename.
++  const std::string id = service_->AddFolder(
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DEFAULT_NAME));
++  if (id.empty()) {
++    return;
++  }
++  if (BrowserView* const browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_window_)) {
++    if (VerticalTabStripRegionView* const region =
++            browser_view->vertical_tab_strip_region_view()) {
++      if (WorkspaceSidebarView* const sidebar =
++              region->WorkspaceDragSidebar()) {
++        sidebar->StartFolderRename(id);
++      }
++    }
++  }
++}
++
++void WorkspaceTabController::DeleteFolder(const std::string& folder_id) {
++  if (!service_) {
++    return;
++  }
++  const WorkspaceEntry* folder = service_->FindEntryById(folder_id);
++  if (!folder || !folder->is_folder()) {
++    return;
++  }
++  const std::u16string folder_title = folder->title;
++
++  // The children's tabs, collected before the model drops the bindings.
++  // Entries are profile-scoped, so "delete the folder and what's in it"
++  // reaches into every window those tabs live in.
++  std::vector<tabs::TabHandle> to_close;
++  for (const WorkspaceEntry& entry : service_->entries()) {
++    if (entry.folder_id == folder_id) {
++      const std::vector<tabs::TabHandle> tabs =
++          service_->FindTabsForEntry(entry.id);
++      to_close.insert(to_close.end(), tabs.begin(), tabs.end());
++    }
++  }
++
++  folder_undo_watermark_ = RestoreWatermark(
++      TabRestoreServiceFactory::GetForProfile(browser_window_->GetProfile()));
++  folder_undo_snapshot_ = service_->RemoveFolderAndChildren(folder_id);
++  if (folder_undo_snapshot_.empty()) {
++    return;  // raced away under the dialog
++  }
++
++  // Group by window so the "never leave a window empty" rule holds in each
++  // (⛔ M4: CloseWebContentsAt's own guard deliberately lets a second close
++  // of a blank tab take the window down).
++  std::map<BrowserWindowInterface*, std::vector<tabs::TabHandle>> by_window;
++  for (tabs::TabHandle handle : to_close) {
++    tabs::TabInterface* const tab = handle.Get();
++    if (!tab) {
++      continue;
++    }
++    if (BrowserWindowInterface* const window =
++            tab->GetBrowserWindowInterface()) {
++      by_window[window].push_back(handle);
++    }
++  }
++  for (auto& [window, handles] : by_window) {
++    if (window->IsDeleteScheduled()) {
++      continue;
++    }
++    TabStripModel* const model = window->GetTabStripModel();
++    if (!model) {
++      continue;
++    }
++    if (static_cast<int>(handles.size()) >= model->count()) {
++      chrome::AddTabAt(window, GURL(), /*index=*/-1, /*foreground=*/true);
++    }
++    // Back to front; the index is re-resolved per close because an unload
++    // handler can shift everything after it (⛔ M4-r1: returning is not the
++    // same as closed, so nothing here counts).
++    for (auto it = handles.rbegin(); it != handles.rend(); ++it) {
++      tabs::TabInterface* const tab = it->Get();
++      if (!tab) {
++        continue;
++      }
++      const int index = model->GetIndexOfTab(tab);
++      if (index < 0) {
++        continue;
++      }
++      model->CloseWebContentsAt(
++          index, TabCloseTypes::CLOSE_USER_GESTURE |
++                     TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++    }
++  }
++
++  if (BrowserView* const browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_window_)) {
++    if (VerticalTabStripRegionView* const region =
++            browser_view->vertical_tab_strip_region_view()) {
++      region->ShowUndoBarForFolderDelete(
++          folder_title,
++          base::BindOnce(&WorkspaceTabController::UndoLastDeleteFolder,
++                         weak_factory_.GetWeakPtr()));
++    }
++  }
++}
++
++void WorkspaceTabController::UndoLastDeleteFolder() {
++  if (!service_ || folder_undo_snapshot_.empty()) {
++    return;
++  }
++  service_->RestoreEntries(folder_undo_snapshot_);
++  folder_undo_snapshot_.clear();
++  const SessionID watermark = folder_undo_watermark_;
++  folder_undo_watermark_ = SessionID::InvalidValue();
++  // The reopened tabs re-bind to their restored entries through the ongoing
++  // claim pass (认领不是一次性的, M3.11-r1) as their loads commit.
++  RewindTabRestoreTo(watermark);
++}
++
+ void WorkspaceTabController::ResetEntryTab(const std::string& entry_id) {
+   TabStripModel* model = browser_window_->GetTabStripModel();
+   const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
+--- a/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ b/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -7,9 +7,11 @@
+ 
+ #include <map>
+ #include <string>
++#include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_collection_observer.h"
+@@ -105,6 +107,23 @@ class WorkspaceTabController : public Ta
+   // already an entry, its URL is unusable, or the favorites cap is full.
+   void AddTabToFavorites(int index);
+ 
++  // ---- Folders (M3.13) ----
++
++  // IDC_HELIUM_WS_NEW_FOLDER: an empty folder at the end of the pinned top
++  // level, its name dropped straight into inline edit like Arc's.
++  void NewFolderFromMenu();
++
++  // Deletes |folder_id| with everything in it (user ruling 2026-08-31): the
++  // children's tabs close -- in every window, with
++  // CLOSE_CREATE_HISTORICAL_TAB -- the entries leave the model, and the
++  // sidebar's bottom bar offers one Undo for a few seconds.
++  void DeleteFolder(const std::string& folder_id);
++
++  // The undo for the last DeleteFolder(): the entries snapshot goes back in
++  // its exact slots, and TabRestoreService rewinds to the watermark so the
++  // closed tabs come back too.
++  void UndoLastDeleteFolder();
++
+  private:
+   // Binds tabs already open in this window to entries with the same URL, so
+   // a restored session does not show the same page twice.
+@@ -155,6 +174,10 @@ class WorkspaceTabController : public Ta
+                       TabChangeType change_type) override;
+   void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
+ 
++  // Reopens closed tabs until TabRestoreService's most recent entry is
++  // |watermark| again -- the shared tail of both undos.
++  void RewindTabRestoreTo(SessionID watermark);
++
+   const raw_ptr<BrowserWindowInterface> browser_window_;
+   const raw_ptr<WorkspaceService> service_;
+   // Re-entrancy guard for the un-pin we perform ourselves, so it does not
+@@ -173,6 +196,12 @@ class WorkspaceTabController : public Ta
+   // InvalidValue() if it had none. Undo rewinds to exactly this point, which
+   // is correct whether the tabs closed synchronously or not.
+   SessionID undo_watermark_ = SessionID::InvalidValue();
++  // The last DeleteFolder()'s removed entries (folder first) and its own
++  // TabRestoreService watermark. Cleared when the undo runs; the undo bar
++  // timing out simply never calls back, and the stale snapshot is harmless
++  // -- RestoreEntries() refuses ids that exist again.
++  std::vector<WorkspaceEntry> folder_undo_snapshot_;
++  SessionID folder_undo_watermark_ = SessionID::InvalidValue();
+ 
+   ui::ScopedUnownedUserData<WorkspaceTabController> scoped_unowned_user_data_;
+   base::WeakPtrFactory<WorkspaceTabController> weak_factory_{this};
+--- a/chrome/browser/ui/views/frame/system_menu_model_builder.cc
++++ b/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+@@ -190,6 +190,11 @@ void SystemMenuModelBuilder::BuildSystem
+     // The window menu is where a window-scoped command belongs.
+     model->AddItemWithStringId(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS,
+                                IDS_HELIUM_CLOSE_UNPINNED_TABS);
++    // helium-fork M3.13: folder creation lives here because the sidebar's
++    // blank IS the window menu (M4-r2's final form) -- same place Arc keeps
++    // its New Folder, one menu item instead of a second menu.
++    model->AddItemWithStringId(IDC_HELIUM_WS_NEW_FOLDER,
++                               IDS_HELIUM_WS_NEW_FOLDER);
+ 
+     model->AddItemWithStringId(IDC_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL,
+                                IDS_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL);
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -831,6 +831,17 @@ void VerticalTabStripRegionView::ShowUnd
+   }
+ }
+ 
++void VerticalTabStripRegionView::ShowUndoBarForFolderDelete(
++    const std::u16string& folder_title,
++    base::OnceClosure on_undo) {
++  if (undo_bar_) {
++    undo_bar_->ShowForAction(
++        l10n_util::GetStringFUTF16(IDS_HELIUM_WS_FOLDER_DELETED_BODY,
++                                   folder_title),
++        std::move(on_undo));
++  }
++}
++
+ void VerticalTabStripRegionView::OnMediaStripModelChanged() {
+   SyncMediaCapsules();
+   if (media_strip_) {
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -9,6 +9,7 @@
+ 
+ #include "base/callback_list.h"
+ #include "base/containers/flat_set.h"
++#include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "base/time/time.h"
+@@ -74,6 +75,15 @@ class VerticalTabStripRegionView final
+   // WorkspaceTabController, which owns the command and the watermark.
+   void ShowUndoBarForWatermark(SessionID watermark);
+ 
++  // M3.13: the same bar, for a just-deleted folder. |on_undo| runs if Undo
++  // (or ⌘Z) is hit before the bar times out.
++  void ShowUndoBarForFolderDelete(const std::u16string& folder_title,
++                                  base::OnceClosure on_undo);
++
++  // The sidebar view inside this region (drag targets and, M3.13, the
++  // folder-rename handoff reach it through here).
++  WorkspaceSidebarView* WorkspaceDragSidebar() const;
++
+   DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kAnimationCompletedEvent);
+ 
+   // TODO(crbug.com/465833741): Replace constant with derived value based on
+@@ -145,7 +155,6 @@ class VerticalTabStripRegionView final
+ 
+  private:
+   UnpinnedTabContainerView* TodayDropContainer() const;
+-  WorkspaceSidebarView* WorkspaceDragSidebar() const;
+   // Cheap per-frame discriminator; IsWorkspaceEntryDrag() additionally reads
+   // the payload and is only for the once-per-gesture calls.
+   bool HasWorkspaceEntryDragSession() const;
+--- a/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ b/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -74,6 +74,8 @@ source_set("impl") {
+     "workspace_entry_drag_overlay.h",
+     "workspace_favorites_band_view.cc",
+     "workspace_favorites_band_view.h",
++    "workspace_folder_row_view.cc",
++    "workspace_folder_row_view.h",
+     "workspace_sidebar_view.cc",
+     "workspace_sidebar_view.h",
+   ]
+--- /dev/null
++++ b/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
+@@ -0,0 +1,418 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h"
++
++#include <algorithm>
++#include <memory>
++#include <utility>
++
++#include "cc/paint/paint_flags.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "chrome/browser/ui/layout_constants.h"
++#include "chrome/grit/generated_resources.h"
++#include "components/vector_icons/vector_icons.h"
++#include "ui/accessibility/ax_enums.mojom.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/models/image_model.h"
++#include "ui/color/color_provider.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/scoped_canvas.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/controls/image_view.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/controls/menu/menu_runner.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/focus/focus_manager.h"
++#include "ui/views/style/typography.h"
++#include "ui/views/view_class_properties.h"
++
++namespace {
++
++// Dia's folder-head metrics, unchanged from the retired WorkspaceSpaceHeader
++// (M3.10 四问②; Arc's own columns measured 2026-08-31 land within ~1-3pt of
++// these, and the "same column as a row" principle holds in both, so the
++// numbers stay). The 8pt the scroll view is already inset by makes these the
++// visual x17 / x42.
++constexpr int kFolderRowIconSize = 16;
++constexpr int kFolderRowIconLeadingInset = 9;
++constexpr int kFolderRowTitleX = 34;
++constexpr int kFolderRowChevronSize = 16;
++constexpr int kFolderRowInnerSpacing = 4;
++constexpr int kFolderRowTrailingInset = 8;
++
++// Local to this view: the actions are executed here, so they never reach
++// the browser command table (same pattern as WorkspaceEntryView's menu).
++enum FolderMenuCommand {
++  kRename = 1,
++  kDelete,
++};
++
++// Paints the right-pointing chevron glyph rotated with the fold: 0 is open
++// (pointing down), 1 is closed (pointing right). Moved verbatim from the
++// retired WorkspaceSpaceHeader.
++class FolderChevron : public views::View {
++  METADATA_HEADER(FolderChevron, views::View)
++
++ public:
++  FolderChevron() { SetCanProcessEventsWithinSubtree(false); }
++
++  void SetProgress(double progress) {
++    if (progress_ == progress) {
++      return;
++    }
++    progress_ = progress;
++    SchedulePaint();
++  }
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override {
++    const ui::ColorProvider* colors = GetColorProvider();
++    if (!colors) {
++      return;
++    }
++    const gfx::ImageSkia icon =
++        ui::ImageModel::FromVectorIcon(
++            vector_icons::kKeyboardArrowRightFlippableIcon,
++            ui::kColorLabelForegroundSecondary, kFolderRowChevronSize)
++            .Rasterize(colors);
++    gfx::ScopedCanvas scoped(canvas);
++    canvas->Translate(gfx::Vector2d(width() / 2, height() / 2));
++    canvas->sk_canvas()->rotate(90.0f * (1.0f - progress_));
++    canvas->DrawImageInt(icon, -icon.width() / 2, -icon.height() / 2);
++  }
++
++ private:
++  double progress_ = 0.0;
++};
++
++BEGIN_METADATA(FolderChevron)
++END_METADATA
++
++// The rename field commits when it loses focus (Arc). A plain Textfield has
++// no controller hook for that, so this thin shim forwards its OnBlur.
++class RenameField : public views::Textfield {
++  METADATA_HEADER(RenameField, views::Textfield)
++
++ public:
++  explicit RenameField(WorkspaceFolderRowView* owner) : owner_(owner) {}
++
++  // views::View:
++  void OnBlur() override {
++    views::Textfield::OnBlur();
++    owner_->OnRenameFieldBlurred();
++  }
++
++ private:
++  const raw_ptr<WorkspaceFolderRowView> owner_;
++};
++
++BEGIN_METADATA(RenameField)
++END_METADATA
++
++}  // namespace
++
++WorkspaceFolderRowView::WorkspaceFolderRowView(Delegate* delegate)
++    : delegate_(delegate) {
++  icon_ = AddChildView(std::make_unique<views::ImageView>());
++  icon_->SetCanProcessEventsWithinSubtree(false);
++
++  title_ = AddChildView(std::make_unique<views::Label>(
++      std::u16string(), views::style::CONTEXT_LABEL,
++      views::style::STYLE_SECONDARY));
++  title_->SetSkipSubpixelRenderingOpacityCheck(true);
++  title_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++  title_->SetElideBehavior(gfx::ELIDE_TAIL);
++  title_->SetCanProcessEventsWithinSubtree(false);
++
++  chevron_ = AddChildView(std::make_unique<FolderChevron>());
++
++  auto editor = std::make_unique<RenameField>(this);
++  editor->set_controller(this);
++  editor->SetVisible(false);
++  // The field edits in place: no border or background of its own, the row
++  // already provides the surface (Arc's edit state is just selected text on
++  // the row -- 轮0, g3b).
++  editor->SetBorder(nullptr);
++  editor->SetBackgroundEnabled(false);
++  // A focusable view with no accessible name is a DCHECK in
++  // RunAccessibilityPaintChecks the moment it becomes visible.
++  editor->GetViewAccessibility().SetName(
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_FOLDER_MENU_RENAME));
++  editor_ = AddChildView(std::move(editor));
++
++  set_context_menu_controller(this);
++
++  GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
++  UpdateIcon();
++}
++
++WorkspaceFolderRowView::~WorkspaceFolderRowView() = default;
++
++void WorkspaceFolderRowView::SetEntry(
++    const helium_workspace::WorkspaceEntry& entry,
++    bool has_children) {
++  folder_id_ = entry.id;
++  const bool collapsed_changed = collapsed_ != entry.collapsed;
++  collapsed_ = entry.collapsed;
++  has_children_ = has_children;
++  if (collapsed_changed) {
++    // Snap when the state arrives from the model without a running tween
++    // (load, another window); the sidebar overrides this per frame while
++    // its fold animation drives.
++    SetCollapsedProgress(collapsed_ ? 1.0 : 0.0);
++  }
++  UpdateIcon();
++  if (title_text_ != entry.title) {
++    title_text_ = entry.title;
++    if (!editing_) {
++      title_->SetText(title_text_);
++    }
++    GetViewAccessibility().SetName(title_text_);
++    DeprecatedLayoutImmediately();
++  }
++}
++
++void WorkspaceFolderRowView::SetCollapsedProgress(double collapsed) {
++  collapsed_progress_ = collapsed;
++  static_cast<FolderChevron*>(chevron_.get())->SetProgress(collapsed);
++  UpdateIcon();
++}
++
++void WorkspaceFolderRowView::SetDropTarget(bool drop_target) {
++  if (drop_target_ == drop_target) {
++    return;
++  }
++  drop_target_ = drop_target;
++  SchedulePaint();
++}
++
++void WorkspaceFolderRowView::StartRename() {
++  if (editing_) {
++    return;
++  }
++  editing_ = true;
++  editor_->SetText(title_text_);
++  editor_->SetVisible(true);
++  title_->SetVisible(false);
++  DeprecatedLayoutImmediately();
++  editor_->RequestFocus();
++  editor_->SelectAll(/*reversed=*/false);
++}
++
++int WorkspaceFolderRowView::RowHeight() const {
++  return GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
++}
++
++gfx::Size WorkspaceFolderRowView::CalculatePreferredSize(
++    const views::SizeBounds& available_size) const {
++  const int width =
++      available_size.width().is_bounded()
++          ? available_size.width().value()
++          : GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
++  return gfx::Size(width, RowHeight());
++}
++
++void WorkspaceFolderRowView::Layout(PassKey) {
++  icon_->SetBounds(kFolderRowIconLeadingInset,
++                   (height() - kFolderRowIconSize) / 2, kFolderRowIconSize,
++                   kFolderRowIconSize);
++  // The name takes only what it needs so the chevron can follow it; what it
++  // may take stops short of the chevron and the trailing inset.
++  const gfx::Size title_size = title_->GetPreferredSize();
++  const int title_max =
++      std::max(0, width() - kFolderRowTitleX - kFolderRowInnerSpacing -
++                      kFolderRowChevronSize - kFolderRowTrailingInset);
++  const int title_width = std::min(title_size.width(), title_max);
++  title_->SetBounds(kFolderRowTitleX, (height() - title_size.height()) / 2,
++                    title_width, title_size.height());
++  chevron_->SetBounds(title_->bounds().right() + kFolderRowInnerSpacing,
++                      (height() - kFolderRowChevronSize) / 2,
++                      kFolderRowChevronSize, kFolderRowChevronSize);
++  // The editor takes the full name run -- it needs room to grow while the
++  // user types, not just the committed name's width.
++  const int editor_height = editor_->GetPreferredSize().height();
++  editor_->SetBounds(kFolderRowTitleX, (height() - editor_height) / 2,
++                     title_max, editor_height);
++}
++
++void WorkspaceFolderRowView::OnPaint(gfx::Canvas* canvas) {
++  views::View::OnPaint(canvas);
++  const ui::ColorProvider* colors = GetColorProvider();
++  if ((!hovered_ && !drop_target_ && !editing_) || !colors) {
++    return;
++  }
++  // The row capsule, same fill and radius as a hovered pinned row; instant
++  // like every other sidebar hover (Dia has no tween). The edit state keeps
++  // it up so the field visibly sits on a surface.
++  cc::PaintFlags fill;
++  fill.setStyle(cc::PaintFlags::kFill_Style);
++  fill.setAntiAlias(true);
++  fill.setColor(
++      helium::GetSidebarHoverSurfaceColor(colors->GetColor(kColorToolbar)));
++  canvas->DrawRoundRect(
++      gfx::RectF(GetLocalBounds()),
++      GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius), fill);
++}
++
++void WorkspaceFolderRowView::OnMouseEntered(const ui::MouseEvent& event) {
++  hovered_ = true;
++  SchedulePaint();
++}
++
++void WorkspaceFolderRowView::OnMouseExited(const ui::MouseEvent& event) {
++  hovered_ = false;
++  SchedulePaint();
++}
++
++bool WorkspaceFolderRowView::OnMousePressed(const ui::MouseEvent& event) {
++  return event.IsOnlyLeftMouseButton();
++}
++
++void WorkspaceFolderRowView::OnMouseReleased(const ui::MouseEvent& event) {
++  if (editing_) {
++    return;  // a click inside the row while editing is the field's business
++  }
++  if (event.IsOnlyLeftMouseButton() && HitTestPoint(event.location())) {
++    delegate_->OnFolderToggled(folder_id_);
++  }
++}
++
++void WorkspaceFolderRowView::ShowContextMenuForViewImpl(
++    views::View* source,
++    const gfx::Point& point,
++    ui::mojom::MenuSourceType source_type) {
++  menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
++  menu_model_->AddItemWithStringId(kRename, IDS_HELIUM_WS_FOLDER_MENU_RENAME);
++  menu_model_->AddSeparator(ui::NORMAL_SEPARATOR);
++  menu_model_->AddItemWithStringId(kDelete, IDS_HELIUM_WS_FOLDER_MENU_DELETE);
++  menu_runner_ = std::make_unique<views::MenuRunner>(
++      menu_model_.get(), views::MenuRunner::HAS_MNEMONICS |
++                             views::MenuRunner::CONTEXT_MENU);
++  menu_runner_->RunMenuAt(GetWidget(), nullptr,
++                          gfx::Rect(point, gfx::Size()),
++                          views::MenuAnchorPosition::kTopLeft, source_type);
++}
++
++void WorkspaceFolderRowView::ExecuteCommand(int command_id, int event_flags) {
++  switch (command_id) {
++    case kRename:
++      StartRename();
++      break;
++    case kDelete:
++      delegate_->OnFolderDeleteRequested(folder_id_);
++      break;
++  }
++}
++
++bool WorkspaceFolderRowView::HandleKeyEvent(views::Textfield* sender,
++                                            const ui::KeyEvent& key_event) {
++  if (key_event.type() != ui::EventType::kKeyPressed) {
++    return false;
++  }
++  // Both keys leave through the framework's focus system: committing flips
++  // editing_ off first, so the blur that follows is a no-op.
++  if (key_event.key_code() == ui::VKEY_RETURN) {
++    CommitRename();
++    GetFocusManager()->ClearFocus();
++    return true;
++  }
++  if (key_event.key_code() == ui::VKEY_ESCAPE) {
++    CancelRename();
++    GetFocusManager()->ClearFocus();
++    return true;
++  }
++  return false;
++}
++
++void WorkspaceFolderRowView::OnRenameFieldBlurred() {
++  if (editing_) {
++    CommitRename();
++  }
++}
++
++void WorkspaceFolderRowView::CommitRename() {
++  if (!editing_) {
++    return;
++  }
++  std::u16string text(editor_->GetText());
++  EndRename();
++  // An emptied name keeps the old one -- a nameless row is unclickable
++  // furniture.
++  if (!text.empty() && text != title_text_) {
++    delegate_->OnFolderRenamed(folder_id_, text);
++  }
++}
++
++void WorkspaceFolderRowView::CancelRename() {
++  if (!editing_) {
++    return;
++  }
++  EndRename();
++}
++
++void WorkspaceFolderRowView::EndRename() {
++  editing_ = false;
++  editor_->SetVisible(false);
++  title_->SetText(title_text_);
++  title_->SetVisible(true);
++  // The pointer usually left long ago (the edit ends on a key or a click
++  // somewhere else), and no exit event is coming.
++  if (!IsMouseHovered()) {
++    hovered_ = false;
++  }
++  DeprecatedLayoutImmediately();
++  SchedulePaint();
++}
++
++void WorkspaceFolderRowView::ClearHover() {
++  if (hovered_) {
++    hovered_ = false;
++    SchedulePaint();
++  }
++}
++
++void WorkspaceFolderRowView::UpdateIcon() {
++  // Arc (轮0): an expanded folder and an EMPTY folder wear the open glyph;
++  // only a closed folder with something inside wears the closed one. While
++  // the fold tween runs, the icon follows the chevron's half-way point.
++  const bool closed_state =
++      has_children_ && (collapsed_progress_ >= 0.5);
++  const gfx::VectorIcon& glyph = closed_state
++                                     ? vector_icons::kFolderFlippableIcon
++                                     : vector_icons::kFolderOpenIcon;
++  if (current_glyph_ == &glyph) {
++    return;
++  }
++  current_glyph_ = &glyph;
++  current_icon_ = ui::ImageModel::FromVectorIcon(
++      glyph, ui::kColorLabelForegroundSecondary, kFolderRowIconSize);
++  icon_->SetImage(current_icon_);
++}
++
++void WorkspaceFolderRowView::OnDragDone() {
++  delegate_->OnFolderDragDone();
++}
++
++SkColor WorkspaceFolderRowView::drag_surface_color() const {
++  const ui::ColorProvider* colors = GetColorProvider();
++  if (!colors) {
++    return SK_ColorTRANSPARENT;
++  }
++  // Same card fill as a floating site row (M3.11: the lifted card always
++  // carries one, even where the resting row has none).
++  return helium::GetSidebarFloatingCardColor(colors->GetColor(kColorToolbar));
++}
++
++SkColor WorkspaceFolderRowView::drag_text_color() const {
++  const ui::ColorProvider* colors = GetColorProvider();
++  // The resting row's name is a secondary label; the floating card keeps it.
++  return colors ? colors->GetColor(ui::kColorLabelForegroundSecondary)
++                : SK_ColorTRANSPARENT;
++}
++
++BEGIN_METADATA(WorkspaceFolderRowView)
++END_METADATA
+--- /dev/null
++++ b/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
+@@ -0,0 +1,165 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FOLDER_ROW_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FOLDER_ROW_VIEW_H_
++
++#include <memory>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/base/models/image_model.h"
++#include "ui/menus/simple_menu_model.h"
++#include "ui/views/context_menu_controller.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
++#include "ui/views/view.h"
++
++namespace gfx {
++struct VectorIcon;
++}  // namespace gfx
++
++namespace views {
++class ImageView;
++class Label;
++class MenuRunner;
++class Textfield;
++}  // namespace views
++
++// One real folder's row in the workspace sidebar (M3.13). Grown out of the
++// retired WorkspaceSpaceHeader (M3.10's single "Untitled" pseudo-folder):
++// same Dia head layout -- icon, name, chevron trailing the name -- and the
++// same white hover capsule as a tab row (the user explicitly chose it over
++// Dia's/Arc's darker gray). What is new here over the header:
++//
++//  - one instance per folder entry, fed by SetEntry();
++//  - the icon flips open/closed with the fold (Arc; an EMPTY folder always
++//    shows the open glyph -- Arc 轮0, 2026-08-31);
++//  - a context menu, v1 = Rename + Delete only (user ruling 2026-08-31).
++//    ⛔ This view is a leaf, which is the only reason it may own a
++//    ContextMenuController at all -- a controller on any sidebar CONTAINER
++//    eats the window menu (M4-r2);
++//  - inline rename, entered from the menu or right after creation (Arc
++//    auto-renames a new folder): the label swaps for a Textfield with the
++//    name selected. Enter commits, Escape reverts (both measured on Arc),
++//    and both leave the field through the framework's own focus system;
++//    losing focus commits, like Arc.
++class WorkspaceFolderRowView : public views::View,
++                               public views::ContextMenuController,
++                               public ui::SimpleMenuModel::Delegate,
++                               public views::TextfieldController {
++  METADATA_HEADER(WorkspaceFolderRowView, views::View)
++
++ public:
++  class Delegate {
++   public:
++    virtual void OnFolderToggled(const std::string& folder_id) = 0;
++    virtual void OnFolderRenamed(const std::string& folder_id,
++                                 const std::u16string& title) = 0;
++    virtual void OnFolderDeleteRequested(const std::string& folder_id) = 0;
++    // The framework's end-of-drag callback, relayed so the sidebar can end
++    // the session (drop, ESC and capture loss alike -- M3.13-r1).
++    virtual void OnFolderDragDone() = 0;
++
++   protected:
++    virtual ~Delegate() = default;
++  };
++
++  explicit WorkspaceFolderRowView(Delegate* delegate);
++  WorkspaceFolderRowView(const WorkspaceFolderRowView&) = delete;
++  WorkspaceFolderRowView& operator=(const WorkspaceFolderRowView&) = delete;
++  ~WorkspaceFolderRowView() override;
++
++  // Pushes the folder entry's persistent state. |has_children| feeds the
++  // empty-folder icon rule. Cheap when nothing changed.
++  void SetEntry(const helium_workspace::WorkspaceEntry& entry,
++                bool has_children);
++
++  // 0 open, 1 closed -- the fold tween's own value, so the chevron and the
++  // icon turn with the rows rather than flipping at one end (M3.10-r1).
++  void SetCollapsedProgress(double collapsed);
++
++  // A drag hovering this folder fills the row the way `Arc:` does (M3.11
++  // 轮3-r2): the row itself reads as selected, no blank row opens anywhere.
++  void SetDropTarget(bool drop_target);
++
++  // Swaps the name for a field with the whole name selected (Arc's
++  // new-folder state). No-op while already editing.
++  void StartRename();
++
++  // M3.11-r1 family: a row the pointer left during a menu/drag/edit never
++  // got its OnMouseExited; the sidebar clears instead (never sets).
++  void ClearHover();
++  bool renaming() const { return editing_; }
++
++  const std::string& folder_id() const { return folder_id_; }
++  bool folder_collapsed() const { return collapsed_; }
++  int RowHeight() const;
++
++  // What the M3.11 drag overlay needs to paint this row while it floats
++  // (M3.13-r1 whole-folder reorder): the glyph it wore at pick-up, the name,
++  // and the same card fill a floating site row carries.
++  const ui::ImageModel& drag_favicon() const { return current_icon_; }
++  std::u16string drag_title() const { return title_text_; }
++  SkColor drag_surface_color() const;
++  SkColor drag_text_color() const;
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override;
++  void Layout(PassKey) override;
++  void OnPaint(gfx::Canvas* canvas) override;
++  void OnMouseEntered(const ui::MouseEvent& event) override;
++  void OnMouseExited(const ui::MouseEvent& event) override;
++  bool OnMousePressed(const ui::MouseEvent& event) override;
++  void OnMouseReleased(const ui::MouseEvent& event) override;
++  void OnDragDone() override;
++
++  // views::ContextMenuController:
++  void ShowContextMenuForViewImpl(views::View* source,
++                                  const gfx::Point& point,
++                                  ui::mojom::MenuSourceType source_type) override;
++
++  // ui::SimpleMenuModel::Delegate:
++  void ExecuteCommand(int command_id, int event_flags) override;
++
++  // views::TextfieldController:
++  bool HandleKeyEvent(views::Textfield* sender,
++                      const ui::KeyEvent& key_event) override;
++
++  // Called by the field when it loses focus; commits unless a cancel or an
++  // earlier commit already ended the edit.
++  void OnRenameFieldBlurred();
++
++ private:
++  void CommitRename();
++  void CancelRename();
++  void EndRename();
++  void UpdateIcon();
++
++  const raw_ptr<Delegate> delegate_;
++  std::string folder_id_;
++  std::u16string title_text_;
++  bool collapsed_ = false;
++  bool has_children_ = false;
++  double collapsed_progress_ = 0.0;
++  bool hovered_ = false;
++  bool drop_target_ = false;
++  bool editing_ = false;
++
++  raw_ptr<views::ImageView> icon_ = nullptr;
++  raw_ptr<views::Label> title_ = nullptr;
++  raw_ptr<views::View> chevron_ = nullptr;
++  raw_ptr<views::Textfield> editor_ = nullptr;
++  raw_ptr<const gfx::VectorIcon> current_glyph_ = nullptr;
++  // The model UpdateIcon() last pushed onto |icon_|, kept for drag_favicon()
++  // -- the overlay rasterizes it itself, against its own color provider.
++  ui::ImageModel current_icon_;
++  std::unique_ptr<ui::SimpleMenuModel> menu_model_;
++  std::unique_ptr<views::MenuRunner> menu_runner_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FOLDER_ROW_VIEW_H_
+--- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -38,8 +38,14 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_pin_semantics.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "base/functional/callback_helpers.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_url_drop.h"
++#include "chrome/grit/generated_resources.h"
++#include "components/constrained_window/constrained_window_views.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/models/dialog_model.h"
++#include "ui/base/ui_base_types.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+@@ -123,30 +129,15 @@ int FavoriteGridGap() {
+   return GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteGridGap);
+ }
+ 
+-// helium-fork M3.10: the space header is the pinned rows' folder head, laid
+-// out like Dia's (measured 2026-08-23, live window): the folder's icon sits
+-// in the same column as a Today row's favicon and its name in the same column
+-// as a row's title (Dia: emoji x14.5, name x38.5 -- the top-level items
+-// share one grid), the chevron follows the name rather than hugging the
+-// right edge, and the row is as tall as a tab row so its hover capsule is
+-// the same shape. The pinned rows inside are indented one step (Dia's
+-// children: card from x22, favicon x31, title x51 on a header whose emoji
+-// is at x14.5 -- a 16pt step).
+-//
+-// 9 = a row's visual favicon x (kIconLeadingInset 6 + TabIcon's 3pt border);
+-// 34 = a row's title x (9 + 16 + 9).
+-constexpr int kSpaceHeaderIconSize = 16;
+-constexpr int kSpaceHeaderIconLeadingInset = 9;
+-constexpr int kSpaceHeaderTitleX = 34;
+-constexpr int kSpaceHeaderChevronSize = 16;
+-constexpr int kSpaceHeaderInnerSpacing = 4;
+-constexpr int kSpaceHeaderTrailingInset = 8;
++// helium-fork M3.10 -> M3.13: a folder's children are indented one step
++// from its head row (Dia's children: card from x22, favicon x31, title x51
++// on a head whose emoji is at x14.5 -- a 16pt step; Arc's own step measured
++// 2026-08-31 is the same ≈16pt). The head-row metrics themselves moved into
++// WorkspaceFolderRowView with the retirement of the single "Untitled"
++// space header: top-level rows and folder rows now sit full-width at x0,
++// only children indent.
+ constexpr int kFolderChildIndent = 16;
+ 
+-int SpaceHeaderHeight() {
+-  return GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
+-}
+-
+ int GridPerRowMax(int available_width, int min_child_width) {
+   const int gap = FavoriteGridGap();
+   return std::clamp((available_width + gap) / (min_child_width + gap), 1,
+@@ -265,187 +256,6 @@ class FavoritesEmptyPlaceholder : public
+ BEGIN_METADATA(FavoritesEmptyPlaceholder)
+ END_METADATA
+ 
+-// helium-fork M3.10-r1: the folder's chevron.
+-//
+-// Dia turns it rather than swapping it, on the same curve as the folder
+-// itself (recording 2026-08-23), so it paints one icon under a rotation
+-// instead of being an ImageView with two images.
+-class WorkspaceFolderChevron : public views::View {
+-  METADATA_HEADER(WorkspaceFolderChevron, views::View)
+-
+- public:
+-  WorkspaceFolderChevron() { SetCanProcessEventsWithinSubtree(false); }
+-
+-  // 0 is open (the chevron points down), 1 is closed (it points right), and
+-  // the folder tween drives everything in between.
+-  void SetProgress(double progress) {
+-    if (progress_ == progress) {
+-      return;
+-    }
+-    progress_ = progress;
+-    SchedulePaint();
+-  }
+-
+-  // views::View:
+-  void OnPaint(gfx::Canvas* canvas) override {
+-    const ui::ColorProvider* colors = GetColorProvider();
+-    if (!colors) {
+-      return;
+-    }
+-    const gfx::ImageSkia icon =
+-        ui::ImageModel::FromVectorIcon(
+-            vector_icons::kKeyboardArrowRightFlippableIcon,
+-            ui::kColorLabelForegroundSecondary, kSpaceHeaderChevronSize)
+-            .Rasterize(colors);
+-    gfx::ScopedCanvas scoped(canvas);
+-    canvas->Translate(gfx::Vector2d(width() / 2, height() / 2));
+-    // The right-pointing glyph turned a quarter turn clockwise is the
+-    // down-pointing one, so "open" is a full 90 degrees from where the
+-    // asset starts.
+-    canvas->sk_canvas()->rotate(90.0f * (1.0f - progress_));
+-    canvas->DrawImageInt(icon, -icon.width() / 2, -icon.height() / 2);
+-  }
+-
+- private:
+-  double progress_ = 0.0;
+-};
+-
+-BEGIN_METADATA(WorkspaceFolderChevron)
+-END_METADATA
+-
+-// Arc's space name row, which always sits between the Favorites grid and the
+-// full-row pinned section. It is permanent even when the section below it is
+-// empty, so the pinned section always has a visible upper edge. Clicking
+-// anywhere on the row collapses/expands the rows below.
+-//
+-// helium-fork M3.10: the user treats this row as the pinned rows' folder
+-// ("现在暂时就把 untitled 当做一个文件夹", 2026-08-23; real folders come later),
+-// so it wears Dia's folder-head layout -- icon, name, chevron after the name
+-// -- and the same white hover capsule as a tab row. Dia itself hovers a
+-// folder head in a *darker* gray with a hairline; the user explicitly asked
+-// for the row treatment instead.
+-class WorkspaceSpaceHeader : public views::View {
+-  METADATA_HEADER(WorkspaceSpaceHeader, views::View)
+-
+- public:
+-  explicit WorkspaceSpaceHeader(base::RepeatingClosure on_toggled)
+-      : on_toggled_(std::move(on_toggled)) {
+-    icon_ = AddChildView(std::make_unique<views::ImageView>());
+-    icon_->SetImage(ui::ImageModel::FromVectorIcon(
+-        vector_icons::kFolderFlippableIcon, ui::kColorLabelForegroundSecondary,
+-        kSpaceHeaderIconSize));
+-    icon_->SetCanProcessEventsWithinSubtree(false);
+-
+-    title_ = AddChildView(std::make_unique<views::Label>(
+-        l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DEFAULT_NAME),
+-        views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
+-    title_->SetSkipSubpixelRenderingOpacityCheck(true);
+-    title_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+-    title_->SetElideBehavior(gfx::ELIDE_TAIL);
+-    title_->SetCanProcessEventsWithinSubtree(false);
+-
+-    chevron_ = AddChildView(std::make_unique<WorkspaceFolderChevron>());
+-
+-    GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+-    GetViewAccessibility().SetName(
+-        l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DEFAULT_NAME));
+-  }
+-
+-  // 0 open, 1 closed -- the folder tween's own value, so the chevron turns
+-  // with the rows rather than flipping at one end of it.
+-  void SetCollapsedProgress(double collapsed) {
+-    chevron_->SetProgress(collapsed);
+-  }
+-
+-  // helium-fork M3.11 轮3-r2: a drag hovering the *closed* folder fills the
+-  // header the way `Arc:` does -- the row itself reads as selected, and no
+-  // blank row opens anywhere (recordings arc-spring 2026-08-24, re-read
+-  // 2026-08-25 at the user's request). Same capsule as the hover so the
+-  // sidebar keeps one highlight vocabulary.
+-  void SetDropTarget(bool drop_target) {
+-    if (drop_target_ == drop_target) {
+-      return;
+-    }
+-    drop_target_ = drop_target;
+-    SchedulePaint();
+-  }
+-
+-  // views::View:
+-  gfx::Size CalculatePreferredSize(
+-      const views::SizeBounds& available_size) const override {
+-    const int width = available_size.width().is_bounded()
+-                          ? available_size.width().value()
+-                          : GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
+-    return gfx::Size(width, SpaceHeaderHeight());
+-  }
+-
+-  void Layout(PassKey) override {
+-    icon_->SetBounds(kSpaceHeaderIconLeadingInset,
+-                     (height() - kSpaceHeaderIconSize) / 2,
+-                     kSpaceHeaderIconSize, kSpaceHeaderIconSize);
+-    // The name takes only what it needs so the chevron can follow it; what
+-    // it may take stops short of the chevron and the trailing inset.
+-    const gfx::Size title_size = title_->GetPreferredSize();
+-    const int title_max = std::max(
+-        0, width() - kSpaceHeaderTitleX - kSpaceHeaderInnerSpacing -
+-               kSpaceHeaderChevronSize - kSpaceHeaderTrailingInset);
+-    const int title_width = std::min(title_size.width(), title_max);
+-    title_->SetBounds(kSpaceHeaderTitleX, (height() - title_size.height()) / 2,
+-                      title_width, title_size.height());
+-    chevron_->SetBounds(title_->bounds().right() + kSpaceHeaderInnerSpacing,
+-                        (height() - kSpaceHeaderChevronSize) / 2,
+-                        kSpaceHeaderChevronSize, kSpaceHeaderChevronSize);
+-  }
+-
+-  void OnPaint(gfx::Canvas* canvas) override {
+-    views::View::OnPaint(canvas);
+-    const ui::ColorProvider* colors = GetColorProvider();
+-    if ((!hovered_ && !drop_target_) || !colors) {
+-      return;
+-    }
+-    // The row capsule, same fill and radius as a hovered pinned row; instant
+-    // like every other sidebar hover (Dia has no tween).
+-    cc::PaintFlags fill;
+-    fill.setStyle(cc::PaintFlags::kFill_Style);
+-    fill.setAntiAlias(true);
+-    fill.setColor(helium::GetSidebarHoverSurfaceColor(
+-        colors->GetColor(kColorToolbar)));
+-    canvas->DrawRoundRect(
+-        gfx::RectF(GetLocalBounds()),
+-        GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius), fill);
+-  }
+-
+-  void OnMouseEntered(const ui::MouseEvent& event) override {
+-    hovered_ = true;
+-    SchedulePaint();
+-  }
+-
+-  void OnMouseExited(const ui::MouseEvent& event) override {
+-    hovered_ = false;
+-    SchedulePaint();
+-  }
+-
+-  bool OnMousePressed(const ui::MouseEvent& event) override {
+-    return event.IsOnlyLeftMouseButton();
+-  }
+-
+-  void OnMouseReleased(const ui::MouseEvent& event) override {
+-    if (event.IsOnlyLeftMouseButton() && HitTestPoint(event.location())) {
+-      on_toggled_.Run();
+-    }
+-  }
+-
+- private:
+-  const base::RepeatingClosure on_toggled_;
+-  raw_ptr<views::ImageView> icon_ = nullptr;
+-  raw_ptr<views::Label> title_ = nullptr;
+-  raw_ptr<WorkspaceFolderChevron> chevron_ = nullptr;
+-  bool hovered_ = false;
+-  bool drop_target_ = false;
+-};
+-
+-BEGIN_METADATA(WorkspaceSpaceHeader)
+-END_METADATA
+ 
+ }  // namespace
+ 
+@@ -514,9 +324,9 @@ WorkspaceSidebarView::WorkspaceSidebarVi
+   drag_yield_animation_.SetTweenType(helium::kSidebarDragYieldTween);
+ 
+   placeholder_ = AddChildView(std::make_unique<FavoritesEmptyPlaceholder>());
+-  space_header_ = AddChildView(std::make_unique<WorkspaceSpaceHeader>(
+-      base::BindRepeating(&WorkspaceSidebarView::ToggleSpaceCollapsed,
+-                          base::Unretained(this))));
++  // M3.13: no permanent header row anymore -- folder rows are per-folder
++  // children created in SyncEntryViews, and the pinned top level starts
++  // directly under the grid.
+ }
+ 
+ WorkspaceSidebarView::~WorkspaceSidebarView() {
+@@ -552,7 +362,8 @@ void WorkspaceSidebarView::AddedToWidget
+   if (TabStripModel* model = browser->GetTabStripModel()) {
+     model->AddObserver(this);
+   }
+-  LoadSpaceCollapsedFromPrefs();
++  // M3.13: collapse state is per folder and lives in the entries themselves
++  // now (the old single kWorkspaceSpaceCollapsed pref is no longer read).
+   SyncEntryViews();
+ }
+ 
+@@ -590,57 +401,45 @@ PrefService* WorkspaceSidebarView::GetPr
+   return profile_ ? profile_->GetPrefs() : nullptr;
+ }
+ 
+-void WorkspaceSidebarView::LoadSpaceCollapsedFromPrefs() {
+-  PrefService* prefs = GetProfilePrefs();
+-  if (!prefs) {
+-    return;
+-  }
+-  const bool collapsed =
+-      prefs->GetBoolean(helium_workspace::prefs::kWorkspaceSpaceCollapsed);
+-  if (collapsed == space_collapsed_) {
+-    return;
+-  }
+-  space_collapsed_ = collapsed;
+-  // Restoring a pref is not a toggle: no tween, and the chevron starts where
+-  // it belongs.
+-  folder_animation_.Reset(1.0);
+-  folder_prev_layout_valid_ = false;
+-  if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
+-    header->SetCollapsedProgress(space_collapsed_ ? 1.0 : 0.0);
+-  }
+-  InvalidateLayout();
+-}
+-
+-void WorkspaceSidebarView::ToggleSpaceCollapsed() {
+-  // M3.11: the folder stays put while one of its rows is airborne -- the
+-  // drag preview and the folder tween share the layout and must not blend.
+-  if (drag_) {
+-    return;
++void WorkspaceSidebarView::ToggleFolderCollapsed(const std::string& folder_id) {
++  // M3.11: the folders stay put while a row is airborne -- the drag preview
++  // and the fold tween share the layout and must not blend.
++  if (drag_ || !service_) {
++    return;
++  }
++  const helium_workspace::WorkspaceEntry* folder =
++      service_->FindEntryById(folder_id);
++  if (!folder || !folder->is_folder()) {
++    return;
++  }
++  // One fold at a time: a second toggle snaps the running one to its end
++  // (its chevron included) before this one snapshots the screen.
++  if (folder_animation_.is_animating() && animating_folder_id_ != folder_id) {
++    folder_animation_.End();
++    folder_fade_animation_.End();
+   }
+   // The state being left has to be snapshotted before anything else moves:
+-  // SyncBindings() below rewrites surfaced_entry_ids_, so recomputing the old
+-  // layout afterwards would give a different -- and one row shorter -- answer
+-  // than what is on screen, and the animation would start with a jump.
+-  folder_prev_layout_ = ComputeLayout(width(), space_collapsed_);
++  // the model flip below re-sorts nothing but SetFolderCollapsed's own
++  // notify runs SyncEntryViews + SyncBindings, which rewrite
++  // surfaced_entry_ids_ -- recomputing the old layout afterwards would give
++  // a different, one-row-shorter answer than what is on screen, and the
++  // animation would start with a jump.
++  folder_prev_layout_ = ComputeLayout(width());
+   folder_prev_layout_valid_ = true;
++  animating_folder_id_ = folder_id;
++  animating_to_collapsed_ = !folder->collapsed;
+ 
+-  space_collapsed_ = !space_collapsed_;
+-  if (PrefService* prefs = GetProfilePrefs()) {
+-    prefs->SetBoolean(helium_workspace::prefs::kWorkspaceSpaceCollapsed,
+-                      space_collapsed_);
+-  }
+-  // Collapsing surfaces the active row; opening clears the surfaced set.
+-  SyncBindings();
++  service_->SetFolderCollapsed(folder_id, animating_to_collapsed_);
+ 
+-  // Always driven 0 -> 1, "the state we left" -> "the state we are going to",
+-  // so the curve is the same in both directions the way Dia's is.
++  // Always driven 0 -> 1, "the state we left" -> "the state we are going
++  // to", so the curve is the same in both directions the way Dia's is.
+   folder_animation_.Reset(0.0);
+   folder_animation_.Show();
+   // Opening puts every row at its final place, fully opaque, on the first
+-  // frame -- Dia does not fade them in. Closing is the only direction with a
+-  // fade.
++  // frame -- Dia does not fade them in. Closing is the only direction with
++  // a fade.
+   folder_fade_animation_.Reset(1.0);
+-  if (space_collapsed_) {
++  if (animating_to_collapsed_) {
+     folder_fade_animation_.Hide();
+   }
+ 
+@@ -648,6 +447,113 @@ void WorkspaceSidebarView::ToggleSpaceCo
+   InvalidateLayout();
+ }
+ 
++const helium_workspace::WorkspaceEntry* WorkspaceSidebarView::ModelEntryAt(
++    size_t i) const {
++  return i < ordered_model_.size() ? &ordered_model_[i] : nullptr;
++}
++
++WorkspaceEntryView* WorkspaceSidebarView::SiteRowAt(size_t i) const {
++  return i < ordered_entries_.size()
++             ? views::AsViewClass<WorkspaceEntryView>(
++                   ordered_entries_[i].get())
++             : nullptr;
++}
++
++WorkspaceFolderRowView* WorkspaceSidebarView::FolderRowAt(size_t i) const {
++  return i < ordered_entries_.size()
++             ? views::AsViewClass<WorkspaceFolderRowView>(
++                   ordered_entries_[i].get())
++             : nullptr;
++}
++
++bool WorkspaceSidebarView::IsFolderCollapsed(
++    const std::string& folder_id) const {
++  if (!service_) {
++    return false;
++  }
++  const helium_workspace::WorkspaceEntry* folder =
++      service_->FindEntryById(folder_id);
++  return folder && folder->is_folder() && folder->collapsed;
++}
++
++bool WorkspaceSidebarView::FolderHasChildren(
++    const std::string& folder_id) const {
++  for (const helium_workspace::WorkspaceEntry& entry : ordered_model_) {
++    if (entry.folder_id == folder_id) {
++      return true;
++    }
++  }
++  return false;
++}
++
++void WorkspaceSidebarView::OnFolderToggled(const std::string& folder_id) {
++  ToggleFolderCollapsed(folder_id);
++}
++
++void WorkspaceSidebarView::OnFolderRenamed(const std::string& folder_id,
++                                           const std::u16string& title) {
++  if (service_) {
++    service_->SetEntryTitle(folder_id, title);
++  }
++}
++
++void WorkspaceSidebarView::OnFolderDeleteRequested(
++    const std::string& folder_id) {
++  BrowserWindowInterface* const browser = GetBrowserWindow();
++  if (!browser || !service_) {
++    return;
++  }
++  const helium_workspace::WorkspaceEntry* folder =
++      service_->FindEntryById(folder_id);
++  if (!folder || !folder->is_folder()) {
++    return;
++  }
++  auto run_delete = base::BindOnce(
++      [](BrowserWindowInterface* browser, const std::string& folder_id) {
++        if (auto* controller =
++                helium_workspace::WorkspaceTabController::From(browser)) {
++          controller->DeleteFolder(folder_id);
++        }
++      },
++      base::Unretained(browser), folder_id);
++  if (!FolderHasChildren(folder_id)) {
++    // An empty folder just goes (Arc asks only when there is something to
++    // lose -- 轮0, the user deleted empty Untitleds without a dialog).
++    std::move(run_delete).Run();
++    return;
++  }
++  // Arc's dialog shape (轮0 g4 f_00815): Cancel on ESC, the destructive
++  // button as the ⏎ default. The copy is ours -- we close-and-remove, Arc
++  // archives.
++  ui::DialogModel::Builder builder;
++  builder
++      .SetTitle(l10n_util::GetStringFUTF16(IDS_HELIUM_WS_DELETE_FOLDER_TITLE,
++                                           folder->title))
++      .AddParagraph(ui::DialogModelLabel(
++          l10n_util::GetStringUTF16(IDS_HELIUM_WS_DELETE_FOLDER_BODY)))
++      .AddOkButton(
++          std::move(run_delete),
++          ui::DialogModel::Button::Params()
++              .SetLabel(l10n_util::GetStringUTF16(
++                  IDS_HELIUM_WS_DELETE_FOLDER_CONFIRM))
++              .SetStyle(ui::ButtonStyle::kProminent))
++      .AddCancelButton(base::DoNothing());
++  constrained_window::ShowBrowserModal(builder.Build(),
++                                       GetWidget()->GetNativeWindow());
++}
++
++void WorkspaceSidebarView::StartFolderRename(const std::string& folder_id) {
++  if (auto it = folder_views_.find(folder_id); it != folder_views_.end()) {
++    it->second->StartRename();
++    return;
++  }
++  // The row does not exist yet: the AddFolder that asked for this rename
++  // notified one observer pass ago, and this view's SyncEntryViews may not
++  // have run. It picks the request up when it builds the row.
++  pending_rename_folder_id_ = folder_id;
++  SyncEntryViews();
++}
++
+ void WorkspaceSidebarView::AnimationProgressed(const gfx::Animation* animation) {
+   if (animation == &drag_yield_animation_) {
+     // Bounds only -- the preferred height is latched for the session, and
+@@ -670,11 +576,12 @@ void WorkspaceSidebarView::AnimationProg
+       animation != &folder_fade_animation_) {
+     return;
+   }
+-  if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
++  if (auto it = folder_views_.find(animating_folder_id_);
++      it != folder_views_.end()) {
+     // The tween runs from the state we left, so "how closed the folder is"
+     // is the value itself when closing and its complement when opening.
+     const double t = folder_animation_.GetCurrentValue();
+-    header->SetCollapsedProgress(space_collapsed_ ? t : 1.0 - t);
++    it->second->SetCollapsedProgress(animating_to_collapsed_ ? t : 1.0 - t);
+   }
+   // The height is what actually moves, and it is this view's preferred size:
+   // asking for it again on every frame is what slides everything below the
+@@ -691,6 +598,9 @@ void WorkspaceSidebarView::AnimationEnde
+   }
+   if (animation == &folder_animation_) {
+     folder_prev_layout_valid_ = false;
++    AnimationProgressed(animation);
++    animating_folder_id_.clear();
++    return;
+   }
+   AnimationProgressed(animation);
+ }
+@@ -701,8 +611,9 @@ void WorkspaceSidebarView::OnTabChangedA
+   if (!tab) {
+     return;
+   }
+-  for (WorkspaceEntryView* view : ordered_entries_) {
+-    if (view->bound_tab() == tab) {
++  for (size_t i = 0; i < ordered_entries_.size(); ++i) {
++    WorkspaceEntryView* const view = SiteRowAt(i);
++    if (view && view->bound_tab() == tab) {
+       PushLiveState(view, tab);
+       return;
+     }
+@@ -742,7 +653,7 @@ void WorkspaceSidebarView::SyncEntryView
+   const std::vector<helium_workspace::WorkspaceEntry>& entries =
+       service_->entries();
+ 
+-  // Drop rows whose entry is gone.
++  // Drop rows and folder rows whose entry is gone.
+   std::vector<std::string> stale;
+   for (const auto& [id, view] : entry_views_) {
+     const bool still_there =
+@@ -762,12 +673,57 @@ void WorkspaceSidebarView::SyncEntryView
+     entry_views_.erase(id);
+     surfaced_entry_ids_.erase(id);
+   }
++  std::vector<std::string> stale_folders;
++  for (const auto& [id, view] : folder_views_) {
++    const bool still_there =
++        std::ranges::any_of(entries, [&id](const auto& e) {
++          return e.id == id && e.is_folder();
++        });
++    if (!still_there) {
++      stale_folders.push_back(id);
++    }
++  }
++  structure_changed |= !stale_folders.empty();
++  for (const std::string& id : stale_folders) {
++    views::View* const gone = folder_views_[id].get();
++    gone->parent()->RemoveChildViewT(gone);
++    folder_views_.erase(id);
++    if (animating_folder_id_ == id) {
++      folder_animation_.End();
++      animating_folder_id_.clear();
++    }
++  }
+ 
+-  // Create or update the rest, and rebuild the model order.
+-  std::vector<raw_ptr<WorkspaceEntryView>> ordered;
++  // Create or update the rest, and rebuild the display order (both kinds
++  // ride in |ordered_entries_|, with |ordered_model_| the same-order copy
++  // the layout reads kind/folder_id/collapsed off).
++  std::vector<raw_ptr<views::View>> ordered;
+   ordered.reserve(entries.size());
+   size_t favorites = 0;
+   for (const helium_workspace::WorkspaceEntry& entry : entries) {
++    if (entry.is_folder()) {
++      auto it = folder_views_.find(entry.id);
++      WorkspaceFolderRowView* row = nullptr;
++      if (it == folder_views_.end()) {
++        row = AddChildView(std::make_unique<WorkspaceFolderRowView>(this));
++        // M3.13-r1: whole-folder reorder rides the same drag machinery as
++        // the rows (`Arc:` 轮0 -- a folder reorders with its brood).
++        row->set_drag_controller(this);
++        folder_views_[entry.id] = row;
++        structure_changed = true;
++      } else {
++        row = it->second.get();
++      }
++      const bool has_children = std::ranges::any_of(
++          entries, [&](const auto& e) { return e.folder_id == entry.id; });
++      row->SetEntry(entry, has_children);
++      if (pending_rename_folder_id_ == entry.id) {
++        pending_rename_folder_id_.clear();
++        row->StartRename();
++      }
++      ordered.push_back(row);
++      continue;
++    }
+     const bool is_favorite =
+         entry.section == helium_workspace::WorkspaceEntry::Section::kFavorite;
+     auto it = entry_views_.find(entry.id);
+@@ -783,10 +739,6 @@ void WorkspaceSidebarView::SyncEntryView
+       structure_changed = true;
+     } else {
+       view = it->second.get();
+-      if (!ordered_entries_.empty() && ordered.size() < ordered_entries_.size() &&
+-          ordered_entries_[ordered.size()].get() != view) {
+-        structure_changed = true;
+-      }
+     }
+     const bool was_capsule = view->renders_as_capsule();
+     view->SetEntry(entry);
+@@ -817,13 +769,28 @@ void WorkspaceSidebarView::SyncEntryView
+   }
+   if (ordered.size() != ordered_entries_.size()) {
+     structure_changed = true;
++  } else {
++    for (size_t i = 0; i < ordered.size(); ++i) {
++      if (ordered_entries_[i].get() != ordered[i].get() ||
++          ordered_model_[i].id != entries[i].id ||
++          ordered_model_[i].folder_id != entries[i].folder_id ||
++          ordered_model_[i].collapsed != entries[i].collapsed ||
++          ordered_model_[i].section != entries[i].section) {
++        structure_changed = true;
++        break;
++      }
++    }
+   }
+   ordered_entries_ = std::move(ordered);
++  ordered_model_ = entries;
+   favorite_count_ = favorites;
++  pending_rename_folder_id_.clear();
+ 
+   // M3.11: a drag whose entry another window just removed has nothing left
+-  // to move; fold the session and let the rows settle.
+-  if (drag_ && !entry_views_.contains(drag_->entry_id)) {
++  // to move; fold the session and let the rows settle. Folder sources live
++  // in |folder_views_| (M3.13-r1).
++  if (drag_ && !entry_views_.contains(drag_->entry_id) &&
++      !folder_views_.contains(drag_->entry_id)) {
+     EndDragSession();
+   }
+ 
+@@ -852,7 +819,11 @@ void WorkspaceSidebarView::SyncBindings(
+       (model && !model->empty()) ? model->GetTabAtIndex(model->active_index())
+                                  : nullptr;
+ 
+-  for (WorkspaceEntryView* view : ordered_entries_) {
++  for (size_t i = 0; i < ordered_entries_.size(); ++i) {
++    WorkspaceEntryView* const view = SiteRowAt(i);
++    if (!view) {
++      continue;  // folder rows have no tab of their own
++    }
+     const tabs::TabHandle handle =
+         service_->FindTabForEntryInWindow(view->entry_id(), browser);
+     tabs::TabInterface* tab = handle.Get();
+@@ -863,33 +834,35 @@ void WorkspaceSidebarView::SyncBindings(
+     }
+   }
+ 
+-  // helium-fork M3.10: the rows that show under a collapsed folder head. The
+-  // active entry joins (at collapse time or whenever it becomes active while
+-  // collapsed); an entry leaves only when its tab is gone -- switching away
+-  // keeps it listed, just without the white card (user 2026-08-23: "切到别
+-  // 的标签，白色胶囊条就没有了，这个标签页就放在那儿就可以"; closing it is what
+-  // folds it back, unlike Dia where it stays). Opening the folder forgets
+-  // the set.
++  // helium-fork M3.10 -> M3.13: the rows that show under a *collapsed*
++  // folder. A collapsed folder's active child joins (at collapse time or
++  // whenever it becomes active while collapsed); an entry leaves only when
++  // its tab is gone -- switching away keeps it listed, just without the
++  // white card (user 2026-08-23: "切到别的标签，白色胶囊条就没有了，这个标签页就
++  // 放在那儿就可以"; closing it is what folds it back, unlike Dia where it
++  // stays). Opening a folder forgets its children.
+   bool surfaced_changed = false;
+-  if (space_collapsed_) {
+-    for (WorkspaceEntryView* view : ordered_entries_) {
+-      if (view->renders_as_capsule()) {
+-        continue;
+-      }
+-      if (view->active()) {
+-        surfaced_changed |= surfaced_entry_ids_.insert(view->entry_id()).second;
+-      } else if (!view->bound_tab() &&
+-                 view->entry_id() != drop_surfaced_entry_id_) {
+-        // The one just dropped in stays put even with no tab of its own:
+-        // showing it is the whole point of revealing it (轮3-r1).
+-        surfaced_changed |= surfaced_entry_ids_.erase(view->entry_id()) > 0;
++  for (size_t i = 0; i < ordered_entries_.size(); ++i) {
++    WorkspaceEntryView* const view = SiteRowAt(i);
++    const helium_workspace::WorkspaceEntry* const entry = ModelEntryAt(i);
++    if (!view || !entry || entry->folder_id.empty()) {
++      continue;  // only folder children surface; top level is always shown
++    }
++    if (!IsFolderCollapsed(entry->folder_id)) {
++      if (view->entry_id() == drop_surfaced_entry_id_) {
++        drop_surfaced_entry_id_.clear();
+       }
++      surfaced_changed |= surfaced_entry_ids_.erase(view->entry_id()) > 0;
++      continue;
++    }
++    if (view->active()) {
++      surfaced_changed |= surfaced_entry_ids_.insert(view->entry_id()).second;
++    } else if (!view->bound_tab() &&
++               view->entry_id() != drop_surfaced_entry_id_) {
++      // The one just dropped in stays put even with no tab of its own:
++      // showing it is the whole point of revealing it (轮3-r1).
++      surfaced_changed |= surfaced_entry_ids_.erase(view->entry_id()) > 0;
+     }
+-  } else if (!surfaced_entry_ids_.empty() ||
+-             !drop_surfaced_entry_id_.empty()) {
+-    surfaced_changed = !surfaced_entry_ids_.empty();
+-    surfaced_entry_ids_.clear();
+-    drop_surfaced_entry_id_.clear();
+   }
+   if (surfaced_changed) {
+     PreferredSizeChanged();
+@@ -898,9 +871,28 @@ void WorkspaceSidebarView::SyncBindings(
+   UpdateCardShadow();
+ }
+ 
+-bool WorkspaceSidebarView::IsPinnedRowVisible(const WorkspaceEntryView* view,
+-                                             bool as_collapsed) const {
+-  return !as_collapsed || surfaced_entry_ids_.contains(view->entry_id());
++bool WorkspaceSidebarView::IsPinnedRowVisible(size_t i) const {
++  const helium_workspace::WorkspaceEntry* const entry = ModelEntryAt(i);
++  if (!entry) {
++    return false;
++  }
++  if (entry->folder_id.empty()) {
++    return true;  // top-level rows and folder rows always lay out
++  }
++  // M3.13-r1: a dragged folder's children travel with it -- the whole block
++  // lifts, so they leave the layout for the gesture. They return with the
++  // drop (settling lays them out again under the head's landing slot; the
++  // head itself stays hidden until the card lands on it). ⚠ Arc was only
++  // vouched for "reorders with its children"; what its children do *during*
++  // the drag is unmeasured, and this is the v1 reading.
++  if (drag_ && !drag_->settling && drag_->source_is_folder &&
++      drag_->entry_id == entry->folder_id) {
++    return false;
++  }
++  if (!IsFolderCollapsed(entry->folder_id)) {
++    return true;
++  }
++  return surfaced_entry_ids_.contains(entry->id);
+ }
+ 
+ void WorkspaceSidebarView::ChildPreferredSizeChanged(views::View* child) {
+@@ -922,7 +914,6 @@ int WorkspaceSidebarView::FavoritesPlace
+ 
+ WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::ComputeLayout(
+     int width,
+-    bool as_collapsed,
+     bool with_drag_hole) const {
+   SidebarLayout out;
+   out.entry_bounds.resize(ordered_entries_.size());
+@@ -954,8 +945,8 @@ WorkspaceSidebarView::SidebarLayout Work
+     const bool have_mover =
+         drag_index.has_value() || drag_->kind == DragKind::kExternalUrl;
+     if (have_mover && drag_->plan_section && with_drag_hole &&
+-        !drag_->folder_drop) {
+-      hole = drag_->plan_index;
++        drag_->display_hole_valid) {
++      hole = drag_->display_hole_index;
+       hole_in_grid = *drag_->plan_section ==
+                      helium_workspace::WorkspaceEntry::Section::kFavorite;
+       hole_in_rows = !hole_in_grid;
+@@ -1008,48 +999,86 @@ WorkspaceSidebarView::SidebarLayout Work
+   y += FavoriteGridGap();
+   // M3.12-r2: in-session the grid segment is grow-only, like the latched
+   // height -- a released favorite's old slot pads the gap instead of pulling
+-  // the header up, so the fixed band above the scroller never shrinks
++  // the rows up, so the fixed band above the scroller never shrinks
+   // mid-gesture (and the rows never need negative scroller-space y).
+   if (drag_) {
+     y = std::max(y, drag_->latched_grid_segment);
+   }
+   out.grid_segment = y;
+-  out.header_bounds = gfx::Rect(0, y, row_width, SpaceHeaderHeight());
+-  y += SpaceHeaderHeight();
+ 
+-  // helium-fork M3.10: the rows are the folder's children -- indented one
+-  // step from the header (Dia), each as tall as it asks to be (a row showing
+-  // its hint is two lines), and laid out only while they are visible.
++  // M3.13: the pinned section is a top-level mix of bare rows and folder
++  // rows at x0, with an open folder's children indented one step beneath it
++  // (and a collapsed folder's surfaced ones -- same spot, same step). Each
++  // row is as tall as it asks to be (a row showing its hint is two lines).
++  // The drag hole rides whichever scope the plan names: the top level, or
++  // one folder's run of children.
+   const int child_width = std::max(0, row_width - kFolderChildIndent);
+   const int hole_height = GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
+-  size_t laid_rows = 0;
+-  const auto lay_row_hole = [&] {
++  const std::string plan_scope =
++      hole_in_rows && drag_ ? drag_->display_hole_folder_id : std::string();
++  bool hole_placed = false;
++  std::map<std::string, size_t> laid_in_scope;
++  const auto lay_row_hole = [&](const std::string& scope) {
++    const bool indented = !scope.empty();
+     y += kTabPadding;
+     out.drag_slot_bounds =
+-        gfx::Rect(kFolderChildIndent, y, child_width, hole_height);
++        gfx::Rect(indented ? kFolderChildIndent : 0, y,
++                  indented ? child_width : row_width, hole_height);
+     y += hole_height;
++    hole_placed = true;
++  };
++  std::string open_scope;  // the folder whose children the walk is inside
++  const auto close_scope = [&](const std::string& scope) {
++    // Leaving a folder's run: a plan that appends to it lands here, right
++    // after its last laid child, not at the bottom of the list.
++    if (hole_in_rows && !hole_placed && scope == plan_scope &&
++        !plan_scope.empty() && laid_in_scope[scope] >= hole) {
++      lay_row_hole(scope);
++    }
+   };
+   for (size_t i = favorite_count_; i < ordered_entries_.size(); ++i) {
+-    const WorkspaceEntryView* view = ordered_entries_[i].get();
+-    if (drag_index && i == *drag_index) {
++    const helium_workspace::WorkspaceEntry* const entry = ModelEntryAt(i);
++    if (!entry) {
+       continue;
+     }
+-    if (!IsPinnedRowVisible(view, as_collapsed)) {
++    if (entry->folder_id != open_scope) {
++      close_scope(open_scope);
++      open_scope = entry->folder_id;
++    }
++    if (drag_index && i == *drag_index) {
+       continue;
+     }
+-    if (hole_in_rows && laid_rows == hole) {
+-      lay_row_hole();
++    if (!IsPinnedRowVisible(i)) {
++      continue;
+     }
+-    const int row_height = view->RowHeight();
++    const std::string& scope = entry->folder_id;
++    if (hole_in_rows && !hole_placed && scope == plan_scope &&
++        laid_in_scope[scope] == hole) {
++      lay_row_hole(scope);
++    }
++    const bool indented = !scope.empty();
++    const WorkspaceEntryView* const site = SiteRowAt(i);
++    const int row_height =
++        site ? site->RowHeight()
++             : GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
+     y += kTabPadding;
+-    out.entry_bounds[i] =
+-        gfx::Rect(kFolderChildIndent, y, child_width, row_height);
++    out.entry_bounds[i] = gfx::Rect(indented ? kFolderChildIndent : 0, y,
++                                    indented ? child_width : row_width,
++                                    row_height);
+     out.entry_visible[i] = true;
+     y += row_height;
+-    ++laid_rows;
++    ++laid_in_scope[scope];
++    // A plan that targets an expanded folder with nothing in it: its one
++    // slot sits right under the folder's own row (the walk never enters an
++    // empty scope, so neither check above can place it).
++    if (hole_in_rows && !hole_placed && !plan_scope.empty() && !site &&
++        entry->id == plan_scope && !FolderHasChildren(plan_scope)) {
++      lay_row_hole(plan_scope);
++    }
+   }
+-  if (hole_in_rows && laid_rows <= hole) {
+-    lay_row_hole();
++  close_scope(open_scope);
++  if (hole_in_rows && !hole_placed && plan_scope.empty()) {
++    lay_row_hole(plan_scope);
+   }
+ 
+   out.height = y;
+@@ -1072,7 +1101,7 @@ gfx::Rect LerpRect(const gfx::Rect& from
+ 
+ WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::CurrentLayout(
+     int width) const {
+-  SidebarLayout target = ComputeLayout(width, space_collapsed_);
++  SidebarLayout target = ComputeLayout(width);
+   // M3.11: the drag yield glides every remaining entry from the layout it
+   // was showing to the new preview. Mutually exclusive with the folder tween
+   // (drags cannot start while it runs, and the header ignores clicks while a
+@@ -1089,8 +1118,6 @@ WorkspaceSidebarView::SidebarLayout Work
+       // An entry only one side lays out (the floating one at the drag's
+       // edges) snaps: its real motion belongs to the overlay, not the rows.
+     }
+-    out.header_bounds =
+-        LerpRect(drag_prev_layout_.header_bounds, target.header_bounds, t);
+     return out;
+   }
+   if (!folder_animation_.is_animating() || !folder_prev_layout_valid_ ||
+@@ -1104,8 +1131,6 @@ WorkspaceSidebarView::SidebarLayout Work
+   const float fade = static_cast<float>(folder_fade_animation_.GetCurrentValue());
+   SidebarLayout out = target;
+   out.height = LerpInt(folder_prev_layout_.height, target.height, t);
+-  out.header_bounds =
+-      LerpRect(folder_prev_layout_.header_bounds, target.header_bounds, t);
+   out.placeholder_bounds = LerpRect(folder_prev_layout_.placeholder_bounds,
+                                     target.placeholder_bounds, t);
+ 
+@@ -1152,14 +1177,13 @@ gfx::Size WorkspaceSidebarView::Calculat
+ 
+ gfx::Size WorkspaceSidebarView::GetMinimumSize() const {
+   // M3.12-r2: the rows segment only -- the grid, its placeholder and the
+-  // trailing gap moved into the fixed band (BandMinimumHeight). What this
+-  // view genuinely needs is the space header (permanent -- it is the pinned
+-  // section's visible edge) and one row's worth of content. This is also
+-  // what the pinned viewport floors on (SidebarPinnedViewportHeight via
++  // trailing gap moved into the fixed band (BandMinimumHeight). With the
++  // permanent space header retired (M3.13), what this view genuinely needs
++  // is one row's worth of content when it has any. This is also what the
++  // pinned viewport floors on (SidebarPinnedViewportHeight via
+   // PinnedTabContainerView::GetMinimumSize).
+-  int height = SpaceHeaderHeight();
+-  if (ordered_entries_.size() > favorite_count_ &&
+-      (!space_collapsed_ || !surfaced_entry_ids_.empty())) {
++  int height = 0;
++  if (ordered_entries_.size() > favorite_count_) {
+     height +=
+         kTabPadding + GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
+   }
+@@ -1168,7 +1192,7 @@ gfx::Size WorkspaceSidebarView::GetMinim
+ }
+ 
+ int WorkspaceSidebarView::BandSegmentHeight(int width) const {
+-  return ComputeLayout(width, space_collapsed_).grid_segment;
++  return ComputeLayout(width).grid_segment;
+ }
+ 
+ int WorkspaceSidebarView::BandMinimumHeight() const {
+@@ -1218,14 +1242,27 @@ void WorkspaceSidebarView::Layout(PassKe
+       placeholder_->SetBoundsRect(layout.placeholder_bounds);
+     }
+   }
+-  if (space_header_) {
+-    gfx::Rect header = layout.header_bounds;
+-    header.Offset(0, -split);
+-    space_header_->SetBoundsRect(header);
+-  }
+   for (size_t i = 0; i < ordered_entries_.size(); ++i) {
+-    WorkspaceEntryView* view = ordered_entries_[i].get();
+     const bool visible = layout.entry_visible[i];
++    if (WorkspaceFolderRowView* const folder_row = FolderRowAt(i)) {
++      // Folder rows never fade and never carry a fold layer of their own --
++      // the head stays put while its children move (Dia).
++      if (visible) {
++        gfx::Rect row = layout.entry_bounds[i];
++        row.Offset(0, -split);
++        folder_row->SetBoundsRect(row);
++      }
++      // M3.13-r1: while the floating card flies home the head it stands in
++      // for stays hidden, same as a site row below.
++      const bool hidden_by_drag =
++          drag_ && drag_->settling && folder_row->folder_id() == drag_->entry_id;
++      folder_row->SetVisible(visible && !hidden_by_drag);
++      continue;
++    }
++    WorkspaceEntryView* const view = SiteRowAt(i);
++    if (!view) {
++      continue;
++    }
+     if (i < favorite_count_) {
+       // Grid tiles: never part of the folder tween (identical endpoints),
+       // never fading -- and clearing here keeps the "no stale layer"
+@@ -1235,8 +1272,7 @@ void WorkspaceSidebarView::Layout(PassKe
+         view->SetBoundsRect(layout.entry_bounds[i]);
+       }
+       const bool hidden_by_drag =
+-          drag_ && drag_->settling &&
+-          ordered_entries_[i]->entry_id() == drag_->entry_id;
++          drag_ && drag_->settling && view->entry_id() == drag_->entry_id;
+       view->SetVisible(visible && !hidden_by_drag);
+       continue;
+     }
+@@ -1256,8 +1292,7 @@ void WorkspaceSidebarView::Layout(PassKe
+     // While the floating card is still flying home the row it belongs to is
+     // laid out but not shown -- the card is standing in for it.
+     const bool hidden_by_drag =
+-        drag_ && drag_->settling &&
+-        ordered_entries_[i]->entry_id() == drag_->entry_id;
++        drag_ && drag_->settling && view->entry_id() == drag_->entry_id;
+     view->SetVisible(visible && !hidden_by_drag);
+   }
+   UpdateCardShadow();
+@@ -1279,8 +1314,9 @@ void WorkspaceSidebarView::SetCardShadow
+ WorkspaceEntryView* WorkspaceSidebarView::ActiveRowEntryView() const {
+   // Only full-width rows carry the floating card; the favorites grid keeps
+   // its own selected treatment (user 2026-08-20).
+-  for (WorkspaceEntryView* view : ordered_entries_) {
+-    if (view->active() && !view->renders_as_capsule()) {
++  for (size_t i = 0; i < ordered_entries_.size(); ++i) {
++    WorkspaceEntryView* const view = SiteRowAt(i);
++    if (view && view->active() && !view->renders_as_capsule()) {
+       return view;
+     }
+   }
+@@ -1386,7 +1422,8 @@ bool WorkspaceSidebarView::CanEntryBecom
+   }
+   const helium_workspace::WorkspaceEntry* entry =
+       service_->FindEntryById(entry_id);
+-  if (!entry) {
++  if (!entry || entry->is_folder()) {
++    // The grid holds tiles, not folders (Arc rejects this too, 轮0).
+     return false;
+   }
+   return entry->section ==
+@@ -1400,11 +1437,16 @@ bool WorkspaceSidebarView::CanEntryBecom
+ void WorkspaceSidebarView::WriteDragDataForView(views::View* sender,
+                                                 const gfx::Point& press_pt,
+                                                 ui::OSExchangeData* data) {
++  // Two kinds of source since M3.13-r1: a site row or a folder head. The
++  // payload is the entry id either way -- a folder is an entry too.
+   auto* row = views::AsViewClass<WorkspaceEntryView>(sender);
+-  if (!row) {
++  auto* folder_row =
++      row ? nullptr : views::AsViewClass<WorkspaceFolderRowView>(sender);
++  if (!row && !folder_row) {
+     return;
+   }
+-  helium_workspace::WriteWorkspaceEntryDragData(row->entry_id(), data);
++  helium_workspace::WriteWorkspaceEntryDragData(
++      row ? row->entry_id() : folder_row->folder_id(), data);
+   // A 1x1 transparent drag image, because the visual is ours: macOS centres
+   // the system image on the pointer and cannot morph it, and Dia does both
+   // the opposite (drag_drop_client_mac.mm:81-84, measured 2026-08-24).
+@@ -1413,7 +1455,7 @@ void WorkspaceSidebarView::WriteDragData
+   blank.eraseColor(SK_ColorTRANSPARENT);
+   data->provider().SetDragImage(gfx::ImageSkia::CreateFrom1xBitmap(blank),
+                                 gfx::Vector2d());
+-  const gfx::Size row_size = row->size();
++  const gfx::Size row_size = sender->size();
+   pending_drag_grab_ = gfx::Vector2dF(
+       row_size.width() ? static_cast<float>(press_pt.x()) / row_size.width()
+                        : 0.5f,
+@@ -1429,6 +1471,12 @@ int WorkspaceSidebarView::GetDragOperati
+ bool WorkspaceSidebarView::CanStartDragForView(views::View* sender,
+                                                const gfx::Point& press_pt,
+                                                const gfx::Point& p) {
++  // M3.13-r1: a folder head drags too. Not mid-rename (the press belongs to
++  // the field) and not mid-tween, same as the rows below; a head is always
++  // on screen, so there is no laid-out check to make.
++  if (auto* folder_row = views::AsViewClass<WorkspaceFolderRowView>(sender)) {
++    return !folder_row->renaming() && !folder_animation_.is_animating();
++  }
+   auto* row = views::AsViewClass<WorkspaceEntryView>(sender);
+   if (!row) {
+     return false;
+@@ -1443,22 +1491,31 @@ bool WorkspaceSidebarView::CanStartDragF
+   // revealed under the closed folder -- is on screen, so it drags like any
+   // other; the sidebar must never contain a row you cannot pick up (user
+   // 2026-08-25).
+-  if (!row->renders_as_capsule() &&
+-      !IsPinnedRowVisible(row, space_collapsed_)) {
+-    return false;
++  if (!row->renders_as_capsule()) {
++    bool laid_out = false;
++    for (size_t i = 0; i < ordered_entries_.size(); ++i) {
++      if (ordered_entries_[i].get() == row) {
++        laid_out = IsPinnedRowVisible(i);
++        break;
++      }
++    }
++    if (!laid_out) {
++      return false;
++    }
+   }
+   return true;
+ }
+ 
+ void WorkspaceSidebarView::OnWillStartDragForView(views::View* dragged_view) {
+   auto* row = views::AsViewClass<WorkspaceEntryView>(dragged_view);
+-  if (!row) {
++  auto* folder_row =
++      row ? nullptr : views::AsViewClass<WorkspaceFolderRowView>(dragged_view);
++  if (!row && !folder_row) {
+     return;
+   }
+   // Read the settled geometry before the session exists, so the frozen
+   // frame is the one the user was looking at when they pressed.
+-  const int settled_boundary = ComputeLayout(width(), space_collapsed_)
+-                                   .header_bounds.y();
++  const int settled_boundary = ComputeLayout(width()).grid_segment;
+ 
+   drag_ = std::make_unique<DragState>();
+   if (DragPerfRequested()) {
+@@ -1474,8 +1531,9 @@ void WorkspaceSidebarView::OnWillStartDr
+     }
+   }
+   drag_->zone_boundary_y = settled_boundary;
+-  drag_->entry_id = row->entry_id();
+-  drag_->from_favorite = row->renders_as_capsule();
++  drag_->entry_id = row ? row->entry_id() : folder_row->folder_id();
++  drag_->from_favorite = row && row->renders_as_capsule();
++  drag_->source_is_folder = folder_row != nullptr;
+   // The session opens with the hole in the entry's own slot -- picking a row
+   // up changes nothing but the row itself floating (Dia).
+   const std::optional<size_t> index = DragEntryOrderedIndex();
+@@ -1484,10 +1542,27 @@ void WorkspaceSidebarView::OnWillStartDr
+         drag_->from_favorite
+             ? helium_workspace::WorkspaceEntry::Section::kFavorite
+             : helium_workspace::WorkspaceEntry::Section::kPinned;
+-    drag_->plan_index =
+-        drag_->from_favorite ? *index : *index - favorite_count_;
++    if (drag_->source_is_folder) {
++      // A folder's slot counts in the top-level scope -- children are not
++      // slots -- and the display hole is seeded valid right here: the
++      // children leave the layout with their head, and without a one-row
++      // hole standing in for the block the list would jump up by the
++      // block's whole height at pick-up, under a stationary pointer.
++      size_t top_level_before = 0;
++      for (size_t i = favorite_count_; i < *index; ++i) {
++        if (ordered_model_[i].folder_id.empty()) {
++          ++top_level_before;
++        }
++      }
++      drag_->plan_index = top_level_before;
++      drag_->display_hole_index = top_level_before;
++      drag_->display_hole_valid = true;
++    } else {
++      drag_->plan_index =
++          drag_->from_favorite ? *index : *index - favorite_count_;
++    }
+   }
+-  const SidebarLayout seed = ComputeLayout(width(), space_collapsed_);
++  const SidebarLayout seed = ComputeLayout(width());
+   drag_->latched_grid_segment = seed.grid_segment;
+   drag_->latched_rows_segment = seed.height - seed.grid_segment;
+   drag_->grab = pending_drag_grab_;
+@@ -1498,9 +1573,17 @@ void WorkspaceSidebarView::OnWillStartDr
+   // is under the pointer, so it keeps its own highlight.
+   ClearStaleHovers();
+   if (drag_overlay_) {
+-    drag_overlay_->Start(row->drag_favicon(), row->drag_title(),
+-                         row->drag_surface_color(), row->drag_text_color(),
+-                         row->size(), drag_->grab);
++    if (row) {
++      drag_overlay_->Start(row->drag_favicon(), row->drag_title(),
++                           row->drag_surface_color(), row->drag_text_color(),
++                           row->size(), drag_->grab);
++    } else {
++      drag_overlay_->Start(folder_row->drag_favicon(),
++                           folder_row->drag_title(),
++                           folder_row->drag_surface_color(),
++                           folder_row->drag_text_color(), folder_row->size(),
++                           drag_->grab);
++    }
+   }
+   // Today's slot resizes its container while the layout is still animating
+   // towards it -- the same "resized to target bounds whilst scrolling"
+@@ -1517,6 +1600,10 @@ void WorkspaceSidebarView::OnEntryDragDo
+   EndDragSession();
+ }
+ 
++void WorkspaceSidebarView::OnFolderDragDone() {
++  EndDragSession();
++}
++
+ // ---- M3.11 entry drag: target side ----
+ 
+ bool WorkspaceSidebarView::GetDropFormats(
+@@ -1659,19 +1746,21 @@ views::View::DropCallback WorkspaceSideb
+     KeepUrlDragSessionAlive();
+     return base::BindOnce(&WorkspaceSidebarView::PerformUrlDrop,
+                           weak_factory_.GetWeakPtr(), *drag_->plan_section,
+-                          drag_->plan_index);
++                          drag_->plan_index, drag_->plan_folder_id);
+   }
+   // Bound by value: by the time this runs the session may have been torn
+   // down by the source row's OnDragDone (see PerformEntryDrop).
+   return base::BindOnce(&WorkspaceSidebarView::PerformEntryDrop,
+                         weak_factory_.GetWeakPtr(), drag_->entry_id,
+-                        *drag_->plan_section, drag_->plan_index);
++                        *drag_->plan_section, drag_->plan_index,
++                        drag_->plan_folder_id);
+ }
+ 
+ void WorkspaceSidebarView::PerformEntryDrop(
+     std::string entry_id,
+     helium_workspace::WorkspaceEntry::Section section,
+     size_t index,
++    std::string folder_id,
+     const ui::DropTargetEvent& event,
+     ui::mojom::DragOperation& output_drag_op,
+     std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
+@@ -1680,13 +1769,18 @@ void WorkspaceSidebarView::PerformEntryD
+     return;
+   }
+   // The one model write of the whole gesture. The index is "slot among that
+-  // section's entries with the dragged one already removed" -- exactly what
+-  // the hit math produces and what MoveEntry consumes. An id another window
+-  // removed in the meantime simply misses.
+-  if (service_->MoveEntry(entry_id, section, index)) {
++  // scope's entries with the dragged one already removed" -- exactly what
++  // the hit math produces and what MoveEntry / MoveEntryToFolder consume.
++  // An id another window removed in the meantime simply misses.
++  const bool moved =
++      folder_id.empty()
++          ? service_->MoveEntry(entry_id, section, index)
++          : service_->MoveEntryToFolder(entry_id, folder_id, index);
++  if (moved) {
+     output_drag_op = ui::mojom::DragOperation::kMove;
+-    if (space_collapsed_ &&
+-        section == helium_workspace::WorkspaceEntry::Section::kPinned) {
++    if (!folder_id.empty() && IsFolderCollapsed(folder_id)) {
++      // Dropped into a *closed* folder: it stays shut, only the newcomer
++      // shows beneath (`Arc:`, 轮3-r2 / 轮0 2026-08-31).
+       drop_surfaced_entry_id_ = entry_id;
+     }
+   }
+@@ -1739,14 +1833,13 @@ void WorkspaceSidebarView::StartUrlDragS
+   // settled boundary before the session exists, because the first slot this
+   // session opens moves the header, and a boundary read off the live layout
+   // would then re-answer the hit test that opened it.
+-  const int settled_boundary =
+-      ComputeLayout(width(), space_collapsed_).header_bounds.y();
++  const int settled_boundary = ComputeLayout(width()).grid_segment;
+ 
+   drag_ = std::make_unique<DragState>();
+   drag_->kind = DragKind::kExternalUrl;
+   drag_->zone_boundary_y = settled_boundary;
+   {
+-    const SidebarLayout seed = ComputeLayout(width(), space_collapsed_);
++    const SidebarLayout seed = ComputeLayout(width());
+     drag_->latched_grid_segment = seed.grid_segment;
+     drag_->latched_rows_segment = seed.height - seed.grid_segment;
+   }
+@@ -1781,6 +1874,7 @@ void WorkspaceSidebarView::StartUrlDragS
+ void WorkspaceSidebarView::PerformUrlDrop(
+     helium_workspace::WorkspaceEntry::Section section,
+     size_t index,
++    std::string folder_id,
+     const ui::DropTargetEvent& event,
+     ui::mojom::DragOperation& output_drag_op,
+     std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
+@@ -1802,22 +1896,24 @@ void WorkspaceSidebarView::PerformUrlDro
+   if (!drag_) {
+     return;
+   }
+-  const bool collapsed_folder_drop = space_collapsed_;
+   DragPerfFinish();
+   RetargetDragYield();
+   drag_->settling = true;
+ 
+   if (url && service_) {
+     // AddEntry only appends, so the planned slot needs the second call. The
+-    // index is "slot among that section's entries with the moved one already
++    // index is "slot among that scope's entries with the moved one already
+     // removed", and the moved one is the one just appended, which leaves the
+     // hit math's answer -- computed over the list as it was -- exactly right.
+     const std::string id = service_->AddEntry(section, *url, urls.front().title);
+     if (!id.empty()) {
+-      service_->MoveEntry(id, section, index);
++      if (folder_id.empty()) {
++        service_->MoveEntry(id, section, index);
++      } else {
++        service_->MoveEntryToFolder(id, folder_id, index);
++      }
+       output_drag_op = ui::mojom::DragOperation::kCopy;
+-      if (collapsed_folder_drop &&
+-          section == helium_workspace::WorkspaceEntry::Section::kPinned) {
++      if (!folder_id.empty() && IsFolderCollapsed(folder_id)) {
+         drop_surfaced_entry_id_ = id;
+       }
+       FinishDragSettle();
+@@ -1898,6 +1994,16 @@ bool WorkspaceSidebarView::OnTodayDragUp
+     return false;
+   }
+   TRACE_EVENT0("ui", "WorkspaceSidebarView::OnTodayDragUpdate");
++  if (drag_->source_is_folder) {
++    // M3.13-r1: Today takes tabs, not containers -- no slot opens and a
++    // release does nothing. The gate matters: the drop path below would
++    // open a blank tab off the folder's empty URL and RemoveEntry would
++    // cascade-delete the folder with all its children, silently. (⚠ what
++    // Arc does here is unmeasured; refusal is the v1 reading.) The card
++    // still tracks the pointer.
++    UpdateDragOverlay(source, point_in_source);
++    return false;
++  }
+   if (HasUrlDragSession()) {
+     KeepUrlDragSessionAlive();
+   }
+@@ -1966,7 +2072,7 @@ void WorkspaceSidebarView::SetTodayDragP
+   if (!drag_) {
+     return;
+   }
+-  SetFolderDropTarget(false);
++  SetFolderDropTarget(std::string());
+   const bool had_today = drag_->plan_today_index.has_value();
+   if (drag_->plan_today_index == tab_index && !drag_->plan_section &&
+       (!tab_index || drag_->plan_today_row == row_position)) {
+@@ -2009,7 +2115,10 @@ void WorkspaceSidebarView::PerformTodayD
+   const helium_workspace::WorkspaceEntry* const entry =
+       service_->FindEntryById(entry_id);
+   TabStripModel* const model = browser->GetTabStripModel();
+-  if (!entry || !model) {
++  // |is_folder| is the second half of OnTodayDragUpdate's gate (the plan is
++  // bound by value, so the commit guards for itself): a folder here would
++  // open a blank tab and cascade-delete its children.
++  if (!entry || entry->is_folder() || !model) {
+     return;
+   }
+   const GURL url = entry->url;
+@@ -2177,8 +2286,10 @@ std::optional<size_t> WorkspaceSidebarVi
+   if (!drag_) {
+     return std::nullopt;
+   }
+-  for (size_t i = 0; i < ordered_entries_.size(); ++i) {
+-    if (ordered_entries_[i]->entry_id() == drag_->entry_id) {
++  // By model id, so both kinds of source answer -- a folder's slot holds a
++  // WorkspaceFolderRowView, which SiteRowAt cannot see (M3.13-r1).
++  for (size_t i = 0; i < ordered_model_.size(); ++i) {
++    if (ordered_model_[i].id == drag_->entry_id) {
+       return i;
+     }
+   }
+@@ -2212,8 +2323,12 @@ void WorkspaceSidebarView::EnsureDropGeo
+   // row where it is *drawn*), and that is the 轮2 feel the user accepted.
+   // Measuring against the closed-up layout instead removes the hysteresis
+   // and shifts every row-to-row drop one place; tried 2026-08-25, reverted.
+-  const SidebarLayout current_target = ComputeLayout(w, space_collapsed_);
++  const SidebarLayout current_target = ComputeLayout(w);
+   drag_->hit_row_centers.clear();
++  drag_->hit_row_scopes.clear();
++  drag_->hit_folder_rows.clear();
++  std::map<std::string, size_t> slot_in_scope;
++  std::string last_scope;
+   for (size_t i = favorite_count_; i < ordered_entries_.size(); ++i) {
+     if (drag_index && i == *drag_index) {
+       continue;
+@@ -2221,9 +2336,44 @@ void WorkspaceSidebarView::EnsureDropGeo
+     if (!current_target.entry_visible[i]) {
+       continue;
+     }
++    const helium_workspace::WorkspaceEntry* const entry = ModelEntryAt(i);
++    if (!entry) {
++      continue;
++    }
++    // M3.13-r1: a dragged folder reorders at the top level only -- v1 rules
++    // out nesting (folder-on-folder is a plain reorder, 轮0) and landing
++    // between another folder's children. So its geometry holds no fill
++    // targets at all and only top-level gaps: the fill branch runs dry, and
++    // RowInsertIndex's midpoint rule folds a pointer inside another
++    // folder's block to the gap above or below the whole block.
++    if (drag_->source_is_folder) {
++      if (!entry->folder_id.empty()) {
++        continue;
++      }
++    } else if (entry->is_folder() &&
++               (entry->collapsed || !FolderHasChildren(entry->id))) {
++      // A *collapsed* folder's whole row is a drop of its own (`Arc:` fills
++      // it); it still takes part in the top-level slot ordering. An expanded
++      // folder with nothing in it gets the same treatment -- its children's
++      // band does not exist, so the row is the only thing there is to hit.
++      drag_->hit_folder_rows.emplace_back(entry->id,
++                                          current_target.entry_bounds[i]);
++    }
++    // The gap ABOVE this row: scope of the row itself, at that scope's
++    // running slot count. A child of the dragged row's own folder counts in
++    // the same scope numbering MoveEntryToFolder consumes.
+     drag_->hit_row_centers.push_back(
+         current_target.entry_bounds[i].CenterPoint().y());
+-  }
++    drag_->hit_row_scopes.emplace_back(entry->folder_id,
++                                       slot_in_scope[entry->folder_id]);
++    ++slot_in_scope[entry->folder_id];
++    last_scope = entry->folder_id;
++  }
++  // The trailing gap, below the last laid row: the end of whatever scope
++  // that row was in -- past a folder's last child it still reads as "into
++  // the folder, at its end" (the top level resumes only at the next
++  // top-level row, and there is none).
++  drag_->hit_row_scopes.emplace_back(last_scope, slot_in_scope[last_scope]);
+ }
+ 
+ void WorkspaceSidebarView::UpdateDragPlan(const gfx::Point& point) {
+@@ -2241,55 +2391,81 @@ void WorkspaceSidebarView::UpdateDragPla
+                                                 drag_->zone_boundary_y);
+   if (zone == helium_workspace::SidebarDragZone::kGrid) {
+     // Arc's refusal is passive: a 13th capsule gets no slot and no morph;
+-    // releasing over a full grid does nothing.
++    // releasing over a full grid does nothing. A folder is refused the same
++    // way -- the grid holds tiles, not folders (Arc rejects this too, 轮0;
++    // the model's MoveEntry guard is the belt to this suspender).
+     const bool accepted =
+-        drag_->from_favorite ||
+-        service_->CountFavorites() <
+-            helium_workspace::WorkspaceService::kMaxFavorites;
++        !drag_->source_is_folder &&
++        (drag_->from_favorite ||
++         service_->CountFavorites() <
++             helium_workspace::WorkspaceService::kMaxFavorites);
+     if (!accepted) {
+-      SetFolderDropTarget(false);
++      SetFolderDropTarget(std::string());
+       SetDragPlan(std::nullopt, 0);
+       return;
+     }
+-    SetFolderDropTarget(false);
++    SetFolderDropTarget(std::string());
+     SetDragPlan(
+         helium_workspace::WorkspaceEntry::Section::kFavorite,
+         helium_workspace::GridInsertIndex(point, drag_->hit_grid_slots));
+     return;
+   }
+   const std::optional<size_t> drag_index = DragEntryOrderedIndex();
+-  // Rows. 轮3: a collapsed folder *does* take a drop -- `Arc:` expands it
+-  // afterwards to show the new member, and neither reference spring-loads on
+-  // hover (measured 2026-08-24). What a collapsed folder cannot do is show a
+-  // slot: its rows are not laid out, so there is no ordering to preview and
+-  // the plan is simply "append to the section".
+-  if (space_collapsed_) {
+-    // `Arc:` fills the closed folder's own row and opens nothing: the item
+-    // appears on the line under it only once you let go (recordings
+-    // re-read 2026-08-25). So the plan is "append", but the layout is told
+-    // to leave the rows exactly where they are.
+-    const size_t pinned_count = ordered_entries_.size() - favorite_count_;
+-    const bool dragging_a_row = drag_index && *drag_index >= favorite_count_;
+-    SetFolderDropTarget(true);
++  // Rows. 轮3 -> M3.13: a *collapsed* folder takes a drop by filling its own
++  // row -- `Arc:` opens nothing and reveals only the newcomer on release
++  // (recordings re-read 2026-08-25; re-measured live 轮0 2026-08-31), and
++  // neither reference spring-loads on hover. Its rows are not laid out, so
++  // there is no ordering to preview: the plan is "append to that folder".
++  for (const auto& [folder_id, rect] : drag_->hit_folder_rows) {
++    if (point.y() < rect.y() || point.y() >= rect.bottom()) {
++      continue;
++    }
++    size_t children = 0;
++    bool dragging_own_child = false;
++    for (size_t i = 0; i < ordered_model_.size(); ++i) {
++      if (ordered_model_[i].folder_id != folder_id) {
++        continue;
++      }
++      ++children;
++      if (drag_index && *drag_index == i) {
++        dragging_own_child = true;
++      }
++    }
++    SetFolderDropTarget(folder_id);
+     SetDragPlan(helium_workspace::WorkspaceEntry::Section::kPinned,
+-                pinned_count - (dragging_a_row ? 1u : 0u));
++                children - (dragging_own_child ? 1u : 0u), folder_id,
++                /*keep_display_hole=*/true);
+     return;
+   }
+-  SetFolderDropTarget(false);
+-  SetDragPlan(
+-      helium_workspace::WorkspaceEntry::Section::kPinned,
+-      helium_workspace::RowInsertIndex(point.y(), drag_->hit_row_centers));
++  SetFolderDropTarget(std::string());
++  const size_t gap =
++      helium_workspace::RowInsertIndex(point.y(), drag_->hit_row_centers);
++  // The visual gap maps to a scope + an in-scope slot (M3.13): between two
++  // of a folder's children it means "into that folder there", between
++  // top-level items it means the top level.
++  std::string scope;
++  size_t in_scope = gap;
++  if (gap < drag_->hit_row_scopes.size()) {
++    scope = drag_->hit_row_scopes[gap].first;
++    in_scope = drag_->hit_row_scopes[gap].second;
++  }
++  SetDragPlan(helium_workspace::WorkspaceEntry::Section::kPinned, in_scope,
++              scope);
+ }
+ 
+ void WorkspaceSidebarView::SetDragPlan(
+     std::optional<helium_workspace::WorkspaceEntry::Section> section,
+-    size_t index) {
++    size_t index,
++    const std::string& folder_id,
++    bool keep_display_hole) {
+   if (!drag_) {
+     return;
+   }
+   const bool had_today = drag_->plan_today_index.has_value();
+   if (drag_->plan_section == section &&
+-      (!section || drag_->plan_index == index) && !had_today) {
++      (!section ||
++       (drag_->plan_index == index && drag_->plan_folder_id == folder_id)) &&
++      !had_today) {
+     return;
+   }
+   if (drag_perf_) {
+@@ -2303,6 +2479,12 @@ void WorkspaceSidebarView::SetDragPlan(
+   RetargetDragYield();
+   drag_->plan_section = section;
+   drag_->plan_index = index;
++  drag_->plan_folder_id = folder_id;
++  if (!keep_display_hole) {
++    drag_->display_hole_folder_id = folder_id;
++    drag_->display_hole_index = index;
++    drag_->display_hole_valid = section.has_value();
++  }
+   drag_->form_dirty = true;
+   drag_->hit_dirty = true;
+   // 轮3: the two plans are mutually exclusive. Coming back from Today has to
+@@ -2316,7 +2498,7 @@ void WorkspaceSidebarView::SetDragPlan(
+   // frame -- so the container animation gets one new target, not sixty.
+   // (The grid observation only ever fires when the grid actually grew:
+   // ComputeLayout already floors its segment on the latch.)
+-  const SidebarLayout target = ComputeLayout(width(), space_collapsed_);
++  const SidebarLayout target = ComputeLayout(width());
+   bool latch_grew = false;
+   if (target.grid_segment > drag_->latched_grid_segment) {
+     drag_->latched_grid_segment = target.grid_segment;
+@@ -2334,17 +2516,30 @@ void WorkspaceSidebarView::SetDragPlan(
+   SchedulePaint();
+ }
+ 
+-void WorkspaceSidebarView::SetFolderDropTarget(bool folder_drop) {
+-  const bool now = drag_ && folder_drop;
+-  if (auto* header = views::AsViewClass<WorkspaceSpaceHeader>(space_header_)) {
+-    header->SetDropTarget(now);
++void WorkspaceSidebarView::SetFolderDropTarget(const std::string& folder_id) {
++  const std::string now = drag_ ? folder_id : std::string();
++  const std::string previous = drag_ ? drag_->folder_drop_id : std::string();
++  if (previous == now && (drag_ || now.empty())) {
++    if (!drag_) {
++      // No session: still make sure no row is left lit.
++      for (auto& [id, row] : folder_views_) {
++        row->SetDropTarget(false);
++      }
++    }
++    return;
++  }
++  if (auto it = folder_views_.find(previous); it != folder_views_.end()) {
++    it->second->SetDropTarget(false);
++  }
++  if (auto it = folder_views_.find(now); it != folder_views_.end()) {
++    it->second->SetDropTarget(true);
+   }
+-  if (!drag_ || drag_->folder_drop == now) {
++  if (!drag_) {
+     return;
+   }
+-  // The hole appears or disappears with this flag, so the layout has to be
+-  // told even when the plan itself did not move.
+-  drag_->folder_drop = now;
++  // The hole appears or disappears with this, so the layout has to be told
++  // even when the plan itself did not move.
++  drag_->folder_drop_id = now;
+   drag_->form_dirty = true;
+   drag_->hit_dirty = true;
+   InvalidateLayout();
+@@ -2388,7 +2583,7 @@ void WorkspaceSidebarView::EndDragSessio
+ }
+ 
+ void WorkspaceSidebarView::FinishDragSettle() {
+-  SetFolderDropTarget(false);
++  SetFolderDropTarget(std::string());
+   drag_.reset();
+   // M3.12-r2: land any form-flip reparent SyncEntryViews deferred while the
+   // session held the source view (see the ⛔ there). Segment-indexed, the
+@@ -2408,10 +2603,16 @@ void WorkspaceSidebarView::FinishDragSet
+     today_container_->SetWorkspaceEntryDragActive(false);
+   }
+   // The folder stays shut and just shows what was dropped into it -- `Arc:`
+-  // reveals the one entry, not the whole folder (user 2026-08-25).
+-  if (!drop_surfaced_entry_id_.empty() && space_collapsed_ &&
+-      surfaced_entry_ids_.insert(drop_surfaced_entry_id_).second) {
+-    PreferredSizeChanged();
++  // reveals the one entry, not the whole folder (user 2026-08-25). Whether
++  // it is still shut is the entry's folder's business now (M3.13).
++  if (!drop_surfaced_entry_id_.empty() && service_) {
++    const helium_workspace::WorkspaceEntry* dropped =
++        service_->FindEntryById(drop_surfaced_entry_id_);
++    if (dropped && !dropped->folder_id.empty() &&
++        IsFolderCollapsed(dropped->folder_id) &&
++        surfaced_entry_ids_.insert(drop_surfaced_entry_id_).second) {
++      PreferredSizeChanged();
++    }
+   }
+   PreferredSizeChanged();
+   InvalidateLayout();
+@@ -2445,9 +2646,15 @@ void WorkspaceSidebarView::ClearStaleHov
+   // Only ever *clears*: lighting a row from here would strand it the moment
+   // the RootView, which does not agree that it is the hovered view, hands a
+   // later exit to somebody else. Setting is the synthesized move's job.
+-  for (WorkspaceEntryView* view : ordered_entries_) {
+-    if (!view->IsMouseHovered()) {
+-      view->ClearHover();
++  for (size_t i = 0; i < ordered_entries_.size(); ++i) {
++    if (WorkspaceEntryView* const view = SiteRowAt(i)) {
++      if (!view->IsMouseHovered()) {
++        view->ClearHover();
++      }
++    } else if (WorkspaceFolderRowView* const folder_row = FolderRowAt(i)) {
++      if (!folder_row->IsMouseHovered()) {
++        folder_row->ClearHover();
++      }
+     }
+   }
+ }
+@@ -2470,7 +2677,7 @@ gfx::Rect WorkspaceSidebarView::SettledD
+   bool in_band = false;
+   const std::optional<size_t> index = DragEntryOrderedIndex();
+   if (index) {
+-    const SidebarLayout settled = ComputeLayout(width(), space_collapsed_);
++    const SidebarLayout settled = ComputeLayout(width());
+     if (settled.entry_visible[*index]) {
+       target = settled.entry_bounds[*index];
+       // M3.12-r2: a grid target converts through the band (its local space
+@@ -2522,9 +2729,16 @@ void WorkspaceSidebarView::RefreshDragFo
+   // layout rather than recomputed here, so the card can never be a couple of
+   // points off the rows it travels between. A refused drop (Arc's thirteenth
+   // favorite) leaves no slot, and the card stays the row it started as.
+-  const SidebarLayout preview = ComputeLayout(width(), space_collapsed_);
++  const SidebarLayout preview = ComputeLayout(width());
+   gfx::Size form_size = preview.drag_slot_bounds.size();
+-  if (form_size.IsEmpty() && !as_capsule) {
++  // The no-slot fallback dresses the card for the slot Today would open --
++  // an entry can land there. A folder cannot land anywhere a folder session
++  // leaves no slot (Today, the grid), so re-dressing it is a lie: the card
++  // visibly shrank by the child indent the moment the pointer crossed the
++  // Today line, and grew back on the way out (user 2026-09-01). No slot for
++  // a folder = keep the form it has; its only real slots are identical
++  // top-level rows anyway.
++  if (form_size.IsEmpty() && !as_capsule && !drag_->source_is_folder) {
+     const int indent_width =
+         width() -
+         GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding) -
+--- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -19,6 +19,7 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "chrome/browser/ui/views/tabs/common/workspace_entry_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/gfx/animation/slide_animation.h"
+ #include "ui/views/animation/animation_delegate_views.h"
+@@ -59,6 +60,7 @@ class WorkspaceSidebarView : public view
+                              public helium_workspace::WorkspaceService::Observer,
+                              public TabStripModelObserver,
+                              public WorkspaceEntryView::Delegate,
++                             public WorkspaceFolderRowView::Delegate,
+                              public views::DragController {
+   METADATA_HEADER(WorkspaceSidebarView, views::View)
+ 
+@@ -240,6 +242,18 @@ class WorkspaceSidebarView : public view
+   bool CanEntryBecomeFavorite(const std::string& entry_id) const override;
+   void OnEntryDragDone() override;
+ 
++  // WorkspaceFolderRowView::Delegate (M3.13):
++  void OnFolderToggled(const std::string& folder_id) override;
++  void OnFolderRenamed(const std::string& folder_id,
++                       const std::u16string& title) override;
++  void OnFolderDeleteRequested(const std::string& folder_id) override;
++  void OnFolderDragDone() override;
++
++  // Puts |folder_id|'s name into inline edit, now or -- when the row does
++  // not exist yet, as right after IDC_HELIUM_WS_NEW_FOLDER's AddFolder --
++  // on the sync that creates it.
++  void StartFolderRename(const std::string& folder_id);
++
+  private:
+   // Geometry of one layout pass, shared by Layout() and the preferred-size
+   // calculation so the two can never disagree.
+@@ -250,7 +264,6 @@ class WorkspaceSidebarView : public view
+     // Ditto: 1 except for a row the closing folder is fading out.
+     std::vector<float> entry_fade;
+     gfx::Rect placeholder_bounds;
+-    gfx::Rect header_bounds;
+     bool placeholder_visible = false;
+     // M3.11: while a drag is on, the one empty slot the floating entry
+     // would land in (virtual coordinates). Empty when no plan is active.
+@@ -268,8 +281,21 @@ class WorkspaceSidebarView : public view
+   // exists.
+   BrowserWindowInterface* GetBrowserWindow() const;
+   PrefService* GetProfilePrefs() const;
+-  void LoadSpaceCollapsedFromPrefs();
+-  void ToggleSpaceCollapsed();
++  // M3.13: per-folder collapse, model-held (WorkspaceEntry::collapsed).
++  // Snapshots the on-screen layout, flips the model, and runs the one fold
++  // tween (only one folder can be mid-fold at a time; a second toggle snaps
++  // the first to its end).
++  void ToggleFolderCollapsed(const std::string& folder_id);
++  // The display-order model entry behind ordered index |i|, or null.
++  const helium_workspace::WorkspaceEntry* ModelEntryAt(size_t i) const;
++  // The site row / folder row behind ordered index |i|, or null when the
++  // index holds the other kind.
++  WorkspaceEntryView* SiteRowAt(size_t i) const;
++  WorkspaceFolderRowView* FolderRowAt(size_t i) const;
++  // Whether the folder is collapsed for layout right now (model state).
++  bool IsFolderCollapsed(const std::string& folder_id) const;
++  // Whether any children exist for |folder_id|.
++  bool FolderHasChildren(const std::string& folder_id) const;
+ 
+   // Brings |entry_views_| in line with the service. Reconciles rather than
+   // rebuilds: OnWorkspaceEntriesChanged() fires on every persisted title
+@@ -279,23 +305,22 @@ class WorkspaceSidebarView : public view
+   // active) onto the rows.
+   void SyncBindings();
+ 
+-  // The layout of one settled state. |as_collapsed| is asked for rather than
+-  // read off space_collapsed_ so the folder animation can have both.
+-  // |with_drag_hole| = false leaves the drag preview's empty slot out: that
+-  // is the geometry the *hit test* has to read. Measuring the drop against a
+-  // layout the drop plan itself moved makes the answer lag the pointer by a
+-  // slot and then latch there (M3.11 轮3-r1, user 2026-08-25) -- the same
+-  // family as the frozen zone boundary, one level down.
+-  SidebarLayout ComputeLayout(int width,
+-                              bool as_collapsed,
+-                              bool with_drag_hole = true) const;
+-  // What to actually lay out right now: the settled target, or -- while the
++  // The layout of one settled state, read off the model (per-folder
++  // collapse; the fold tween blends two of these, the "before" snapshotted
++  // ahead of the model flip). |with_drag_hole| = false leaves the drag
++  // preview's empty slot out: that is the geometry the *hit test* has to
++  // read. Measuring the drop against a layout the drop plan itself moved
++  // makes the answer lag the pointer by a slot and then latch there (M3.11
++  // 轮3-r1, user 2026-08-25) -- the same family as the frozen zone
++  // boundary, one level down.
++  SidebarLayout ComputeLayout(int width, bool with_drag_hole = true) const;
++  // What to actually lay out right now: the settled target, or -- while a
+   // folder animates -- that blended with the state it is leaving.
+   SidebarLayout CurrentLayout(int width) const;
+-  // helium-fork M3.10: whether a pinned row is laid out at all -- every row
+-  // while the folder is open, only the surfaced ones while it is collapsed.
+-  bool IsPinnedRowVisible(const WorkspaceEntryView* view,
+-                          bool as_collapsed) const;
++  // M3.13: whether the pinned item at ordered index |i| is laid out at all
++  // -- top-level items always, a folder's children while it is open or
++  // while they are surfaced under the closed one.
++  bool IsPinnedRowVisible(size_t i) const;
+   // Pushes |tab|'s title and at-home state onto |view|.
+   void PushLiveState(WorkspaceEntryView* view, tabs::TabInterface* tab);
+ 
+@@ -319,11 +344,21 @@ class WorkspaceSidebarView : public view
+     DragKind kind = DragKind::kEntry;
+     std::string entry_id;
+     bool from_favorite = false;
++    // M3.13-r1: |entry_id| names a folder. The session runs on the entry
++    // machinery wholesale (same kind), but the plan is confined to top-level
++    // reorder: no grid, no Today, no fill (folder-on-folder is a plain
++    // reorder, v1 ruling 轮0), no landing between another folder's children
++    // -- and the source's own children leave the layout with it.
++    bool source_is_folder = false;
+     // Preview target; nullopt = pointer is nowhere the entry may land
+     // (e.g. the grid while it is full), in which case no slot is shown and
+     // releasing changes nothing.
+     std::optional<helium_workspace::WorkspaceEntry::Section> plan_section;
+     size_t plan_index = 0;
++    // M3.13: which scope |plan_index| counts in -- empty for the section's
++    // top level, a folder id for that folder's children. Non-empty only
++    // with plan_section == kPinned.
++    std::string plan_folder_id;
+     // 轮3: the pointer is over Today, and this is the tab-strip index the
+     // entry would land at. Mutually exclusive with |plan_section| -- landing
+     // in Today means the entry stops being an entry, so there is no section
+@@ -353,10 +388,19 @@ class WorkspaceSidebarView : public view
+     // the floating card keeps that point under the pointer even as it
+     // changes shape.
+     gfx::Vector2dF grab;
+-    // 轮3-r2: the pointer is over the *closed* folder. The plan is still
+-    // "append to the pinned section", but no slot is drawn -- `Arc:` fills
+-    // the folder's own row instead and reveals the entry only on release.
+-    bool folder_drop = false;
++    // 轮3-r2 -> M3.13: the pointer is over a whole-row folder target,
++    // named here (empty = none). The plan is "append to that folder" and
++    // the row wears the fill; the DISPLAY hole below stays frozen where the
++    // last slot plan put it (`Dia:` g4: slot open + container highlight,
++    // 2026-08-24). Closing it instead reflowed the list under a stationary
++    // pointer and oscillated the hit test (measured 2026-08-31, M313DBG:
++    // the folder rect flip-flopped 306<->268 within one pointer frame).
++    std::string folder_drop_id;
++    // What ComputeLayout actually draws (scope + in-scope slot). Follows
++    // the plan for slot plans; frozen during a folder fill.
++    std::string display_hole_folder_id;
++    size_t display_hole_index = 0;
++    bool display_hole_valid = false;
+     // The card's shape only changes when the plan does. Recomputing it from
+     // a fresh ComputeLayout on every pointer move meant a whole sidebar
+     // layout per frame, on top of the two the plan already costs.
+@@ -371,6 +415,15 @@ class WorkspaceSidebarView : public view
+     // plan change (a resize, an entry arriving or leaving mid-drag).
+     std::vector<gfx::Rect> hit_grid_slots;
+     std::vector<int> hit_row_centers;
++    // M3.13, parallel to |hit_row_centers| plus one trailing element: which
++    // scope the gap before each laid row belongs to and the insert index
++    // inside that scope (the trailing element is "after the last row").
++    // RowInsertIndex answers in visual gaps; this maps a gap to a plan.
++    std::vector<std::pair<std::string, size_t>> hit_row_scopes;
++    // M3.13: the laid-out bounds of each *collapsed* folder row, with its
++    // id -- a pointer inside one takes the whole row as its drop (`Arc:`
++    // fills the row, appends on release).
++    std::vector<std::pair<std::string, gfx::Rect>> hit_folder_rows;
+     int hit_width = -1;
+     size_t hit_entry_count = 0;
+     // The gesture is over and the card is flying to its place. The entry is
+@@ -397,12 +450,12 @@ class WorkspaceSidebarView : public view
+   void UpdateDragPlan(const gfx::Point& point);
+   void SetDragPlan(
+       std::optional<helium_workspace::WorkspaceEntry::Section> section,
+-      size_t index);
+-  // Snapshots the currently displayed layout and restarts the yield tween
+-  // towards the (changed) target.
+-  // Turns the closed folder's "you are dropping into me" fill on or off,
+-  // and with it the presence of the preview slot.
+-  void SetFolderDropTarget(bool folder_drop);
++      size_t index,
++      const std::string& folder_id = std::string(),
++      bool keep_display_hole = false);
++  // Names the closed folder whose row wears the "you are dropping into me"
++  // fill ("" = none), and with it whether the preview slot exists at all.
++  void SetFolderDropTarget(const std::string& folder_id);
+   void RetargetDragYield();
+   void EndDragSession();
+   // The floating card has landed: hand the row back and drop the session.
+@@ -445,6 +498,7 @@ class WorkspaceSidebarView : public view
+   void PerformEntryDrop(std::string entry_id,
+                         helium_workspace::WorkspaceEntry::Section section,
+                         size_t index,
++                        std::string folder_id,
+                         const ui::DropTargetEvent& event,
+                         ui::mojom::DragOperation& output_drag_op,
+                         std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
+@@ -459,6 +513,7 @@ class WorkspaceSidebarView : public view
+   // same way, through the bind that OpenEntry performs.
+   void PerformUrlDrop(helium_workspace::WorkspaceEntry::Section section,
+                       size_t index,
++                      std::string folder_id,
+                       const ui::DropTargetEvent& event,
+                       ui::mojom::DragOperation& output_drag_op,
+                       std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner);
+@@ -505,30 +560,40 @@ class WorkspaceSidebarView : public view
+   int FavoritesPlaceholderHeight(int width) const;
+ 
+   raw_ptr<views::View> placeholder_ = nullptr;
+-  raw_ptr<views::View> space_header_ = nullptr;
+-  bool space_collapsed_ = false;
+-  // helium-fork M3.10-r1: the folder's open/close. Always driven 0 -> 1, from
+-  // |folder_prev_layout_| (the state being left, snapshotted at the toggle
+-  // because SyncBindings rewrites surfaced_entry_ids_ underneath us) to the
+-  // target ComputeLayout gives for space_collapsed_. |folder_fade_animation_|
+-  // is the shorter, linear one that takes the leaving rows out.
++  // helium-fork M3.10-r1 -> M3.13: the fold tween, per gesture. Always
++  // driven 0 -> 1, from |folder_prev_layout_| (the on-screen state,
++  // snapshotted at the toggle because SyncBindings rewrites
++  // surfaced_entry_ids_ underneath us) to the model's new target. One fold
++  // at a time: |animating_folder_id_| names whose chevron it turns, and a
++  // second toggle snaps the first to its end. |folder_fade_animation_| is
++  // the shorter, linear one that takes the leaving rows out.
+   gfx::SlideAnimation folder_animation_{this};
+   gfx::SlideAnimation folder_fade_animation_{this};
+   SidebarLayout folder_prev_layout_;
+   bool folder_prev_layout_valid_ = false;
+-  // helium-fork M3.10: the rows that stay listed under the collapsed header
++  std::string animating_folder_id_;
++  bool animating_to_collapsed_ = false;
++  // helium-fork M3.10: the rows that stay listed under a collapsed folder
+   // (Dia: collapsing a folder leaves its active tab showing beneath it).
+   // Entry ids; runtime and per window, like the tab bindings. Membership:
+-  // the active entry at the moment of collapse, plus any entry that becomes
+-  // active while collapsed; an entry leaves only when its tab closes
+-  // (switching away keeps it, just without the white card -- user
+-  // 2026-08-23); opening the folder clears the set.
++  // a folder's active child at the moment of its collapse, plus any child
++  // that becomes active while its folder is collapsed; an entry leaves only
++  // when its tab closes (switching away keeps it, just without the white
++  // card -- user 2026-08-23); opening the folder forgets its children.
+   std::set<std::string> surfaced_entry_ids_;
+ 
+-  // Entry id -> row, plus the model order the layout walks.
++  // Entry id -> row (sites) / folder row, plus the display order the layout
++  // walks. |ordered_entries_| holds both kinds (a folder's slot holds its
++  // WorkspaceFolderRowView); |ordered_model_| is the same-order copy of the
++  // service's entries the walk reads kind/folder_id/collapsed off.
+   std::map<std::string, raw_ptr<WorkspaceEntryView>> entry_views_;
+-  std::vector<raw_ptr<WorkspaceEntryView>> ordered_entries_;
++  std::map<std::string, raw_ptr<WorkspaceFolderRowView>> folder_views_;
++  std::vector<raw_ptr<views::View>> ordered_entries_;
++  std::vector<helium_workspace::WorkspaceEntry> ordered_model_;
+   size_t favorite_count_ = 0;
++  // A rename asked for before the row existed (IDC's AddFolder lands here
++  // one observer notification before SyncEntryViews builds the row).
++  std::string pending_rename_folder_id_;
+ 
+   base::ScopedObservation<helium_workspace::WorkspaceService,
+                           helium_workspace::WorkspaceService::Observer>
+--- a/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
++++ b/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
+@@ -17,6 +17,7 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/grit/generated_resources.h"
++#include "ui/base/accelerators/accelerator.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/compositor/layer.h"
+@@ -71,6 +72,9 @@ HeliumUndoBarView::~HeliumUndoBarView()
+ 
+ void HeliumUndoBarView::ShowForWatermark(SessionID watermark) {
+   watermark_ = watermark;
++  action_undo_.Reset();
++  action_label_.clear();
++  ResetAccelerators();
+   UpdateLabel();
+   SetShown(true);
+   dismiss_timer_.Start(FROM_HERE, kDismissDelay,
+@@ -78,8 +82,29 @@ void HeliumUndoBarView::ShowForWatermark
+                                       base::Unretained(this)));
+ }
+ 
++void HeliumUndoBarView::ShowForAction(const std::u16string& label,
++                                      base::OnceClosure on_undo) {
++  watermark_ = SessionID::InvalidValue();
++  action_undo_ = std::move(on_undo);
++  action_label_ = label;
++  UpdateLabel();
++  SetShown(true);
++  // ⌘Z reaches the Undo button for as long as the action undo is up
++  // (M3.13); the page still gets first refusal on the key, so a focused
++  // text editor's own undo wins. Registered here rather than in SetShown so
++  // switching modes while already shown still arms it.
++  ResetAccelerators();
++  AddAccelerator(ui::Accelerator(ui::VKEY_Z, ui::EF_PLATFORM_ACCELERATOR));
++  dismiss_timer_.Start(FROM_HERE, kDismissDelay,
++                       base::BindOnce(&HeliumUndoBarView::Dismiss,
++                                      base::Unretained(this)));
++}
++
+ void HeliumUndoBarView::Dismiss() {
+   dismiss_timer_.Stop();
++  // Timing out (or being replaced) is what ends an action's undo window:
++  // the snapshot the closure owns goes with it.
++  action_undo_.Reset();
+   SetShown(false);
+ }
+ 
+@@ -94,6 +119,7 @@ void HeliumUndoBarView::SetShown(bool sh
+     SetVisible(true);
+     shown_animation_.Show();
+   } else {
++    ResetAccelerators();
+     shown_animation_.Hide();
+   }
+ }
+@@ -115,18 +141,30 @@ int HeliumUndoBarView::ClosedSinceWaterm
+ }
+ 
+ void HeliumUndoBarView::UpdateLabel() {
++  if (!action_label_.empty()) {
++    label_->SetText(action_label_);
++    return;
++  }
+   label_->SetText(l10n_util::GetPluralStringFUTF16(
+       IDS_HELIUM_UNPINNED_TABS_CLOSED_BODY, ClosedSinceWatermark()));
+ }
+ 
+ void HeliumUndoBarView::OnUndoPressed() {
+-  if (helium_workspace::WorkspaceTabController* const controller =
+-          helium_workspace::WorkspaceTabController::From(browser_)) {
++  if (action_undo_) {
++    std::move(action_undo_).Run();
++  } else if (helium_workspace::WorkspaceTabController* const controller =
++                 helium_workspace::WorkspaceTabController::From(browser_)) {
+     controller->UndoLastCloseUnpinnedTabs();
+   }
+   Dismiss();
+ }
+ 
++bool HeliumUndoBarView::AcceleratorPressed(const ui::Accelerator& accelerator) {
++  // ⌘Z, registered only while an action undo is showing (SetShown).
++  OnUndoPressed();
++  return true;
++}
++
+ gfx::Size HeliumUndoBarView::CalculatePreferredSize(
+     const views::SizeBounds& available_size) const {
+   // Same height as the media capsule below it, so the sidebar's bottom edge
+--- a/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
++++ b/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_UNDO_BAR_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_UNDO_BAR_VIEW_H_
+ 
++#include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
+ #include "base/timer/timer.h"
+@@ -60,6 +61,14 @@ class HeliumUndoBarView : public views::
+   // invalid id if it had none).
+   void ShowForWatermark(SessionID watermark);
+ 
++  // M3.13: shows the bar with |label| and runs |on_undo| if Undo is pressed
++  // before the bar times out (folder deletion's undo window). The closure
++  // owns whatever snapshot the undo needs; letting the bar dismiss drops it,
++  // which is what ends the window. While shown this way, ⌘Z is the Undo
++  // button too (user ruling 2026-08-31; the page gets first refusal, so a
++  // focused text editor's own undo still wins).
++  void ShowForAction(const std::u16string& label, base::OnceClosure on_undo);
++
+   // Hides it early -- after Undo is pressed, or when the window changes out
+   // from under it.
+   void Dismiss();
+@@ -78,6 +87,7 @@ class HeliumUndoBarView : public views::
+   void Layout(PassKey) override;
+   void OnPaintBackground(gfx::Canvas* canvas) override;
+   void OnThemeChanged() override;
++  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
+ 
+   // views::AnimationDelegateViews:
+   void AnimationProgressed(const gfx::Animation* animation) override;
+@@ -93,6 +103,10 @@ class HeliumUndoBarView : public views::
+   raw_ptr<views::LabelButton> undo_button_ = nullptr;
+ 
+   SessionID watermark_ = SessionID::InvalidValue();
++  // Non-null while the bar is showing an action undo (M3.13) rather than a
++  // closed-tabs watermark; UpdateLabel() and OnUndoPressed() branch on it.
++  base::OnceClosure action_undo_;
++  std::u16string action_label_;
+   bool shown_ = false;
+   base::OneShotTimer dismiss_timer_;
+   gfx::SlideAnimation shown_animation_{this};

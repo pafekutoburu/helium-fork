@@ -388,3 +388,4 @@ helium-fork/workspace/close-unpinned-tabs.patch
 helium-fork/layout/sidebar-blank-window-menu.patch
 helium-fork/settings/close-unused-tabs-duration.patch
 helium-fork/workspace/url-drop-m312.patch
+helium-fork/workspace/folders-m313.patch
