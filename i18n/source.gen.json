@@ -186,6 +186,12 @@
     "message": "This list of search engines is shown in random order."
   },
   {
+    "name": "IDS_EXTENSION_PROMPT_WARNING_SYNC_VAULT_PROVIDER",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Permission string for extensions that store encrypted browser synchronization data.",
+    "message": "Act as a storage provider for your encrypted browser synchronization data"
+  },
+  {
     "name": "IDS_SETTINGS_APPEARANCE_AND_BEHAVIOR",
     "source": "chrome/app/settings_strings.grdp",
     "context": "Name of the settings page which displays appearance and behavior preferences.",
@@ -414,6 +420,30 @@
     "message": "Tab <ph name=\"TAB_NUMBER\">$1<ex>1</ex></ph>"
   },
   {
+    "name": "IDS_SHORTCUT_COMMAND_DUPLICATE_TAB",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Command name shown on the Settings shortcuts page for duplicating the current tab.",
+    "message": "Duplicate tab"
+  },
+  {
+    "name": "IDS_SHORTCUT_COMMAND_SWITCH_TO_CLASSIC_LAYOUT",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Command name shown on the Settings shortcuts page for switching to the Classic browser layout.",
+    "message": "Switch to Classic layout"
+  },
+  {
+    "name": "IDS_SHORTCUT_COMMAND_SWITCH_TO_COMPACT_LAYOUT",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Command name shown on the Settings shortcuts page for switching to the Compact browser layout.",
+    "message": "Switch to Compact layout"
+  },
+  {
+    "name": "IDS_SHORTCUT_COMMAND_SWITCH_TO_VERTICAL_LAYOUT",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Command name shown on the Settings shortcuts page for switching to the Vertical browser layout.",
+    "message": "Switch to Vertical layout"
+  },
+  {
     "name": "IDS_SHORTCUT_COMMAND_MOVE_TAB_NEXT",
     "source": "chrome/app/generated_resources.grd",
     "context": "Command name shown on the Settings shortcuts page for moving the current tab to the right.",
@@ -528,6 +558,18 @@
     "message": "Toggle developer tools"
   },
   {
+    "name": "IDS_SHORTCUT_COMMAND_TOGGLE_PIN_TAB",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Command name shown on the Settings shortcuts page for pinning or unpinning the active tab.",
+    "message": "Pin or unpin tab"
+  },
+  {
+    "name": "IDS_SHORTCUT_COMMAND_TOGGLE_MUTE_SITE",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Command name shown on the Settings shortcuts page for muting or unmuting the current site.",
+    "message": "Mute or unmute site"
+  },
+  {
     "name": "IDS_APP_PLUS_KEY",
     "source": "ui/strings/ui_strings.grd",
     "context": "Plus key, which is the key labelled with a plus sign.",
@@ -598,18 +640,6 @@
     "source": "chrome/app/settings_strings.grdp",
     "context": "Description of the controls available on the permissions and site content settings page",
     "message": "Manage site permissions and content settings (cookies, pop-ups, and more)"
-  },
-  {
-    "name": "IDS_SETTINGS_SECURITY_DESCRIPTION_NORMAL",
-    "source": "chrome/app/settings_strings.grdp",
-    "context": "Description of the controls available on the security settings page",
-    "message": "Connection security, DNS settings, certificate management, and other security settings"
-  },
-  {
-    "name": "IDS_SETTINGS_ENABLE_DO_NOT_TRACK_DIALOG_TEXT_HELIUM",
-    "source": "chrome/app/settings_strings.grdp",
-    "context": "The text of a confirmation dialog that confirms that the user want to send the 'Do Not Track' header",
-    "message": "Enabling \"Do Not Track\" means that Helium will include a request not to be tracked with your browsing traffic. Whether this request is honored depends on whether a website responds to it and on how it is interpreted. For example, some websites may respond by showing you ads that aren't personalized using your previous browsing data. Many websites may still track you regardless of the request."
   },
   {
     "name": "IDS_SETTINGS_ALLOWED_THIRD_PARTY_COOKIES_DESCRIPTION_HELIUM",
@@ -835,6 +865,72 @@
     "message": "Overrides to allow fingerprinting protection"
   },
   {
+    "name": "IDS_SETTINGS_GLOBAL_PRIVACY_CONTROL",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "The label of the toggle to enable or disable sending the Global Privacy Control signal",
+    "message": "Global Privacy Control"
+  },
+  {
+    "name": "IDS_SETTINGS_GLOBAL_PRIVACY_CONTROL_DESCRIPTION",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Description of the Global Privacy Control toggle",
+    "message": "Tell websites to not sell or share your personal data"
+  },
+  {
+    "name": "IDS_SETTINGS_DO_NOT_TRACK",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "The label of the toggle to enable or disable sending the Do Not Track signal",
+    "message": "Send a \"Do Not Track\" signal with your browsing traffic"
+  },
+  {
+    "name": "IDS_SETTINGS_DO_NOT_TRACK_DESCRIPTION",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Description of the Do Not Track toggle",
+    "message": "Ask sites to not track you, but they're unlikely to comply"
+  },
+  {
+    "name": "IDS_SETTINGS_NETWORK_AND_SECURITY",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Name of the settings row that opens the security settings page",
+    "message": "Network and security"
+  },
+  {
+    "name": "IDS_SETTINGS_NETWORK_AND_SECURITY_DESCRIPTION",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Description of the settings row that opens the security settings page",
+    "message": "Manage how Helium connects to sites, what privacy signals are allowed, and more"
+  },
+  {
+    "name": "IDS_SETTINGS_NETWORK_SECTION_TITLE",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Title of the network section on the network and security settings page",
+    "message": "Network"
+  },
+  {
+    "name": "IDS_SETTINGS_PRIVACY_SIGNALS_SECTION_TITLE",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Title of the privacy signals section on the network and security settings page",
+    "message": "Privacy signals"
+  },
+  {
+    "name": "IDS_SETTINGS_PRIVACY_SIGNALS_DESCRIPTION",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Description of privacy signals and their potential effect on browser fingerprinting",
+    "message": "Privacy signals communicate your preferences, but do not determine how websites will act. Enabling more signals can make your browser easier to fingerprint by giving it a more unique set of characteristics. Global Privacy Control is more likely to be respected than Do Not Track."
+  },
+  {
+    "name": "IDS_SETTINGS_HTTPS_FIRST_MODE_ENABLED_STRICT_LABEL",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Label for radio button to enable the stricter form of HTTPS-First Mode",
+    "message": "Warn about insecure public and local network sites"
+  },
+  {
+    "name": "IDS_SETTINGS_HTTPS_FIRST_MODE_ENABLED_BALANCED_LABEL",
+    "source": "chrome/app/settings_strings.grdp",
+    "context": "Label for radio button to enable the less-strict form of HTTPS-First Mode",
+    "message": "Warn about insecure public sites"
+  },
+  {
     "name": "IDS_POLICY_SOURCE_HOP",
     "source": "components/policy_strings.grdp",
     "context": "Indicates that the policy originates from Helium defaults.",
@@ -1054,13 +1150,13 @@
     "name": "IDS_SETTINGS_CENTERED_LOCATION_BAR",
     "source": "chrome/app/settings_strings.grdp",
     "context": "Label for the toggle to use a centered address bar.",
-    "message": "Center the address bar"
+    "message": "Centered address bar"
   },
   {
     "name": "IDS_SETTINGS_MINIMAL_LOCATION_BAR",
     "source": "chrome/app/settings_strings.grdp",
-    "context": "Label for the toggle that enables the minimal address bar.",
-    "message": "Minimal address bar"
+    "context": "Label for the toggle that enables the minimal URL in the address bar, showing only the site origin.",
+    "message": "Minimal URL in the address bar"
   },
   {
     "name": "IDS_SETTINGS_ACCESSIBILITY_TOAST_TOGGLE_TITLE",
@@ -1157,6 +1253,30 @@
     "source": "components/page_info_strings.grdp",
     "context": "A button label that opens Helium's global fingerprinting protection settings page.",
     "message": "Manage fingerprinting protection"
+  },
+  {
+    "name": "IDS_EXTENSION_DEBUGGER_ACTIVE",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Label, tooltip, accessibility announcement, and bubble title shown after an extension starts debugging the browser.",
+    "message": "Debugging started"
+  },
+  {
+    "name": "IDS_EXTENSION_DEBUGGER_BUBBLE_MESSAGE",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Message shown above one or more extensions that are debugging the browser.",
+    "message": "{NUM_EXTENSIONS, plural,\n        =1 {This extension is debugging your browser:}\n        other {These extensions are debugging your browser:}}"
+  },
+  {
+    "name": "IDS_EXTENSION_DEBUGGER_STOP",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Tooltip and accessibility label for a button that stops an extension from debugging the browser.",
+    "message": "Stop <ph name=\"EXTENSION_NAME\">$1<ex>Extension Foo</ex></ph> from debugging your browser"
+  },
+  {
+    "name": "IDS_EXTENSION_DEBUGGER_STOP_BUTTON",
+    "source": "chrome/app/generated_resources.grd",
+    "context": "Label for a button that stops one extension from debugging the browser.",
+    "message": "Stop"
   },
   {
     "name": "IDS_CONTENT_CONTEXT_SYSTEM_TRANSLATE",

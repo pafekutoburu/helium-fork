@@ -1,5 +1,4 @@
 upstream-fixes/missing-dependencies.patch
-upstream-fixes/fix-non-git-gclient.patch
 
 inox-patchset/fix-building-without-safebrowsing.patch
 inox-patchset/disable-autofill-download-manager.patch
@@ -28,13 +27,13 @@ ungoogled-chromium/fix-building-without-safebrowsing.patch
 ungoogled-chromium/remove-unused-preferences-fields.patch
 ungoogled-chromium/block-requests.patch
 ungoogled-chromium/disable-privacy-sandbox.patch
-ungoogled-chromium/doh-changes.patch
 ungoogled-chromium/extensions-manifestv2.patch
 ungoogled-chromium/remove-f1-shortcut.patch
 ungoogled-chromium/move-js-optimizer-unfamiliar-sites.patch
 ungoogled-chromium/build-with-wasm-rollup.patch
 ungoogled-chromium/remove-navigation-source-param.patch
 ungoogled-chromium/bundle-hyphenation-patterns.patch
+ungoogled-chromium/disable-tos-dialog.patch
 
 bromite/disable-fetching-field-trials.patch
 
@@ -121,6 +120,20 @@ helium/core/search/omnibox-default-search-icon.patch
 helium/core/search/add-kagi-image-search.patch
 helium/core/search/fix-startpage-brave-names.patch
 
+helium/core/sync/engine-interface.patch
+helium/core/sync/service-backends.patch
+helium/core/sync/datatype-policy.patch
+helium/core/sync/vault-format.patch
+helium/core/sync/vault-encryption.patch
+helium/core/sync/vault-transport.patch
+helium/core/sync/vault-store.patch
+helium/core/sync/loopback-server-in-memory.patch
+helium/core/sync/history-expiration-threshold.patch
+helium/core/sync/vault-engine-backend.patch
+helium/core/sync/provider/api-contract.patch
+helium/core/sync/provider/manifest-handler.patch
+helium/core/sync/provider/profile-prefs.patch
+
 helium/settings/setup-behavior-settings-page.patch
 helium/core/keyboard-shortcuts.patch
 helium/core/update-default-browser-prefs.patch
@@ -148,9 +161,10 @@ helium/core/fix-instance-id-stuck.patch
 
 helium/core/flags-setup.patch
 helium/core/add-low-power-framerate-flag.patch
+helium/core/bookmark-open-all-confirmation-flag.patch
 helium/core/add-update-channel-flag.patch
 helium/core/add-updater-preference.patch
-helium/core/add-disable-ech-flag.patch
+helium/core/add-middle-click-autoscroll-flag.patch
 helium/core/exclude-irrelevant-flags.patch
 
 helium/core/disable-outdated-build-detector.patch
@@ -169,6 +183,13 @@ helium/core/noise/canvas.patch
 helium/core/noise/audio.patch
 helium/core/noise/hardware-concurrency.patch
 
+helium/core/network/disable-ech-flag.patch
+helium/core/network/global-privacy-control-pref.patch
+helium/core/network/quic-v2-flag.patch
+helium/core/network/split-clienthello.patch
+helium/core/network/dns-providers.patch
+helium/core/network/ignore-system-proxy-server-flag.patch
+
 helium/core/reduce-accept-language-headers.patch
 helium/core/disable-ad-topics-and-etc.patch
 helium/core/enable-parallel-downloading.patch
@@ -177,7 +198,6 @@ helium/core/disable-touch-ui.patch
 helium/core/open-new-tabs-next-to-active-tab-option.patch
 helium/core/disable-update-toast.patch
 helium/core/disable-fedcm-bubble.patch
-helium/core/add-middle-click-autoscroll-flag.patch
 helium/core/webrtc-default-handling-policy.patch
 helium/core/browser-window-context-menu.patch
 helium/core/disable-ntp-footer.patch
@@ -198,9 +218,11 @@ helium/core/enable-glow-up-features.patch
 helium/core/enable-bookmark-bar-settings.patch
 helium/core/force-paste-action.patch
 helium/core/shift-right-click-context-menu.patch
-
 helium/core/crash-reporter-privacy-tweaks.patch
 helium/core/crash-reporting-prefs.patch
+helium/core/disable-omnibox-webui.patch
+helium/core/rbe-nativelink-config.patch
+helium/core/disable-non-standard-auth-features.patch
 
 helium/settings/settings-page-icons.patch
 helium/settings/move-search-suggest.patch
@@ -218,7 +240,6 @@ helium/settings/fix-section-separators.patch
 helium/settings/fix-text-on-cookies-page.patch
 helium/settings/update-search-suggest-text.patch
 helium/settings/fix-appearance-page.patch
-helium/settings/enable-quad9-doh-option.patch
 helium/settings/reorder-settings-menu.patch
 helium/settings/add-search-engine-button.patch
 helium/settings/custom-profile-avatar-ui.patch
@@ -226,6 +247,7 @@ helium/settings/custom-keyboard-shortcuts-page.patch
 helium/settings/clear-browsing-data-popup.patch
 helium/settings/crash-reporting-settings.patch
 helium/settings/helium-noise-settings.patch
+helium/settings/network-and-security-page.patch
 
 helium/hop/setup.patch
 helium/hop/disable-password-manager.patch
@@ -299,7 +321,6 @@ helium/ui/custom-keyboard-shortcuts-wiring.patch
 helium/ui/crash-dialog.patch
 helium/ui/crashes-webui-fixes.patch
 
-helium/ui/layout/migrate-prefs.patch
 helium/ui/layout/core.patch
 helium/ui/layout/settings.patch
 helium/ui/layout/context-menu.patch
@@ -325,7 +346,10 @@ helium/ui/dont-antialias-rects.patch
 helium/ui/fix-windows-ui-position.patch
 helium/ui/native-frame-materials.patch
 helium/ui/page-zoom-indicator.patch
+helium/ui/add-more-zoom-presets.patch
 helium/ui/helium-noise-page-info.patch
+helium/ui/show-tabs-from-non-account-backends.patch
+helium/ui/compact-debugger-warning.patch
 helium-fork/switcher/hud.patch
 helium-fork/workspace/prefs.patch
 helium-fork/workspace/model.patch
