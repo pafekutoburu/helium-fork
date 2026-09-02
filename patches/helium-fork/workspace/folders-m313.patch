@@ -1,6 +1,8 @@
---- a/chrome/app/chrome_command_ids.h
-+++ b/chrome/app/chrome_command_ids.h
-@@ -124,6 +124,8 @@
+Index: src/chrome/app/chrome_command_ids.h
+===================================================================
+--- src.orig/chrome/app/chrome_command_ids.h
++++ src/chrome/app/chrome_command_ids.h
+@@ -127,6 +127,8 @@
  #define IDC_HELIUM_ADDRESS_BAR_DOCKED   34094
  #define IDC_HELIUM_ADDRESS_BAR_HIDDEN   34095
  #define IDC_HELIUM_ADDRESS_BAR_AUTO     34096
@@ -9,9 +11,11 @@
  
  // Tab group Commands
  #define IDC_ADD_NEW_TAB_TO_GROUP      34100
---- a/chrome/app/generated_resources.grd
-+++ b/chrome/app/generated_resources.grd
-@@ -1982,6 +1982,9 @@ are declared in tools/grit/grit_args.gni
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -2002,6 +2002,9 @@ are declared in tools/grit/grit_args.gni
        <message name="IDS_HELIUM_CLOSE_UNPINNED_TABS" desc="Window menu item that closes every tab in the sidebar that is not a saved sidebar entry.">
          Close Unpinned Tabs
        </message>
@@ -21,7 +25,7 @@
        <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
          Toggle developer tools
        </message>
-@@ -12226,6 +12229,27 @@ Check your passwords anytime in <ph name
+@@ -12161,6 +12164,27 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL" desc="Hint under a pinned sidebar entry's title (and its context menu item) while the pointer is on its favicon and the tab has navigated away from the URL it was pinned at: clicking takes the tab back to that URL.">
            Back to Pinned URL
          </message>
@@ -49,7 +53,7 @@
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12381,6 +12405,27 @@ Check your passwords anytime in <ph name
+@@ -12316,6 +12340,27 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL" desc="In Title Case: Hint under a pinned sidebar entry's title (and its context menu item) while the pointer is on its favicon and the tab has navigated away from the URL it was pinned at: clicking takes the tab back to that URL.">
            Back to Pinned URL
          </message>
@@ -77,9 +81,11 @@
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="In Title Case: The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute Site} other {Mute Sites}}
          </message>
---- a/chrome/browser/ui/browser_command_controller.cc
-+++ b/chrome/browser/ui/browser_command_controller.cc
-@@ -1517,6 +1517,13 @@ void BrowserCommandController::HandleCom
+Index: src/chrome/browser/ui/browser_command_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_command_controller.cc
++++ src/chrome/browser/ui/browser_command_controller.cc
+@@ -1542,6 +1542,13 @@ void BrowserCommandController::HandleCom
        }
        break;
      }
@@ -93,7 +99,7 @@
      // Hosted App commands
      case IDC_COPY_URL:
        CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
-@@ -2074,6 +2081,8 @@ void BrowserCommandController::InitComma
+@@ -2103,6 +2110,8 @@ void BrowserCommandController::InitComma
                                           normal_window);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS,
                                           normal_window);
@@ -102,9 +108,11 @@
    command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
  
    // Safety Hub commands.
---- a/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
-+++ b/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
-@@ -215,6 +215,8 @@ std::optional<BrowserShortcutCommandLabe
+Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
++++ src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+@@ -256,6 +256,8 @@ std::optional<BrowserShortcutCommandLabe
        return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_TOGGLE_PIN);
      case IDC_HELIUM_WS_CLOSE_UNPINNED_TABS:
        return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_CLOSE_UNPINNED_TABS);
@@ -113,7 +121,7 @@
      case IDC_CARET_BROWSING_TOGGLE:
        return Label(IDS_SETTINGS_ENABLE_CARET_BROWSING_TITLE);
      case IDC_CLEAR_BROWSING_DATA:
-@@ -269,6 +271,9 @@ std::vector<int> GetBrowserShortcutComma
+@@ -358,6 +360,9 @@ std::vector<int> GetBrowserShortcutComma
    // never reach defaults_, and AssignAcceleratorToCommand() would answer
    // kUnknownCommand.
    commands.push_back(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS);
@@ -123,8 +131,10 @@
    return commands;
  }
  
---- a/chrome/browser/ui/helium_workspace/workspace_entry.cc
-+++ b/chrome/browser/ui/helium_workspace/workspace_entry.cc
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_entry.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_entry.cc
 @@ -14,9 +14,12 @@ namespace {
  constexpr char kKeyId[] = "id";
  constexpr char kKeySpaceId[] = "space_id";
@@ -226,8 +236,10 @@
    // A corrupt icon is not worth rejecting the entry over — drop it and let
    // the view fall back to the favicon service.
    if (const std::string* favicon = dict.FindString(kKeyFavicon)) {
---- a/chrome/browser/ui/helium_workspace/workspace_entry.h
-+++ b/chrome/browser/ui/helium_workspace/workspace_entry.h
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_entry.h
++++ src/chrome/browser/ui/helium_workspace/workspace_entry.h
 @@ -25,6 +25,17 @@ struct WorkspaceEntry {
      kPinned = 1,
    };
@@ -281,8 +293,10 @@
    // Raw PNG bytes of the entry's favicon, base64-encoded in the pref. The
    // sidebar draws entries that have no tab, so without a stored icon a cold
    // start would show nothing but placeholders until something is clicked.
---- a/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
-+++ b/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
 @@ -133,6 +133,85 @@ TEST(WorkspaceEntryTest, UnknownFieldsIg
    EXPECT_TRUE(WorkspaceEntry::FromValue(dict).has_value());
  }
@@ -369,8 +383,10 @@
  // Expands a plan into the per-row column counts for readability.
  std::vector<int> RowsFor(int count, int per_row_max = 4) {
    const FavoritesGridPlan plan = PlanFavoritesGrid(count, per_row_max);
---- a/chrome/browser/ui/helium_workspace/workspace_service.cc
-+++ b/chrome/browser/ui/helium_workspace/workspace_service.cc
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
 @@ -24,14 +24,6 @@ namespace {
  // rewritten in full every time.
  constexpr base::TimeDelta kPersistDebounce = base::Seconds(2);
@@ -724,8 +740,10 @@
        max_position = std::max(max_position, entry.position);
      }
    }
---- a/chrome/browser/ui/helium_workspace/workspace_service.h
-+++ b/chrome/browser/ui/helium_workspace/workspace_service.h
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.h
++++ src/chrome/browser/ui/helium_workspace/workspace_service.h
 @@ -102,6 +102,32 @@ class WorkspaceService : public KeyedSer
                   size_t target_index);
    size_t CountFavorites() const;
@@ -776,8 +794,10 @@
  
    const raw_ptr<PrefService> prefs_;
  
---- a/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
-+++ b/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
 @@ -5,6 +5,7 @@
  #include "chrome/browser/ui/helium_workspace/workspace_service.h"
  
@@ -1061,8 +1081,10 @@
 +
  }  // namespace
  }  // namespace helium_workspace
---- a/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-+++ b/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 @@ -4,6 +4,7 @@
  
  #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
@@ -1229,8 +1251,10 @@
  void WorkspaceTabController::ResetEntryTab(const std::string& entry_id) {
    TabStripModel* model = browser_window_->GetTabStripModel();
    const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
---- a/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
-+++ b/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 @@ -7,9 +7,11 @@
  
  #include <map>
@@ -1291,8 +1315,10 @@
  
    ui::ScopedUnownedUserData<WorkspaceTabController> scoped_unowned_user_data_;
    base::WeakPtrFactory<WorkspaceTabController> weak_factory_{this};
---- a/chrome/browser/ui/views/frame/system_menu_model_builder.cc
-+++ b/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+Index: src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/system_menu_model_builder.cc
++++ src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
 @@ -190,6 +190,11 @@ void SystemMenuModelBuilder::BuildSystem
      // The window menu is where a window-scoped command belongs.
      model->AddItemWithStringId(IDC_HELIUM_WS_CLOSE_UNPINNED_TABS,
@@ -1305,9 +1331,11 @@
  
      model->AddItemWithStringId(IDC_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL,
                                 IDS_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL);
---- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-+++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -831,6 +831,17 @@ void VerticalTabStripRegionView::ShowUnd
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -816,6 +816,17 @@ void VerticalTabStripRegionView::ShowUnd
    }
  }
  
@@ -1325,17 +1353,19 @@
  void VerticalTabStripRegionView::OnMediaStripModelChanged() {
    SyncMediaCapsules();
    if (media_strip_) {
---- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-+++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 @@ -9,6 +9,7 @@
  
  #include "base/callback_list.h"
  #include "base/containers/flat_set.h"
 +#include "base/functional/callback.h"
  #include "base/memory/raw_ptr.h"
- #include "base/scoped_observation.h"
  #include "base/time/time.h"
-@@ -74,6 +75,15 @@ class VerticalTabStripRegionView final
+ #include "base/timer/timer.h"
+@@ -72,6 +73,15 @@ class VerticalTabStripRegionView final
    // WorkspaceTabController, which owns the command and the watermark.
    void ShowUndoBarForWatermark(SessionID watermark);
  
@@ -1351,7 +1381,7 @@
    DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kAnimationCompletedEvent);
  
    // TODO(crbug.com/465833741): Replace constant with derived value based on
-@@ -145,7 +155,6 @@ class VerticalTabStripRegionView final
+@@ -143,7 +153,6 @@ class VerticalTabStripRegionView final
  
   private:
    UnpinnedTabContainerView* TodayDropContainer() const;
@@ -1359,9 +1389,11 @@
    // Cheap per-frame discriminator; IsWorkspaceEntryDrag() additionally reads
    // the payload and is only for the once-per-gesture calls.
    bool HasWorkspaceEntryDragSession() const;
---- a/chrome/browser/ui/views/tabs/common/BUILD.gn
-+++ b/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -74,6 +74,8 @@ source_set("impl") {
+Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -80,6 +80,8 @@ source_set("impl") {
      "workspace_entry_drag_overlay.h",
      "workspace_favorites_band_view.cc",
      "workspace_favorites_band_view.h",
@@ -1370,8 +1402,10 @@
      "workspace_sidebar_view.cc",
      "workspace_sidebar_view.h",
    ]
+Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
 @@ -0,0 +1,418 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
@@ -1791,8 +1825,10 @@
 +
 +BEGIN_METADATA(WorkspaceFolderRowView)
 +END_METADATA
+Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
 @@ -0,0 +1,165 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
@@ -1959,8 +1995,10 @@
 +};
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FOLDER_ROW_VIEW_H_
---- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
-+++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 @@ -38,8 +38,14 @@
  #include "chrome/browser/ui/helium_workspace/workspace_pin_semantics.h"
  #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
@@ -3554,8 +3592,10 @@
      const int indent_width =
          width() -
          GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding) -
---- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-+++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 @@ -19,6 +19,7 @@
  #include "chrome/browser/ui/helium_workspace/workspace_service.h"
  #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -3813,8 +3853,10 @@
  
    base::ScopedObservation<helium_workspace::WorkspaceService,
                            helium_workspace::WorkspaceService::Observer>
---- a/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
-+++ b/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
++++ src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
 @@ -17,6 +17,7 @@
  #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
  #include "chrome/browser/ui/layout_constants.h"
@@ -3904,8 +3946,10 @@
  gfx::Size HeliumUndoBarView::CalculatePreferredSize(
      const views::SizeBounds& available_size) const {
    // Same height as the media capsule below it, so the sidebar's bottom edge
---- a/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
-+++ b/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
++++ src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
 @@ -5,6 +5,7 @@
  #ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_UNDO_BAR_VIEW_H_
  #define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_UNDO_BAR_VIEW_H_

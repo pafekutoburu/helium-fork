@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -343,6 +343,7 @@
+@@ -345,6 +345,7 @@
  #include "ui/display/screen.h"
  #include "ui/events/event.h"
  #include "ui/events/event_handler.h"
@@ -10,7 +10,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "ui/events/event_utils.h"
  #include "ui/events/keycodes/keyboard_codes.h"
  #include "ui/gfx/animation/animation.h"
-@@ -682,6 +683,43 @@ bool ConvertedHitTest(views::View* src,
+@@ -684,6 +685,43 @@ bool ConvertedHitTest(views::View* src,
  
  }  // namespace
  
@@ -54,7 +54,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  // Implements the exclusive access context and bubble context.
  class BrowserView::ExclusiveAccessContextImpl
      : public ExclusiveAccessContext,
-@@ -1311,6 +1349,8 @@ BrowserView::~BrowserView() {
+@@ -1300,6 +1338,8 @@ BrowserView::~BrowserView() {
    if (arc_omnibox_panel_) {
      arc_omnibox_panel_->SetLocationBar(nullptr);
    }
@@ -63,7 +63,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  
    // These are raw pointers to child views, so they need to be set to null
    // before `RemoveAllChildViews()` is called to avoid dangling.
-@@ -2448,6 +2488,27 @@ void BrowserView::UpdateArcSidebarContro
+@@ -2464,6 +2504,27 @@ void BrowserView::UpdateArcSidebarContro
    }
  }
  
@@ -91,7 +91,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::UpdateArcAddressBarPlacement() {
    // helium-fork: HeliumAddressBarMode::kHidden -- Arc's default shape. There is
    // no band above the page; the address bar moves into the sidebar, under the
-@@ -5396,6 +5457,17 @@ void BrowserView::OnWidgetActivationChan
+@@ -5443,6 +5504,17 @@ void BrowserView::OnWidgetActivationChan
      UpdateZenModeReveal(/*reveal_top=*/false, /*reveal_side=*/false);
    }
  
@@ -109,7 +109,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    browser_->GetFeatures()
        .extension_keybinding_registry()
        ->OnHostActivationChanged(active);
-@@ -6251,6 +6323,15 @@ void BrowserView::AddedToWidget() {
+@@ -6329,6 +6401,15 @@ void BrowserView::AddedToWidget() {
      arc_omnibox_panel_->SetLocationBar(toolbar_->location_bar_view());
    }
  
@@ -129,7 +129,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -122,6 +122,9 @@ namespace ui {
+@@ -123,6 +123,9 @@ namespace ui {
  class NativeTheme;
  }  // namespace ui
  
@@ -139,7 +139,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
  namespace version_info {
  enum class Channel;
  }
-@@ -910,6 +913,8 @@ class BrowserView : public BrowserWindow
+@@ -905,6 +908,8 @@ class BrowserView : public BrowserWindow
   private:
    // Do not friend BrowserViewLayout. Use the BrowserViewLayoutDelegate
    // interface to keep these two classes decoupled and testable.
@@ -148,7 +148,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    friend class BrowserViewLayoutDelegateImpl;
    friend class BrowserViewLayoutDelegateImplOld;
    friend class BrowserViewLayoutDelegateImplBrowsertest;
-@@ -1012,6 +1017,10 @@ class BrowserView : public BrowserWindow
+@@ -1007,6 +1012,10 @@ class BrowserView : public BrowserWindow
    // helium-fork: keeps the zen side-chrome reveal ratio in step with the
    // collapse state while the hidden sidebar mode is in charge of it.
    void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
@@ -159,7 +159,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    // helium-fork toggle choreography (see MaybeHandleSidebarCollapseRequest).
    enum class SidebarTogglePhase { kIdle, kSliding, kFlipping };
    void RunSidebarDockFlip();
-@@ -1291,6 +1300,12 @@ class BrowserView : public BrowserWindow
+@@ -1284,6 +1293,12 @@ class BrowserView : public BrowserWindow
    // here because the band clips its own contents. See ArcOmniboxPanelView.
    raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
  
@@ -176,15 +176,15 @@ Index: src/chrome/browser/ui/views/frame/browser_widget.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_widget.cc
 +++ src/chrome/browser/ui/views/frame/browser_widget.cc
-@@ -33,6 +33,7 @@
+@@ -31,6 +31,7 @@
  #include "chrome/browser/ui/views/frame/system_menu_model_builder.h"
  #include "chrome/browser/ui/views/frame/top_container_view.h"
  #include "chrome/browser/ui/views/helium/native_frame_materials.h"
 +#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
- #include "chrome/common/chrome_features.h"
  #include "chrome/common/chrome_switches.h"
-@@ -396,8 +397,27 @@ void BrowserWidget::ShowContextMenuForVi
+ #include "ui/base/hit_test.h"
+@@ -399,8 +400,27 @@ void BrowserWidget::ShowContextMenuForVi
    gfx::Point point_in_view_coords(p);
    views::View::ConvertPointFromScreen(non_client_view(), &point_in_view_coords);
    int hit_test = non_client_view()->NonClientHitTest(point_in_view_coords);
@@ -217,7 +217,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -2277,6 +2277,17 @@ bool LocationBarView::OnMousePressed(con
+@@ -2255,6 +2255,17 @@ bool LocationBarView::OnMousePressed(con
    views::View::ConvertPointFromScreen(this, &local);
    if (IsPositionInWindowCaption(local)) {
      arc_press_forwarded_to_omnibox_ = false;
@@ -235,7 +235,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
      if (event.IsOnlyRightMouseButton()) {
        // The blank is titlebar: hand the click to the window's own controller
        // (BrowserWidget -- the system/layout menu). It re-checks
-@@ -2302,6 +2313,31 @@ bool LocationBarView::OnMousePressed(con
+@@ -2280,6 +2291,31 @@ bool LocationBarView::OnMousePressed(con
  }
  
  bool LocationBarView::OnMouseDragged(const ui::MouseEvent& event) {
@@ -267,7 +267,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    // helium-fork: paired with the press -- an unforwarded press must not grow
    // a forwarded drag (the omnibox would see a drag with no press).
    if (!arc_press_forwarded_to_omnibox_) {
-@@ -2312,6 +2348,20 @@ bool LocationBarView::OnMouseDragged(con
+@@ -2290,6 +2326,20 @@ bool LocationBarView::OnMouseDragged(con
  }
  
  void LocationBarView::OnMouseReleased(const ui::MouseEvent& event) {
@@ -288,7 +288,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    // helium-fork: paired with the press. The unconditional forward here is
    // what leaked the omnibox context menu onto the blank -- Textfield shows
    // its menu from OnMouseReleased, not from the press.
-@@ -2321,6 +2371,14 @@ void LocationBarView::OnMouseReleased(co
+@@ -2299,6 +2349,14 @@ void LocationBarView::OnMouseReleased(co
    omnibox_view_->OnMouseReleased(AdjustMouseEventLocationForOmniboxView(event));
  }
  
@@ -303,7 +303,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  void LocationBarView::OnMouseMoved(const ui::MouseEvent& event) {
    OnOmniboxHovered(true);
  }
-@@ -2688,6 +2746,38 @@ bool LocationBarView::IsArcFieldEditing(
+@@ -2666,6 +2724,38 @@ bool LocationBarView::IsArcFieldEditing(
           GetOmniboxController()->edit_model()->user_input_in_progress();
  }
  
@@ -354,7 +354,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
  #include <string>
  #include <string_view>
  #include <vector>
-@@ -238,6 +239,12 @@ class LocationBarView
+@@ -251,6 +252,12 @@ class LocationBarView
    // is visible or there is in-progress input. The panel is on screen for
    // exactly this, whether the suggestion popup is up or not.
    bool IsArcFieldEditing() const;
@@ -367,7 +367,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
  
    // helium-fork: for ToolbarView's caption hit test. True when `point` (in
    // this view's coordinates) lands on the minimal field's blank -- the part
-@@ -512,6 +519,7 @@ class LocationBarView
+@@ -532,6 +539,7 @@ class LocationBarView
    bool OnMousePressed(const ui::MouseEvent& event) override;
    bool OnMouseDragged(const ui::MouseEvent& event) override;
    void OnMouseReleased(const ui::MouseEvent& event) override;
@@ -375,7 +375,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    void OnMouseMoved(const ui::MouseEvent& event) override;
    // helium-fork: with SetNotifyEnterExitOnChild(true) the pointer can arrive
    // straight onto one of the field's icons, in which case this is the only
-@@ -686,6 +694,14 @@ class LocationBarView
+@@ -706,6 +714,14 @@ class LocationBarView
    // context menu from OnMouseReleased, so an unpaired release forward leaks
    // the omnibox menu onto the field's blank.
    bool arc_press_forwarded_to_omnibox_ = true;
@@ -394,7 +394,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -1462,6 +1462,19 @@ bool ToolbarView::IsRectInWindowCaption(
+@@ -1472,6 +1472,19 @@ bool ToolbarView::IsRectInWindowCaption(
          // decides for itself which parts are content and which are Dia's
          // window-drag blank (same delegation shape as the tab strip above).
          if (child == location_bar_view_) {

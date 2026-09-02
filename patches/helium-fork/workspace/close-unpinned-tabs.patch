@@ -2,7 +2,7 @@ Index: src/chrome/app/chrome_command_ids.h
 ===================================================================
 --- src.orig/chrome/app/chrome_command_ids.h
 +++ src/chrome/app/chrome_command_ids.h
-@@ -118,6 +118,7 @@
+@@ -121,6 +121,7 @@
  #define IDC_CTRL_S_SHORTCUT             34090
  #define IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN 34091
  #define IDC_HELIUM_WS_TOGGLE_PIN        34092
@@ -14,7 +14,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -1976,6 +1976,12 @@ are declared in tools/grit/grit_args.gni
+@@ -1996,6 +1996,12 @@ are declared in tools/grit/grit_args.gni
        <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_TOGGLE_PIN" desc="Command name shown on the Settings shortcuts page for pinning or unpinning the current tab in the workspace sidebar.">
          Pin or unpin tab
        </message>
@@ -27,7 +27,7 @@ Index: src/chrome/app/generated_resources.grd
        <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
          Toggle developer tools
        </message>
-@@ -19407,6 +19413,12 @@ Please help our engineers fix this probl
+@@ -19388,6 +19394,12 @@ Please help our engineers fix this probl
        <message name="IDS_READING_LIST_TOAST_BODY" desc="Text on a toast notification that is shown when one or more items are added to the reading list [ICU Syntax]">
          {PAGES, plural, =1 {Page added to reading list} other {Pages added to reading list}}
        </message>
@@ -44,7 +44,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -4147,6 +4147,8 @@ static_library("ui") {
+@@ -4074,6 +4074,8 @@ static_library("ui") {
        "views/tabs/vertical/helium_media_strip_controller.h",
        "views/tabs/vertical/helium_media_strip_view.cc",
        "views/tabs/vertical/helium_media_strip_view.h",
@@ -57,7 +57,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -1510,6 +1510,13 @@ void BrowserCommandController::HandleCom
+@@ -1535,6 +1535,13 @@ void BrowserCommandController::HandleCom
        }
        break;
      }
@@ -71,7 +71,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
      // Hosted App commands
      case IDC_COPY_URL:
        CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
-@@ -2065,6 +2072,8 @@ void BrowserCommandController::InitComma
+@@ -2094,6 +2101,8 @@ void BrowserCommandController::InitComma
                                           false);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_TOGGLE_PIN,
                                           normal_window);
@@ -84,7 +84,7 @@ Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
 +++ src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
-@@ -213,6 +213,8 @@ std::optional<BrowserShortcutCommandLabe
+@@ -254,6 +254,8 @@ std::optional<BrowserShortcutCommandLabe
        return Label(IDS_SHORTCUT_COMMAND_TOGGLE_ZEN_MODE_TOP_CHROME_PIN);
      case IDC_HELIUM_WS_TOGGLE_PIN:
        return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_TOGGLE_PIN);
@@ -93,10 +93,10 @@ Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
      case IDC_CARET_BROWSING_TOGGLE:
        return Label(IDS_SETTINGS_ENABLE_CARET_BROWSING_TITLE);
      case IDC_CLEAR_BROWSING_DATA:
-@@ -258,6 +260,15 @@ std::vector<int> GetBrowserShortcutComma
-   commands.push_back(ShouldUseCopyPageUrlLabel(prefs) ? IDC_DEV_TOOLS_INSPECT
-                                                       : IDC_COPY_URL);
-   commands.push_back(IDC_FORCE_PASTE);
+@@ -347,6 +349,15 @@ std::vector<int> GetBrowserShortcutComma
+   commands.push_back(IDC_BROWSER_LAYOUT_COMPACT);
+   commands.push_back(IDC_BROWSER_LAYOUT_VERTICAL);
+   commands.push_back(IDC_OPTIONS);
 +  // helium-fork M4-r1: deliberately has no default key. Cmd+Shift+K, the
 +  // first choice, collided with shortcuts some sites bind themselves
 +  // (user 2026-08-26), and nothing in Chromium or Helium binds a K on mac
@@ -272,7 +272,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -302,6 +302,12 @@ class BrowserView : public BrowserWindow
+@@ -304,6 +304,12 @@ class BrowserView : public BrowserWindow
    // browsers even if it is not the active TabStrip. Prefer to use
    // VerticalTabsBrowserTestMixin or VerticalTabsInteractiveTestMixin to be
    // automatically placed into VerticalTabs mode.
@@ -309,7 +309,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -63,6 +63,7 @@
+@@ -59,6 +59,7 @@
  #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
  #include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h"
  #include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_view.h"
@@ -317,7 +317,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
  #include "chrome/grit/generated_resources.h"
  #include "components/tabs/public/tab_group.h"
-@@ -215,6 +216,20 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -208,6 +209,20 @@ VerticalTabStripRegionView::VerticalTabS
    media_strip_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
    media_strip_shadow_->SetShadowCornerRadius(helium::kMediaStripCornerRadius);
    media_strip_shadow_->SetVisible(false);
@@ -338,7 +338,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    media_strip_ = AddChildView(std::make_unique<HeliumMediaStripView>(
        media_strip_controller_.get(),
        base::BindRepeating(
-@@ -789,6 +804,12 @@ void VerticalTabStripRegionView::OnBound
+@@ -768,6 +783,12 @@ void VerticalTabStripRegionView::OnBound
    UpdateMediaStripVisibility();
  }
  
@@ -355,7 +355,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -38,6 +38,7 @@ class HeliumMediaScrimView;
+@@ -37,6 +37,7 @@ class HeliumMediaScrimView;
  class HeliumMediaStripController;
  class HeliumMediaStripExpandedView;
  class HeliumMediaStripView;
@@ -363,7 +363,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class VerticalTabStripBottomContainer;
  class HeliumCardShadowView;
  class WorkspaceEntryDragOverlay;
-@@ -68,6 +69,11 @@ class VerticalTabStripRegionView final
+@@ -66,6 +67,11 @@ class VerticalTabStripRegionView final
    METADATA_HEADER(VerticalTabStripRegionView, BaseTabStripRegionView)
  
   public:
@@ -375,7 +375,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kAnimationCompletedEvent);
  
    // TODO(crbug.com/465833741): Replace constant with derived value based on
-@@ -303,6 +309,7 @@ class VerticalTabStripRegionView final
+@@ -298,6 +304,7 @@ class VerticalTabStripRegionView final
    // child added last so it paints above the tab list and never reflows it.
    // See chrome/browser/ui/helium/arc_media_strip.h for the whole spec.
    std::unique_ptr<HeliumMediaStripController> media_strip_controller_;

@@ -1,6 +1,8 @@
---- a/chrome/browser/ui/BUILD.gn
-+++ b/chrome/browser/ui/BUILD.gn
-@@ -385,6 +385,7 @@ static_library("ui") {
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -413,6 +413,7 @@ static_library("ui") {
      "helium/arc_media_strip.h",
      "helium/arc_minimal_field_state.h",
      "helium/arc_omnibox_panel.h",
@@ -8,7 +10,7 @@
      "helium/arc_sidebar_surface.h",
      "helium/arc_toolbar_host.h",
      "helium/helium_layout_state_controller.cc",
-@@ -413,6 +414,7 @@ static_library("ui") {
+@@ -441,6 +442,7 @@ static_library("ui") {
      "helium_workspace/workspace_service_factory.h",
      "helium_workspace/workspace_tab_controller.cc",
      "helium_workspace/workspace_tab_controller.h",
@@ -16,7 +18,7 @@
      "idle_bubble.h",
      "managed_ui.cc",
      "managed_ui.h",
-@@ -6066,6 +6068,8 @@ test("helium_workspace_unittests") {
+@@ -5852,6 +5854,8 @@ test("helium_workspace_unittests") {
      "helium/arc_media_strip_unittest.cc",
      "helium/arc_minimal_field_state.h",
      "helium/arc_minimal_field_state_unittest.cc",
@@ -25,7 +27,7 @@
      "helium/arc_sidebar_surface.h",
      "helium/arc_sidebar_surface_unittest.cc",
      "helium/arc_toolbar_host.h",
-@@ -6091,6 +6095,8 @@ test("helium_workspace_unittests") {
+@@ -5877,6 +5881,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_service.cc",
      "helium_workspace/workspace_service.h",
      "helium_workspace/workspace_service_unittest.cc",
@@ -34,8 +36,10 @@
    ]
    deps = [
      "//base",
+Index: src/chrome/browser/ui/helium/arc_sidebar_split.h
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/helium/arc_sidebar_split.h
++++ src/chrome/browser/ui/helium/arc_sidebar_split.h
 @@ -0,0 +1,57 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -94,8 +98,10 @@
 +}  // namespace helium
 +
 +#endif  // CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SPLIT_H_
+Index: src/chrome/browser/ui/helium/arc_sidebar_split_unittest.cc
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/helium/arc_sidebar_split_unittest.cc
++++ src/chrome/browser/ui/helium/arc_sidebar_split_unittest.cc
 @@ -0,0 +1,74 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -171,8 +177,10 @@
 +
 +}  // namespace
 +}  // namespace helium
---- a/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
-+++ b/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
 @@ -364,6 +364,73 @@ TEST_F(WorkspaceServiceTest, MoveEntryCl
  
  // An id that resolves to nothing (a race with removal in another window)
@@ -247,8 +255,10 @@
  TEST_F(WorkspaceServiceTest, MoveEntryRejectsUnknownIds) {
    const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
                                             GURL("https://a.example/"), u"A");
+Index: src/chrome/browser/ui/helium_workspace/workspace_url_drop.h
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/helium_workspace/workspace_url_drop.h
++++ src/chrome/browser/ui/helium_workspace/workspace_url_drop.h
 @@ -0,0 +1,43 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
@@ -293,8 +303,10 @@
 +}  // namespace helium_workspace
 +
 +#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_URL_DROP_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_url_drop_unittest.cc
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/helium_workspace/workspace_url_drop_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_url_drop_unittest.cc
 @@ -0,0 +1,50 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
@@ -346,9 +358,11 @@
 +
 +}  // namespace
 +}  // namespace helium_workspace
---- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-+++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -237,12 +237,7 @@ VerticalTabStripRegionView::VerticalTabS
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -230,12 +230,7 @@ VerticalTabStripRegionView::VerticalTabS
              region->OnMediaCapsuleHovered(region->media_strip_);
            },
            base::Unretained(this))));
@@ -362,7 +376,7 @@
  
    // r5: the floating half of the stack -- capsules for sessions beyond the
    // first, over the tab rows. A plain positioning host: no layer of its own
-@@ -623,9 +618,11 @@ void VerticalTabStripRegionView::OnWidge
+@@ -602,9 +597,11 @@ void VerticalTabStripRegionView::Removed
  //
  // ⚠ These all have a base implementation: BaseTabStripRegionView routes the
  // *link* drop (drag a URL onto the strip to open it) through the very same
@@ -377,7 +391,7 @@
  
  UnpinnedTabContainerView* VerticalTabStripRegionView::TodayDropContainer()
      const {
-@@ -645,6 +642,11 @@ bool VerticalTabStripRegionView::HasWork
+@@ -624,6 +621,11 @@ bool VerticalTabStripRegionView::HasWork
    return sidebar && sidebar->HasEntryDragSession();
  }
  
@@ -389,7 +403,7 @@
  bool VerticalTabStripRegionView::IsWorkspaceEntryDrag(
      const ui::OSExchangeData& data) const {
    // Session first: reading the payload means unpickling the OSExchangeData,
-@@ -662,6 +664,14 @@ bool VerticalTabStripRegionView::GetDrop
+@@ -641,6 +643,14 @@ bool VerticalTabStripRegionView::GetDrop
    const bool base_wants =
        BaseTabStripRegionView::GetDropFormats(formats, format_types);
    format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
@@ -404,7 +418,7 @@
    return base_wants || true;
  }
  
-@@ -670,12 +680,13 @@ bool VerticalTabStripRegionView::AreDrop
+@@ -649,12 +659,13 @@ bool VerticalTabStripRegionView::AreDrop
  }
  
  bool VerticalTabStripRegionView::CanDrop(const ui::OSExchangeData& data) {
@@ -420,7 +434,7 @@
      BaseTabStripRegionView::OnDragEntered(event);
      return;
    }
-@@ -688,7 +699,8 @@ int VerticalTabStripRegionView::OnDragUp
+@@ -667,7 +678,8 @@ int VerticalTabStripRegionView::OnDragUp
    // Only the session is consulted here, never the payload: a live entry
    // session and a link drag cannot both be in flight, so this tells the two
    // apart without touching the pasteboard once per frame.
@@ -430,12 +444,12 @@
      return BaseTabStripRegionView::OnDragUpdated(event);
    }
    UnpinnedTabContainerView* const today = TodayDropContainer();
-@@ -696,25 +708,39 @@ int VerticalTabStripRegionView::OnDragUp
-       tab_strip_view_ ? tab_strip_view_->GetPinnedTabsContainer() : nullptr;
+@@ -675,25 +687,40 @@ int VerticalTabStripRegionView::OnDragUp
+       tab_strip_view() ? tab_strip_view()->GetPinnedTabsContainer() : nullptr;
    WorkspaceSidebarView* const sidebar =
        pinned ? pinned->workspace_view() : nullptr;
 -  if (!today || !sidebar) {
-+  if (!today || !sidebar || !tab_strip_view_) {
++  if (!today || !sidebar || !tab_strip_view()) {
      return ui::DragDropTypes::DRAG_NONE;
    }
 -  // Everything below the sidebar belongs to Today -- including the band the
@@ -457,11 +471,12 @@
 +  // contents' -- once the pinned surface can genuinely scroll, the contents
 +  // bottom converts to a line below the visible scroller and left a dead
 +  // band over the separator.
-+  views::ScrollView* const scroller = tab_strip_view_->pinned_tabs_scroll_view();
++  views::ScrollView* const scroller =
++      tab_strip_view()->pinned_tabs_scroll_view();
 +  gfx::Point scroller_top(0, scroller->bounds().y());
 +  gfx::Point scroller_bottom(0, scroller->bounds().bottom());
-+  views::View::ConvertPointToTarget(tab_strip_view_, this, &scroller_top);
-+  views::View::ConvertPointToTarget(tab_strip_view_, this, &scroller_bottom);
++  views::View::ConvertPointToTarget(tab_strip_view(), this, &scroller_top);
++  views::View::ConvertPointToTarget(tab_strip_view(), this, &scroller_bottom);
 +  if (event.location().y() < scroller_bottom.y()) {
      today->OnDragExited();
 +    if (url_session && event.location().y() >= scroller_top.y()) {
@@ -481,7 +496,7 @@
    return today->HandleWorkspaceEntryDragAt(point);
  }
  
-@@ -729,8 +755,9 @@ void VerticalTabStripRegionView::OnDragE
+@@ -708,8 +735,9 @@ void VerticalTabStripRegionView::OnDragE
  
  views::View::DropCallback VerticalTabStripRegionView::GetDropCallback(
      const ui::DropTargetEvent& event) {
@@ -493,20 +508,7 @@
      return BaseTabStripRegionView::GetDropCallback(event);
    }
    UnpinnedTabContainerView* const today = TodayDropContainer();
-@@ -788,12 +815,6 @@ void VerticalTabStripRegionView::Layout(
-     media_strip_panel_->SetAnchor(anchor,
-                                   MaxMediaPanelHeightFor(anchor, hovered));
-   }
--
--  // Ensure that we update the drop arrow position so that it does not render in
--  // the collapsed state when expand on hover is active.
--  if (drop_arrow_) {
--    drop_arrow_->SetIndex(drop_arrow_->index());
--  }
- }
- 
- void VerticalTabStripRegionView::OnBoundsChanged(
-@@ -1015,11 +1036,41 @@ void VerticalTabStripRegionView::UpdateM
+@@ -994,11 +1022,41 @@ void VerticalTabStripRegionView::UpdateM
    if (media_scrim_) {
      media_scrim_->SetShown(stack_shown);
    }
@@ -548,7 +550,7 @@
  void VerticalTabStripRegionView::SetMediaStripExpanded(bool expanded) {
    if (!media_strip_panel_) {
      return;
-@@ -1182,7 +1233,11 @@ VerticalTabStripRegionView::GetExpandOnH
+@@ -1161,7 +1219,11 @@ VerticalTabStripRegionView::GetExpandOnH
  
  void VerticalTabStripRegionView::HandleDragUpdate(
      const std::optional<BrowserRootView::DropIndex>& index) {
@@ -561,9 +563,11 @@
    UpdateExpandOnHoverState(true);
    if (is_expanded_on_hover_ && !link_drag_lock_) {
      link_drag_lock_ =
---- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-+++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -149,6 +149,10 @@ class VerticalTabStripRegionView final
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -147,6 +147,10 @@ class VerticalTabStripRegionView final
    // Cheap per-frame discriminator; IsWorkspaceEntryDrag() additionally reads
    // the payload and is only for the once-per-gesture calls.
    bool HasWorkspaceEntryDragSession() const;
@@ -574,7 +578,7 @@
    bool IsWorkspaceEntryDrag(const ui::OSExchangeData& data) const;
  
   public:
-@@ -345,6 +349,11 @@ class VerticalTabStripRegionView final
+@@ -340,6 +344,11 @@ class VerticalTabStripRegionView final
  
    void OnMediaStripModelChanged();
    void UpdateMediaStripVisibility();
@@ -586,9 +590,11 @@
    void SetMediaStripExpanded(bool expanded);
    void OnMediaStripPointerLeft();
    void SyncMediaCapsules();
---- a/chrome/browser/ui/views/tabs/common/BUILD.gn
-+++ b/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -72,6 +72,8 @@ source_set("impl") {
+Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -78,6 +78,8 @@ source_set("impl") {
      "workspace_entry_drag_data.h",
      "workspace_entry_drag_overlay.cc",
      "workspace_entry_drag_overlay.h",
@@ -597,9 +603,11 @@
      "workspace_sidebar_view.cc",
      "workspace_sidebar_view.h",
    ]
---- a/chrome/browser/ui/views/tabs/common/tab_group_view.cc
-+++ b/chrome/browser/ui/views/tabs/common/tab_group_view.cc
-@@ -381,60 +381,6 @@ const TabCollectionNode* TabGroupView::G
+Index: src/chrome/browser/ui/views/tabs/common/tab_group_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_group_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_group_view.cc
+@@ -295,72 +295,6 @@ const TabCollectionNode* TabGroupView::G
    return nullptr;
  }
  
@@ -608,13 +616,21 @@
 -  if (!collection_node_) {
 -    return std::nullopt;
 -  }
--  // Use the vertical position to find the child view being dragged over.
--  if (loc_in_group.y() < group_header_->bounds().bottom()) {
--    // Determine whether the drop is on the leading (top) or trailing
--    // (bottom) half of the header. If in the top half, then we the drag
--    // is considered to be above the group.
--    const bool is_leading =
--        loc_in_group.y() < group_header_->bounds().CenterPoint().y();
+-  const bool is_horizontal =
+-      collection_node_->orientation() == TabStripOrientation::kHorizontal;
+-
+-  // Use the position along drag axis to find the child view being dragged over.
+-  const int header_end = is_horizontal ? group_header_->bounds().right()
+-                                       : group_header_->bounds().bottom();
+-  const int loc_coord = is_horizontal ? loc_in_group.x() : loc_in_group.y();
+-  const int header_center = is_horizontal
+-                                ? group_header_->bounds().CenterPoint().x()
+-                                : group_header_->bounds().CenterPoint().y();
+-
+-  if (loc_coord < header_end) {
+-    // Determine whether the drop is on the leading or trailing half of the
+-    // header.
+-    const bool is_leading = loc_coord < header_center;
 -    return GetDragHandler().GetLinkDropIndexForNode(
 -        *collection_node_, is_leading
 -                               ? std::make_optional(DragPositionHint::kBefore)
@@ -624,7 +640,9 @@
 -  for (const auto& child_node : collection_node_->children()) {
 -    auto* view = child_node->view();
 -    CHECK(view);
--    if (loc_in_group.y() > view->bounds().bottom()) {
+-    const int view_end =
+-        is_horizontal ? view->bounds().right() : view->bounds().bottom();
+-    if (loc_coord > view_end) {
 -      continue;
 -    }
 -
@@ -635,9 +653,11 @@
 -    // consider this drag as a before/after rather than over.
 -    constexpr double kDragOverMargins = 0.2;
 -    std::optional<DragPositionHint> hint;
--    if (loc_in_child.y() < view->height() * kDragOverMargins) {
+-    const int child_coord = is_horizontal ? loc_in_child.x() : loc_in_child.y();
+-    const int child_size = is_horizontal ? view->width() : view->height();
+-    if (child_coord < child_size * kDragOverMargins) {
 -      hint = DragPositionHint::kBefore;
--    } else if (loc_in_child.y() > view->height() * (1 - kDragOverMargins)) {
+-    } else if (child_coord > child_size * (1 - kDragOverMargins)) {
 -      hint = DragPositionHint::kAfter;
 -    } else if (child_node->type() == TabCollectionNode::Type::SPLIT) {
 -      // If landing in the middle of the split, let the split view decide which
@@ -660,8 +680,10 @@
  void TabGroupView::InitHeaderDrag(const ui::LocatedEvent& event) {
    CHECK(collection_node_);
    const ui::ListSelectionModel original_selection_model =
---- a/chrome/browser/ui/views/tabs/common/tab_group_view.h
-+++ b/chrome/browser/ui/views/tabs/common/tab_group_view.h
+Index: src/chrome/browser/ui/views/tabs/common/tab_group_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_group_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_group_view.h
 @@ -7,7 +7,6 @@
  
  #include "base/callback_list.h"
@@ -670,7 +692,7 @@
  #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
  #include "chrome/browser/ui/views/tabs/common/tab_group_header_view.h"
-@@ -77,9 +76,6 @@ class TabGroupView : public views::View,
+@@ -72,9 +71,6 @@ class TabGroupView : public views::View,
  
    bool IsCollapsed() const;
  
@@ -680,8 +702,10 @@
    const TabCollectionNode* collection_node() const { return collection_node_; }
  
    TabGroupHeaderView* group_header() { return group_header_; }
---- a/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
-+++ b/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
 @@ -71,6 +71,22 @@ class VerticalTabStripLinkDragTest
      return region_view()->GetDropIndex(event);
    }
@@ -944,9 +968,11 @@
  }
  
  IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInPinnedTabs) {
---- a/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-+++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -10,6 +10,7 @@
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -12,6 +12,7 @@
  #include "chrome/browser/ui/browser_element_identifiers.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
@@ -954,17 +980,17 @@
  #include "chrome/browser/ui/helium_workspace/workspace_service.h"
  #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
  #include "chrome/browser/ui/layout_constants.h"
-@@ -22,6 +23,8 @@
- #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+@@ -25,6 +26,8 @@
  #include "chrome/browser/ui/views/tabs/common/tab_strip_utils.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view_layout.h"
  #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
  #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_scroll_bar.h"
  #include "components/tabs/public/tab_group.h"
-@@ -112,6 +115,13 @@ TabStripView::TabStripView(TabCollection
-   SetLayoutManager(std::make_unique<views::DelegatingLayoutManager>(this));
+@@ -180,6 +183,13 @@ TabStripView::TabStripView(TabCollection
+       std::make_unique<TabStripViewLayout>(collection_node->orientation()));
    SetProperty(views::kElementIdentifierKey, kTabStripElementId);
  
 +  // helium-fork M3.12-r2: the favorites grid lives above the pinned
@@ -977,80 +1003,7 @@
    pinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
        views::ScrollView::ScrollWithLayers::kEnabled));
    SetScrollViewProperties(pinned_tabs_scroll_view_);
-@@ -169,6 +179,16 @@ views::ProposedLayout TabStripView::Calc
-   const int unpinned_preferred_height =
-       unpinned_tabs_scroll_view_->GetPreferredSize(size_bounds).height();
- 
-+  // helium-fork M3.12-r2: the fixed favorites band comes off the top before
-+  // anything else -- it never scrolls (user 2026-08-30). Its trailing gap is
-+  // inside it, so the pinned scroller starts flush below.
-+  int band_height = 0;
-+  if (favorites_band_) {
-+    band_height =
-+        favorites_band_->GetPreferredSize(pinned_tab_container_size_bounds)
-+            .height();
-+  }
-+
-   // If the height is bounded, calculate the available space for laying out the
-   // pinned and unpinned containers.
-   int remaining_height = 0;
-@@ -178,25 +198,47 @@ views::ProposedLayout TabStripView::Calc
-     // whenever the pinned section is present -- matching where it is placed
-     // below. Keying this off Today's contents as well would under-reserve the
-     // moment Today emptied.
--    if (pinned_preferred_height != 0) {
-+    if (pinned_preferred_height != 0 || band_height != 0) {
-       remaining_height -= kTabsSeparatorVerticalPadding;
-       remaining_height -= tabs_separator_->GetPreferredSize().height() +
-                           kTabsSeparatorVerticalPadding;
-     }
-     // Clamp the remaining height to 0 if we have less space.
-     remaining_height = std::max(remaining_height, 0);
-+    // The band is capped so a degenerate rail width (one tile per row)
-+    // cannot squeeze the pinned floor and Today's reserve out of the strip;
-+    // past the cap it clips its tiles rather than scroll -- the never-
-+    // scrolls ruling holds, the strip just cannot honor it losslessly there.
-+    const int band_cap =
-+        std::max(0, remaining_height -
-+                        helium::SidebarTodayReserve(
-+                            unpinned_preferred_height,
-+                            GetLayoutConstant(LayoutConstant::kVerticalTabHeight)) -
-+                        pinned_tabs_container_view_->GetMinimumSize().height());
-+    band_height = std::min(band_height, band_cap);
-+    remaining_height -= band_height;
-+  }
-+
-+  if (favorites_band_) {
-+    layouts.child_layouts.emplace_back(
-+        favorites_band_.get(), band_height > 0,
-+        gfx::Rect(region_horizontal_padding, y,
-+                  pinned_tab_container_size_bounds.width().value(),
-+                  band_height));
-+    y += band_height;
-   }
- 
-   // Place the pinned container.
-   int pinned_container_height = pinned_preferred_height;
-   if (size_bounds.height().is_bounded()) {
--    // The pinned container height should not be larger than half the available
--    // space unless the unpinned container will not fill that space. Also make
--    // sure the height is at least the minimum.
--    pinned_container_height = std::max(
--        std::min(pinned_preferred_height,
--                 std::max(remaining_height / 2,
--                          remaining_height - unpinned_preferred_height)),
-+    // helium-fork M3.12-r1: pinned is fixed-first -- full content height
-+    // unless it alone overflows -- and Today keeps a small reserve and
-+    // scrolls. Replaces upstream's half-split, which clamped the pinned
-+    // viewport at remaining/2 and scrolled the favorites off the top
-+    // whenever Today was tall (user 2026-08-30).
-+    pinned_container_height = helium::SidebarPinnedViewportHeight(
-+        pinned_preferred_height, unpinned_preferred_height, remaining_height,
-+        GetLayoutConstant(LayoutConstant::kVerticalTabHeight),
-         pinned_tabs_container_view_->GetMinimumSize().height());
-     remaining_height -= pinned_container_height;
-   }
-@@ -477,6 +519,12 @@ bool TabStripView::IsPositionInWindowCap
+@@ -501,6 +511,12 @@ bool TabStripView::IsPositionInWindowCap
        continue;
      }
  
@@ -1063,7 +1016,7 @@
      auto* scroll_view = views::AsViewClass<views::ScrollView>(child);
      if (!scroll_view) {
        return true;
-@@ -517,7 +565,14 @@ views::View* TabStripView::AddScrollView
+@@ -541,7 +557,14 @@ views::View* TabStripView::AddScrollView
    auto* container = views::AsViewClass<PinnedTabContainerView>(view.get());
    CHECK(container);
    pinned_tabs_container_view_ = container;
@@ -1079,7 +1032,7 @@
  }
  
  void TabStripView::RemoveScrollViewContents(views::View* view) {
-@@ -527,6 +582,10 @@ void TabStripView::RemoveScrollViewConte
+@@ -551,6 +574,10 @@ void TabStripView::RemoveScrollViewConte
      return;
    }
    if (views::IsViewClass<PinnedTabContainerView>(view)) {
@@ -1090,9 +1043,11 @@
      pinned_tabs_container_view_ = nullptr;
      pinned_tabs_scroll_view_->SetContents(nullptr);
      return;
---- a/chrome/browser/ui/views/tabs/common/tab_strip_view.h
-+++ b/chrome/browser/ui/views/tabs/common/tab_strip_view.h
-@@ -16,6 +16,7 @@
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+@@ -15,6 +15,7 @@
  class TabCollectionNode;
  class PinnedTabContainerView;
  class UnpinnedTabContainerView;
@@ -1100,8 +1055,8 @@
  
  namespace views {
  class ScrollView;
-@@ -47,6 +48,9 @@ class TabStripView final : public views:
-   views::ScrollView* unpinned_tabs_scroll_view() {
+@@ -46,6 +47,9 @@ class TabStripView final : public views:
+   views::ScrollView* unpinned_tabs_scroll_view() const {
      return unpinned_tabs_scroll_view_;
    }
 +  // helium-fork M3.12-r2: the fixed favorites band above the pinned
@@ -1110,25 +1065,27 @@
  
    void SetCollapsedState(bool is_collapsed);
    void SetIsAnimatingSize(bool is_animating);
-@@ -99,6 +103,7 @@ class TabStripView final : public views:
-   void HideHoverCardOnScroll();
+@@ -124,6 +128,7 @@ class TabStripView final : public views:
+   friend class TabStripViewLayout;
  
    raw_ptr<TabCollectionNode> collection_node_ = nullptr;
 +  raw_ptr<WorkspaceFavoritesBandView> favorites_band_ = nullptr;
    raw_ptr<views::ScrollView> pinned_tabs_scroll_view_ = nullptr;
    raw_ptr<PinnedTabContainerView> pinned_tabs_container_view_ = nullptr;
    raw_ptr<views::Separator> tabs_separator_ = nullptr;
---- a/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
-+++ b/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
-@@ -24,6 +24,7 @@
- #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+@@ -26,6 +26,7 @@
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.h"
  #include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_data.h"
  #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
 +#include "ui/base/clipboard/clipboard_format_type.h"
  #include "ui/base/dragdrop/drag_drop_types.h"
  #include "ui/base/dragdrop/drop_target_event.h"
  #include "ui/base/dragdrop/os_exchange_data.h"
-@@ -90,7 +91,7 @@ class UnpinnedTabContainerViewTargeter :
+@@ -76,7 +77,7 @@ class UnpinnedTabContainerViewTargeter :
      // last row plainly means "put it at the end", and the default rule --
      // only the rows themselves are hittable -- makes that release land on
      // nothing and silently cancel the drag.
@@ -1137,10 +1094,13 @@
        return view_->GetLocalBounds().Intersects(rect);
      }
      gfx::Rect content_bounds;
-@@ -399,63 +400,12 @@ UnpinnedTabContainerView::GetLinkDropInd
+@@ -273,81 +274,12 @@ UnpinnedTabContainerView::GetLinkDropInd
    if (!collection_node_) {
      return std::nullopt;
    }
+-  const bool is_horizontal =
+-      collection_node_->orientation() == TabStripOrientation::kHorizontal;
+-
 -  const helium_workspace::WorkspaceService* workspace_service =
 -      GetWorkspaceService();
 -  for (auto& child_node : collection_node_->children()) {
@@ -1151,8 +1111,14 @@
 -    if (IsWorkspaceEntryTab(workspace_service, view)) {
 -      continue;
 -    }
--    if (loc_in_container.y() >= view->bounds().bottom()) {
--      continue;
+-    if (is_horizontal) {
+-      if (loc_in_container.x() >= view->bounds().right()) {
+-        continue;
+-      }
+-    } else {
+-      if (loc_in_container.y() >= view->bounds().bottom()) {
+-        continue;
+-      }
 -    }
 -
 -    if (child_node->type() == TabCollectionNode::Type::GROUP) {
@@ -1161,8 +1127,11 @@
 -        gfx::Point loc_in_group = views::View::ConvertPointToTarget(
 -            this, group_view, loc_in_container);
 -        const bool is_leading =
--            loc_in_group.y() <
--            group_view->group_header()->bounds().CenterPoint().y();
+-            is_horizontal
+-                ? loc_in_group.x() <
+-                      group_view->group_header()->bounds().CenterPoint().x()
+-                : loc_in_group.y() <
+-                      group_view->group_header()->bounds().CenterPoint().y();
 -        return GetDragHandler().GetLinkDropIndexForNode(
 -            *group_view->collection_node(),
 -            is_leading ? DragPositionHint::kBefore : DragPositionHint::kAfter);
@@ -1180,9 +1149,11 @@
 -    // consider this drag as a before/after rather than over.
 -    constexpr double kDragOverMargins = 0.2;
 -    std::optional<DragPositionHint> hint;
--    if (loc_in_child.y() < view->height() * kDragOverMargins) {
+-    const int child_coord = is_horizontal ? loc_in_child.x() : loc_in_child.y();
+-    const int child_size = is_horizontal ? view->width() : view->height();
+-    if (child_coord < child_size * kDragOverMargins) {
 -      hint = DragPositionHint::kBefore;
--    } else if (loc_in_child.y() > view->height() * (1 - kDragOverMargins)) {
+-    } else if (child_coord > child_size * (1 - kDragOverMargins)) {
 -      hint = DragPositionHint::kAfter;
 -    } else if (child_node->type() == TabCollectionNode::Type::SPLIT) {
 -      // If landing in the middle of the split, let the split view decide which
@@ -1196,6 +1167,10 @@
 -    }
 -    return GetDragHandler().GetLinkDropIndexForNode(*child_node, hint);
 -  }
+-  // The slot can also sit past the last row (dropping at the end).
+-  if (drop_slot_row && *drop_slot_row >= static_cast<size_t>(laid_out_count)) {
+-    height += drop_slot_height + (laid_out_count > 0 ? kTabVerticalPadding : 0);
+-  }
 -
 -  // Fallback to the end of the container.
 +  // helium-fork M3.12-r1: an external link dropped anywhere in Today -- on a
@@ -1207,7 +1182,7 @@
    return GetDragHandler().GetLinkDropIndexForNode(*collection_node_,
                                                    std::nullopt);
  }
-@@ -498,6 +448,10 @@ bool UnpinnedTabContainerView::HasWorksp
+@@ -390,6 +322,10 @@ bool UnpinnedTabContainerView::HasWorksp
    return workspace_drag_host_ && workspace_drag_host_->HasEntryDragSession();
  }
  
@@ -1218,7 +1193,7 @@
  std::optional<UnpinnedTabContainerView::EntryDropSpot>
  UnpinnedTabContainerView::EntryDropSpotAt(const gfx::Point& loc) {
    if (!collection_node_) {
-@@ -538,6 +492,11 @@ bool UnpinnedTabContainerView::GetDropFo
+@@ -430,6 +366,11 @@ bool UnpinnedTabContainerView::GetDropFo
      int* formats,
      std::set<ui::ClipboardFormatType>* format_types) {
    format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
@@ -1230,7 +1205,7 @@
    return true;
  }
  
-@@ -546,13 +505,23 @@ bool UnpinnedTabContainerView::AreDropTy
+@@ -438,13 +379,23 @@ bool UnpinnedTabContainerView::AreDropTy
  }
  
  bool UnpinnedTabContainerView::CanDrop(const ui::OSExchangeData& data) {
@@ -1257,7 +1232,7 @@
    OnDragUpdated(event);
  }
  
-@@ -587,8 +556,14 @@ int UnpinnedTabContainerView::HandleWork
+@@ -479,8 +430,14 @@ int UnpinnedTabContainerView::HandleWork
        *this, point_in_this,
        spot ? std::optional<int>(spot->tab_index) : std::nullopt,
        spot ? spot->row_position : 0u);
@@ -1274,9 +1249,11 @@
  }
  
  views::View::DropCallback
---- a/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
-+++ b/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
-@@ -75,6 +75,9 @@ class UnpinnedTabContainerView
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+@@ -72,6 +72,9 @@ class UnpinnedTabContainerView
    // True while a sidebar entry is airborne. Public because the event
    // targeter, which is not a member, has to ask.
    bool HasWorkspaceEntryDrag() const;
@@ -1286,7 +1263,7 @@
    // The same drag handling, addressed by a point in this view's coordinates
    // rather than by an event. VerticalTabStripRegionView forwards the dead
    // space *under* Today through here: that space belongs to the region (this
-@@ -125,9 +128,10 @@ class UnpinnedTabContainerView
+@@ -122,9 +125,10 @@ class UnpinnedTabContainerView
      size_t row_position = 0;
    };
    // Midpoint rule -- land before the first row whose centre is below the
@@ -1300,8 +1277,10 @@
    std::optional<EntryDropSpot> EntryDropSpotAt(const gfx::Point& loc);
  
    // helium-fork: the profile's workspace model, or null (off-the-record
+Index: src/chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.cc
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.cc
 @@ -0,0 +1,98 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -1401,8 +1380,10 @@
 +
 +BEGIN_METADATA(WorkspaceFavoritesBandView)
 +END_METADATA
+Index: src/chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h
 @@ -0,0 +1,62 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
@@ -1466,8 +1447,10 @@
 +};
 +
 +#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FAVORITES_BAND_VIEW_H_
---- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
-+++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 @@ -4,6 +4,8 @@
  
  #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
@@ -2313,8 +2296,10 @@
    }
    drag_overlay_->SetPointer(point);
  }
---- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-+++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 @@ -35,6 +35,7 @@ class PrefService;
  class Profile;
  class TabStripModel;
@@ -2504,3 +2489,94 @@
  
    base::WeakPtrFactory<WorkspaceSidebarView> weak_factory_{this};
  };
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
+@@ -8,7 +8,9 @@
+ 
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
++#include "chrome/browser/ui/helium/arc_sidebar_split.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h"
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+ #include "ui/views/controls/scroll_view.h"
+ #include "ui/views/controls/separator.h"
+@@ -146,6 +148,18 @@ views::ProposedLayout TabStripViewLayout
+   const int unpinned_preferred_height =
+       unpinned_tabs_scroll_view->GetPreferredSize(size_bounds).height();
+ 
++  // helium-fork M3.12-r2: the fixed favorites band comes off the top before
++  // anything else -- it never scrolls (user 2026-08-30). Its trailing gap is
++  // inside it, so the pinned scroller starts flush below.
++  // Friend access: the accessor is non-const and this layout is const.
++  WorkspaceFavoritesBandView* favorites_band = tab_strip_view->favorites_band_;
++  int band_height = 0;
++  if (favorites_band) {
++    band_height =
++        favorites_band->GetPreferredSize(pinned_tab_container_size_bounds)
++            .height();
++  }
++
+   // If the height is bounded, calculate the available space for laying out the
+   // pinned and unpinned containers.
+   int remaining_height = 0;
+@@ -155,13 +169,39 @@ views::ProposedLayout TabStripViewLayout
+     // whenever the pinned section is present -- matching where it is placed
+     // below. Keying this off Today's contents as well would under-reserve the
+     // moment Today emptied.
+-    if (pinned_preferred_height != 0) {
++    if (pinned_preferred_height != 0 || band_height != 0) {
+       remaining_height -= kTabsSeparatorVerticalPadding;
+       remaining_height -= tabs_separator->GetPreferredSize().height() +
+                           kTabsSeparatorVerticalPadding;
+     }
+     // Clamp the remaining height to 0 if we have less space.
+     remaining_height = std::max(remaining_height, 0);
++    // The band is capped so a degenerate rail width (one tile per row)
++    // cannot squeeze the pinned floor and Today's reserve out of the strip;
++    // past the cap it clips its tiles rather than scroll -- the never-
++    // scrolls ruling holds, the strip just cannot honor it losslessly there.
++    int min_pinned_floor = 0;
++    if (const auto* pinned_container =
++            tab_strip_view->GetPinnedTabsContainer()) {
++      min_pinned_floor = pinned_container->GetMinimumSize().height();
++    }
++    const int band_cap = std::max(
++        0, remaining_height -
++               helium::SidebarTodayReserve(
++                   unpinned_preferred_height,
++                   GetLayoutConstant(LayoutConstant::kVerticalTabHeight)) -
++               min_pinned_floor);
++    band_height = std::min(band_height, band_cap);
++    remaining_height -= band_height;
++  }
++
++  if (favorites_band) {
++    layouts.child_layouts.emplace_back(
++        favorites_band, band_height > 0,
++        gfx::Rect(region_horizontal_padding, y,
++                  pinned_tab_container_size_bounds.width().value(),
++                  band_height));
++    y += band_height;
+   }
+ 
+   // Place the pinned container.
+@@ -172,8 +212,15 @@ views::ProposedLayout TabStripViewLayout
+             tab_strip_view->GetPinnedTabsContainer()) {
+       min_pinned_height = pinned_container->GetMinimumSize().height();
+     }
+-    pinned_container_height = CalculatePinnedContainerMainAxisSize(
++    // helium-fork M3.12-r1: pinned is fixed-first -- full content height
++    // unless it alone overflows -- and Today keeps a small reserve and
++    // scrolls. Replaces upstream's half-split (CalculatePinnedContainerMain-
++    // AxisSize), which clamped the pinned viewport at remaining/2 and
++    // scrolled the favorites off the top whenever Today was tall
++    // (user 2026-08-30).
++    pinned_container_height = helium::SidebarPinnedViewportHeight(
+         pinned_preferred_height, unpinned_preferred_height, remaining_height,
++        GetLayoutConstant(LayoutConstant::kVerticalTabHeight),
+         min_pinned_height);
+     remaining_height -= pinned_container_height;
+   }

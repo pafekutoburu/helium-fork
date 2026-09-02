@@ -66,7 +66,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
-@@ -8,6 +8,7 @@
+@@ -8,12 +8,14 @@
  #include "build/build_config.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
@@ -74,15 +74,14 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
  #include "chrome/browser/ui/find_bar/find_bar.h"
  #include "chrome/browser/ui/find_bar/find_bar_controller.h"
  #include "chrome/browser/ui/tabs/features.h"
-@@ -15,6 +16,7 @@
- #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
  #include "chrome/browser/ui/views/frame/browser_frame_view.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/frame/top_container_view.h"
  #include "chrome/browser/ui/views/frame/browser_widget.h"
  #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
- #include "chrome/browser/ui/views/tabs/projects/projects_panel_utils.h"
-@@ -22,6 +24,9 @@
+ #include "chrome/browser/ui/views/tabs/organizer/organizer_panel_utils.h"
+@@ -21,6 +23,9 @@
  #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
  #include "chrome/common/buildflags.h"
  #include "chrome/common/pref_names.h"
@@ -92,7 +91,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
  #include "ui/gfx/geometry/rect.h"
  #include "ui/views/view.h"
  
-@@ -264,6 +269,54 @@ bool BrowserViewLayoutDelegateImpl::IsZe
+@@ -263,6 +268,54 @@ bool BrowserViewLayoutDelegateImpl::IsZe
    return browser_view_->IsZenModeSideChromePinned();
  }
  
@@ -163,15 +162,15 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -36,6 +36,7 @@
+@@ -33,6 +33,7 @@
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl.h"
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
- #include "chrome/browser/ui/views/frame/main_background_region_view.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view.h"
 +#include "chrome/browser/ui/views/frame/top_container_view.h"
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
- #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
- #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
-@@ -1808,6 +1809,62 @@ void BrowserViewTabbedLayoutImpl::Config
+ #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_background_blur_backdrop.h"
+@@ -1818,6 +1819,62 @@ void BrowserViewTabbedLayoutImpl::Config
      background->SetVisible(true);
    }
  
@@ -248,7 +247,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  #include "chrome/browser/ui/browser_element_identifiers.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
-@@ -13,6 +16,15 @@
+@@ -13,11 +16,69 @@
  #include "chrome/browser/ui/views/frame/custom_corners_background.h"
  #include "chrome/browser/ui/views/frame/themed_background.h"
  #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -262,9 +261,10 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
 +#include "third_party/blink/public/common/widget/constants.h"
 +#include "third_party/skia/include/core/SkBitmap.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
- #include "ui/color/color_id.h"
- #include "ui/color/color_variant.h"
-@@ -22,6 +34,52 @@
++// helium-fork: SetArcCardClipEnabled talks to the layer; 152 dropped this
++// include from upstream's list.
++#include "ui/compositor/layer.h"
+ #include "ui/gfx/canvas.h"
  #include "ui/views/paint_info.h"
  #include "ui/views/view_class_properties.h"
  
@@ -317,7 +317,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  TopContainerView::TopContainerView(BrowserView* browser_view)
      : browser_view_(browser_view) {
    SetProperty(views::kElementIdentifierKey, kTopContainerElementId);
-@@ -34,7 +92,27 @@ TopContainerView::TopContainerView(Brows
+@@ -30,7 +91,27 @@ TopContainerView::TopContainerView(Brows
    SetBackground(std::move(background));
  }
  
@@ -346,7 +346,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  
  bool TopContainerView::IsPositionInWindowCaption(
      const gfx::Point& test_point) const {
-@@ -108,5 +186,268 @@ void TopContainerView::ChildPreferredSiz
+@@ -106,5 +187,268 @@ void TopContainerView::ChildPreferredSiz
    PreferredSizeChanged();
  }
  
@@ -792,7 +792,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -2982,6 +2982,15 @@ void BrowserView::OnActiveTabChanged(con
+@@ -2985,6 +2985,15 @@ void BrowserView::OnActiveTabChanged(con
                                       int reason) {
    DCHECK(new_contents);
    TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");
@@ -812,7 +812,7 @@ Index: src/chrome/browser/ui/views/frame/multi_contents_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/multi_contents_view.cc
 +++ src/chrome/browser/ui/views/frame/multi_contents_view.cc
-@@ -957,7 +957,20 @@ void MultiContentsView::UpdateContentsBo
+@@ -968,7 +968,20 @@ void MultiContentsView::UpdateContentsBo
          use_system_top_left_radius && is_first_view,
          use_system_top_right_radius && is_last_view,
          use_system_bottom_left_radius && is_first_view,
@@ -838,7 +838,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/contents_container_view.cc
 +++ src/chrome/browser/ui/views/frame/contents_container_view.cc
-@@ -35,6 +35,7 @@
+@@ -33,6 +33,7 @@
  #include "chrome/browser/ui/views/new_tab_footer/footer_web_view.h"
  #include "chrome/common/chrome_features.h"
  #include "components/search/ntp_features.h"
@@ -846,7 +846,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
  #include "content/public/browser/web_contents.h"
  #include "ui/accessibility/accessibility_features.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
-@@ -203,7 +204,9 @@ void ContentsContainerView::UpdateBorder
+@@ -200,7 +201,9 @@ void ContentsContainerView::UpdateBorder
                                                     bool round_top_left,
                                                     bool round_top_right,
                                                     bool round_bottom_left,
@@ -857,7 +857,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
    const bool split_changed = is_in_split != is_in_split_;
    const bool rounded_contents_changed =
        should_round_contents != should_round_contents_;
-@@ -211,7 +214,9 @@ void ContentsContainerView::UpdateBorder
+@@ -208,7 +211,9 @@ void ContentsContainerView::UpdateBorder
        round_top_left_window_corner_ != round_top_left ||
        round_top_right_window_corner_ != round_top_right ||
        round_bottom_left_window_corner_ != round_bottom_left ||
@@ -868,7 +868,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
    is_in_split_ = is_in_split;
    should_round_contents_ = should_round_contents;
    round_top_left_window_corner_ = round_top_left;
-@@ -243,10 +248,14 @@ void ContentsContainerView::UpdateBorder
+@@ -240,10 +245,14 @@ void ContentsContainerView::UpdateBorder
      }
  
      if (is_in_split) {
@@ -884,7 +884,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
        container_outline_->SetVisible(false);
      }
      if (capture_contents_border_view_) {
-@@ -346,10 +355,20 @@ void ContentsContainerView::UpdateBorder
+@@ -343,10 +352,20 @@ void ContentsContainerView::UpdateBorder
        round_bottom_left_window_corner_ ? frame_radius : generic_radius;
    const int lower_right_radius =
        round_bottom_right_window_corner_ ? frame_radius : generic_radius;
@@ -907,7 +907,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
  
    const gfx::RoundedCornersF container_rounded_corners(
        upper_left_radius, upper_right_radius, lower_right_radius,
-@@ -490,6 +509,30 @@ void ContentsContainerView::SetTargetCon
+@@ -487,6 +506,30 @@ void ContentsContainerView::SetTargetCon
  
    target_content_bounds_ = target_content_bounds;
    InvalidateLayout(/*avoid_propagate_during_layout=*/true);

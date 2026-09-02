@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -1937,6 +1937,11 @@ void BrowserView::UpdateZenModeState() {
+@@ -1953,6 +1953,11 @@ void BrowserView::UpdateZenModeState() {
  
      if (IsZenModeTopChromePinned()) {
        zen_top_chrome_animation_.Reset(1);
@@ -14,7 +14,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      }
  
      UpdateZenModeReveal(/*reveal_top=*/false, /*reveal_side=*/false);
-@@ -2123,7 +2128,17 @@ void BrowserView::UpdateZenModeReveal(bo
+@@ -2139,7 +2144,17 @@ void BrowserView::UpdateZenModeReveal(bo
            toolbar_->AbortToolbarContainerAnimationsForZenReveal();
          }
        }
@@ -32,7 +32,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
        zen_top_chrome_animation_.Hide();
      }
    }
-@@ -2139,6 +2154,9 @@ void BrowserView::UpdateZenModeReveal(bo
+@@ -2155,6 +2170,9 @@ void BrowserView::UpdateZenModeReveal(bo
  
  void BrowserView::RevealZenModeTopChromeImmediately() {
    zen_top_chrome_animation_.Reset(1);
@@ -42,7 +42,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    if (vertical_tab_strip_region_view_) {
      vertical_tab_strip_region_view_->UpdateInteriorMargin();
    }
-@@ -2637,6 +2655,29 @@ void BrowserView::ArmContentsResizeHold(
+@@ -2653,6 +2671,29 @@ void BrowserView::ArmContentsResizeHold(
    }
  }
  
@@ -72,7 +72,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::DisarmContentsResizeHold() {
    // Clears exactly what was armed; a tab switched away mid-hold is still
    // reachable through its WebContents.
-@@ -7332,6 +7373,12 @@ void BrowserView::AnimationProgressed(co
+@@ -7411,6 +7452,12 @@ void BrowserView::AnimationProgressed(co
  
  void BrowserView::AnimationEnded(const gfx::Animation* animation) {
    AnimationProgressed(animation);
@@ -89,7 +89,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -1018,6 +1018,10 @@ class BrowserView : public BrowserWindow
+@@ -1013,6 +1013,10 @@ class BrowserView : public BrowserWindow
    // so the toggle's relayout reaches the glass as one atomic activation.
    void ArmContentsResizeHold();
    void DisarmContentsResizeHold();
@@ -100,7 +100,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    bool IsPointInZenTopTrigger(const gfx::Point& point) const;
    bool IsPointInZenSideTrigger(const gfx::Point& point) const;
    bool IsPointInZenTopChromeBounds(const gfx::Point& point) const;
-@@ -1575,6 +1579,9 @@ class BrowserView : public BrowserWindow
+@@ -1574,6 +1578,9 @@ class BrowserView : public BrowserWindow
    SidebarTogglePhase sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
    // WebContents whose views currently carry the forced viz deadline.
    std::vector<base::WeakPtr<content::WebContents>> sidebar_hold_web_contents_;
@@ -127,7 +127,7 @@ Index: src/content/browser/renderer_host/render_widget_host_view_mac.mm
 ===================================================================
 --- src.orig/content/browser/renderer_host/render_widget_host_view_mac.mm
 +++ src/content/browser/renderer_host/render_widget_host_view_mac.mm
-@@ -1135,6 +1135,14 @@ void RenderWidgetHostViewMac::SetForceSp
+@@ -1203,6 +1203,14 @@ void RenderWidgetHostViewMac::SetForceSp
    }
  }
  
@@ -146,16 +146,16 @@ Index: src/content/browser/renderer_host/delegated_frame_host.cc
 ===================================================================
 --- src.orig/content/browser/renderer_host/delegated_frame_host.cc
 +++ src/content/browser/renderer_host/delegated_frame_host.cc
-@@ -376,7 +376,7 @@ void DelegatedFrameHost::EmbedSurface(
-     current_frame_size_in_dip_ = surface_dip_size_;
+@@ -370,7 +370,7 @@ void DelegatedFrameHost::EmbedSurface(
      client_->DelegatedFrameHostGetLayer()->SetShowSurface(
-         new_primary_surface_id, current_frame_size_in_dip_, GetGutterColor(),
--        deadline_policy, false /* stretch_content_to_fill_bounds */);
-+        deadline_policy, stretch_content_during_resize_);
+         new_primary_surface_id, current_frame_size_in_dip_,
+         SkColor4f::FromColor(GetGutterColor()), deadline_policy,
+-        false /* stretch_content_to_fill_bounds */);
++        stretch_content_during_resize_);
      if (compositor_)
        compositor_->OnChildResizing();
    }
-@@ -387,6 +387,12 @@ void DelegatedFrameHost::SetForceSpecifi
+@@ -381,6 +381,12 @@ void DelegatedFrameHost::SetForceSpecifi
    force_specified_deadline_ = deadline_in_frames;
  }
  
@@ -172,7 +172,7 @@ Index: src/content/browser/renderer_host/delegated_frame_host.h
 ===================================================================
 --- src.orig/content/browser/renderer_host/delegated_frame_host.h
 +++ src/content/browser/renderer_host/delegated_frame_host.h
-@@ -136,6 +136,8 @@ class CONTENT_EXPORT DelegatedFrameHost
+@@ -137,6 +137,8 @@ class CONTENT_EXPORT DelegatedFrameHost
                      const gfx::Size& dip_size,
                      cc::DeadlinePolicy deadline_policy);
    void SetForceSpecifiedDeadline(std::optional<uint32_t> deadline_in_frames);
@@ -181,7 +181,7 @@ Index: src/content/browser/renderer_host/delegated_frame_host.h
    bool HasSavedFrame() const;
    void AttachToCompositor(ui::Compositor* compositor);
    void DetachFromCompositor();
-@@ -303,6 +305,8 @@ class CONTENT_EXPORT DelegatedFrameHost
+@@ -304,6 +306,8 @@ class CONTENT_EXPORT DelegatedFrameHost
    FrameEvictionState frame_eviction_state_ = FrameEvictionState::kNotStarted;
  
    std::optional<uint32_t> force_specified_deadline_ = std::nullopt;

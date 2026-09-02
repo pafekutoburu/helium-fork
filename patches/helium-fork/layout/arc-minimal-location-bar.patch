@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -66,6 +66,7 @@
+@@ -57,6 +57,7 @@
  #include "chrome/browser/ui/tabs/public/tab_features.h"
  #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -10,7 +10,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  #include "chrome/browser/ui/ui_features.h"
  #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
  #include "chrome/browser/ui/views/chrome_layout_provider.h"
-@@ -101,6 +102,8 @@
+@@ -91,6 +92,8 @@
  #include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
  #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
  #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
@@ -19,7 +19,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
  #include "chrome/browser/ui/views/user_education/browser_help_bubble.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
-@@ -324,6 +327,19 @@ void LocationBarView::Init() {
+@@ -301,6 +304,19 @@ void LocationBarView::Init() {
    // not prepared for that.
    DCHECK(GetWidget());
  
@@ -39,7 +39,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    // Note that children with layers are *not* clipped, because focus rings have
    // to draw outside the parent's bounds.
    SetPaintToLayer();
-@@ -597,6 +613,16 @@ bool LocationBarView::IsInitialized() co
+@@ -563,6 +579,16 @@ bool LocationBarView::IsInitialized() co
  }
  
  int LocationBarView::GetBorderRadius() const {
@@ -56,7 +56,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    return ComputeBorderRadius(size());
  }
  
-@@ -613,8 +639,9 @@ std::unique_ptr<views::Background> Locat
+@@ -579,8 +605,9 @@ std::unique_ptr<views::Background> Locat
      gfx::Size size,
      SkBlendMode blend_mode,
      bool antialias,
@@ -68,7 +68,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    auto painter =
        stroke_color == SK_ColorTRANSPARENT
            ? views::Painter::CreateSolidRoundRectPainter(
-@@ -789,6 +816,37 @@ gfx::Size LocationBarView::CalculatePref
+@@ -755,6 +782,37 @@ gfx::Size LocationBarView::CalculatePref
    }
  
    const int min_width = GetMinimumSize().width();
@@ -106,7 +106,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    if (base::FeatureList::IsEnabled(features::kOmniboxResizingPrioritization)) {
      // If space is bounded, take all available space down to the min width.
      if (available_size.width().is_bounded()) {
-@@ -912,6 +970,25 @@ void LocationBarView::Layout(PassKey) {
+@@ -889,6 +947,25 @@ void LocationBarView::Layout(PassKey) {
      }
    }
  
@@ -132,7 +132,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    if (ShouldShowKeywordBubble()) {
      location_icon_view_->SetVisible(false);
      leading_decorations.AddDecoration(
-@@ -960,6 +1037,10 @@ void LocationBarView::Layout(PassKey) {
+@@ -932,6 +1009,10 @@ void LocationBarView::Layout(PassKey) {
        (info.num_legacy_page_actions_shown == 0) && !all_page_actions_migrated
            ? 4
            : trailing_decorations_edge_padding;
@@ -143,7 +143,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    add_trailing_decoration(page_action_icon_container_,
                            /*intra_item_padding=*/0,
                            /*edge_padding=*/
-@@ -1269,6 +1350,128 @@ SkAlpha LocationBarView::GetIconLabelBub
+@@ -1264,6 +1345,128 @@ SkAlpha LocationBarView::GetIconLabelBub
    return 0xFF;
  }
  
@@ -272,7 +272,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  std::optional<SkColor> LocationBarView::GetBandTint() const {
    // helium-fork: in the Arc shell the band is painted in the page's color, and
    // the field must derive its own colors from that rather than trust theme
-@@ -1538,7 +1741,13 @@ int LocationBarView::GetMinimumTrailingW
+@@ -1555,7 +1758,13 @@ int LocationBarView::GetMinimumTrailingW
  }
  
  gfx::Rect LocationBarView::GetLocalBoundsWithoutEndcaps() const {
@@ -287,7 +287,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    gfx::Rect bounds_without_endcaps(GetLocalBounds());
    bounds_without_endcaps.Inset(gfx::Insets::VH(0, border_radius));
    return bounds_without_endcaps;
-@@ -1562,6 +1771,12 @@ void LocationBarView::RefreshBackground(
+@@ -1579,6 +1788,12 @@ void LocationBarView::RefreshBackground(
        band_tint ? GetBandFieldColor(*band_tint, /*hovered=*/true)
                  : color_provider->GetColor(kColorLocationBarBackgroundHovered);
  
@@ -300,7 +300,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
    if (is_caret_visible) {
      // Match the background color to the popup if the Omnibox is visibly
-@@ -1597,12 +1812,23 @@ void LocationBarView::RefreshBackground(
+@@ -1614,12 +1829,23 @@ void LocationBarView::RefreshBackground(
      SetBackground(CreateRoundRectBackground(
          background_color_, border_color, size(),
          /*blend_mode=*/SkBlendMode::kSrcOver,
@@ -326,7 +326,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  
    // The divider between indicators and request chips should have the same color
    // as the omnibox.
-@@ -1889,6 +2115,10 @@ void LocationBarView::OnMouseMoved(const
+@@ -1903,6 +2129,10 @@ void LocationBarView::OnMouseMoved(const
    OnOmniboxHovered(true);
  }
  
@@ -337,7 +337,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  void LocationBarView::OnMouseExited(const ui::MouseEvent& event) {
    OnOmniboxHovered(false);
  }
-@@ -2079,6 +2309,12 @@ void LocationBarView::ClearInPopupStateT
+@@ -2093,6 +2323,12 @@ void LocationBarView::ClearInPopupStateT
  void LocationBarView::AnimationProgressed(const gfx::Animation* animation) {
    DCHECK_EQ(animation, &hover_animation_);
    RefreshBackground();
@@ -350,7 +350,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  }
  
  void LocationBarView::AnimationEnded(const gfx::Animation* animation) {
-@@ -2130,6 +2366,10 @@ void LocationBarView::OnOmniboxFocused()
+@@ -2144,6 +2380,10 @@ void LocationBarView::OnOmniboxFocused()
    // the omnibox is intentional, snapping is better than transitioning here.
    hover_animation_.Reset();
    RefreshBackground();
@@ -359,9 +359,9 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +  UpdateArcRevealOpacity();
 +  UpdateArcMinimalDecorations();
  
-   // The AI mode page action icon view should only be visible when the omnibox
+   // The AI mode page action should only be visible when the omnibox
    // is focused, so if there is a change in focus, refresh the icon.
-@@ -2150,6 +2390,9 @@ void LocationBarView::OnOmniboxBlurred()
+@@ -2164,6 +2404,9 @@ void LocationBarView::OnOmniboxBlurred()
      views::FocusRing::Get(this)->Refresh();
    }
    RefreshBackground();
@@ -369,9 +369,9 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +  UpdateArcRevealOpacity();
 +  UpdateArcMinimalDecorations();
  
-   // The AI mode page action icon view should only be visible when the omnibox
+   // The AI mode page action should only be visible when the omnibox
    // is focused, so if there is a change in focus, refresh the icon.
-@@ -2159,6 +2402,15 @@ void LocationBarView::OnOmniboxBlurred()
+@@ -2173,6 +2416,15 @@ void LocationBarView::OnOmniboxBlurred()
  }
  
  void LocationBarView::OnOmniboxHovered(bool is_hovering) {
@@ -387,7 +387,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    if (is_hovering) {
      // Only show the hover animation when omnibox is in unfocused steady state.
      if (!omnibox_view_->HasFocus()) {
-@@ -2167,6 +2419,7 @@ void LocationBarView::OnOmniboxHovered(b
+@@ -2181,6 +2433,7 @@ void LocationBarView::OnOmniboxHovered(b
    } else {
      hover_animation_.Hide();
    }
@@ -399,7 +399,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
-@@ -147,13 +147,16 @@ class LocationBarView
+@@ -162,13 +162,16 @@ class LocationBarView
  
    // Returns a background that paints an (optionally stroked) rounded rect with
    // the given color.
@@ -417,7 +417,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
  
    // Returns the delegate.
    Delegate* delegate() const { return delegate_; }
-@@ -264,6 +267,30 @@ class LocationBarView
+@@ -278,6 +281,30 @@ class LocationBarView
    // helium-fork: the Arc shell's band color when this location bar is sitting
    // on a page-tinted band, nullopt on a plain themed toolbar.
    std::optional<SkColor> GetBandTint() const;
@@ -448,7 +448,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    // The field's own fill on a tinted band -- a quiet wash of the contrasting
    // color rather than a theme color that assumes a toolbar background.
    static SkColor GetBandFieldColor(SkColor tint, bool hovered);
-@@ -443,6 +470,10 @@ class LocationBarView
+@@ -469,6 +496,10 @@ class LocationBarView
    bool OnMouseDragged(const ui::MouseEvent& event) override;
    void OnMouseReleased(const ui::MouseEvent& event) override;
    void OnMouseMoved(const ui::MouseEvent& event) override;
@@ -459,7 +459,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    void OnMouseExited(const ui::MouseEvent& event) override;
    void ShowContextMenu(const gfx::Point& p,
                         ui::mojom::MenuSourceType source_type) override;
-@@ -642,6 +673,15 @@ class LocationBarView
+@@ -667,6 +698,15 @@ class LocationBarView
    // other.
    SkColor last_field_backdrop_ = gfx::kPlaceholderColor;
    bool refreshing_emphasis_ = false;
@@ -479,7 +479,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -525,6 +525,12 @@ void ToolbarView::Init() {
+@@ -516,6 +516,12 @@ void ToolbarView::Init() {
    if (location_bar_view) {
      location_bar_view_ = AddChildView(std::move(location_bar_view));
      location_bar_ = location_bar_view_;
@@ -492,7 +492,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    } else {
      location_bar_ = toolbar_webview_->GetLocationBar();
    }
-@@ -1818,6 +1824,23 @@ void ToolbarView::LayoutCommon() {
+@@ -1854,6 +1860,23 @@ void ToolbarView::LayoutCommon() {
    gfx::Insets interior_margin =
        GetLayoutInsets(LayoutInset::TOOLBAR_INTERIOR_MARGIN);
  
@@ -516,7 +516,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    auto* vts_controller = tabs::VerticalTabStripStateController::From(browser_);
    if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks) &&
        (contextual_tasks::kShowEntryPoint.Get() ==
-@@ -1923,8 +1946,14 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -1959,8 +1982,14 @@ void ToolbarView::UpdateToolbarLayout()
    const auto flex_preferred =
        views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
                                 views::MaximumFlexSizeRule::kPreferred);
@@ -532,7 +532,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    // helium-fork: in the Arc shell's hidden address bar mode this whole toolbar
    // lives inside the ~200pt sidebar, where its natural minimum width (measured
    // 287pt) does not fit. The address is the point of the row, so it is pinned
-@@ -1939,9 +1968,16 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -1975,9 +2004,16 @@ void ToolbarView::UpdateToolbarLayout()
        : features::HeliumUseCompactLocationWidth()
            ? views::MinimumFlexSizeRule::kScaleToMinimum
            : views::MinimumFlexSizeRule::kPreferred;
@@ -551,7 +551,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
            .WithOrder(kLocationBarFlexOrder);
  
    const bool is_compact_layout = IsCompactLayout();
-@@ -1997,6 +2033,26 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -2033,6 +2069,26 @@ void ToolbarView::UpdateToolbarLayout()
                                    location_bar_flex_rule);
    }
  
@@ -578,7 +578,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    // Pinned actions (including downloads) and extensions
    // should not shrink in compact layout.
    if (pinned_toolbar_actions_container_) {
-@@ -2088,6 +2144,14 @@ void ToolbarView::SetBandTint(std::optio
+@@ -2124,6 +2180,14 @@ void ToolbarView::SetBandTint(std::optio
    }
  }
  
@@ -597,7 +597,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -214,6 +214,9 @@ class ToolbarView : public views::Access
+@@ -219,6 +219,9 @@ class ToolbarView : public views::Access
    // sidebar instead of being the top chrome band, which is far narrower than
    // the location bar's minimum width. See LayoutCommon().
    void SetArcSidebarHosted(bool hosted);
@@ -607,7 +607,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
  
    ToolbarButton* vertical_tabs_collapse_button() const {
      return vertical_tabs_collapse_button_;
-@@ -455,6 +458,11 @@ class ToolbarView : public views::Access
+@@ -459,6 +462,11 @@ class ToolbarView : public views::Access
    raw_ptr<CustomTabBarView> custom_tab_bar_ = nullptr;
    raw_ptr<LocationBarView> location_bar_view_ = nullptr;
  

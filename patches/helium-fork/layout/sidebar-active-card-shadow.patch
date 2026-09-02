@@ -2,15 +2,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -4124,6 +4124,8 @@ static_library("ui") {
+@@ -4049,6 +4049,8 @@ static_library("ui") {
+       "views/frame/themed_background.h",
        "views/frame/top_container_view.cc",
        "views/frame/top_container_view.h",
-       "views/frame/top_controls_slide_controller.h",
 +      "views/frame/helium_card_shadow_view.cc",
 +      "views/frame/helium_card_shadow_view.h",
+       "views/frame/vertical_tab_strip_background_blur_backdrop.cc",
+       "views/frame/vertical_tab_strip_background_blur_backdrop.h",
        "views/frame/vertical_tab_strip_region_view.cc",
-       "views/frame/vertical_tab_strip_region_view.h",
-       "views/tabs/vertical/helium_media_strip_controller.cc",
 Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_service.cc
@@ -378,13 +378,13 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
+ #include "chrome/browser/ui/tabs/tab_style.h"
  #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
  #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
- #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
-@@ -18,14 +22,21 @@
- #include "chrome/browser/ui/views/tabs/common/tab_group_view.h"
+@@ -20,13 +24,20 @@
  #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
  #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_data.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
 +#include "ui/base/dragdrop/drag_drop_types.h"
@@ -394,7 +394,6 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "ui/gfx/geometry/rect.h"
 +#include "ui/gfx/geometry/rect_conversions.h"
  #include "ui/views/controls/scroll_view.h"
- #include "ui/views/layout/delegating_layout_manager.h"
  #include "ui/views/layout/layout_types.h"
  #include "ui/views/layout/proposed_layout.h"
  #include "ui/views/view.h"
@@ -403,7 +402,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "ui/views/view_targeter.h"
  #include "ui/views/view_targeter_delegate.h"
  #include "ui/views/view_utils.h"
-@@ -68,11 +79,20 @@ static_assert(kMinHeaderHeightPctForGrou
+@@ -54,11 +65,20 @@ static_assert(kMinHeaderHeightPctForGrou
  
  class UnpinnedTabContainerViewTargeter : public views::ViewTargeterDelegate {
   public:
@@ -425,7 +424,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
      gfx::Rect content_bounds;
      for (const views::View* child : view_->children()) {
        if (child->GetVisible()) {
-@@ -83,11 +103,102 @@ class UnpinnedTabContainerViewTargeter :
+@@ -69,11 +89,102 @@ class UnpinnedTabContainerViewTargeter :
    }
  
   private:
@@ -528,8 +527,8 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +
  UnpinnedTabContainerView::UnpinnedTabContainerView(
      TabCollectionNode* collection_node)
-     : DraggedTabsContainer(static_cast<views::View&>(*this),
-@@ -105,6 +216,10 @@ UnpinnedTabContainerView::UnpinnedTabCon
+     : DraggedTabsContainer(
+@@ -101,6 +212,10 @@ UnpinnedTabContainerView::UnpinnedTabCon
    SetEventTargeter(std::make_unique<views::ViewTargeter>(
        std::make_unique<UnpinnedTabContainerViewTargeter>(this)));
  
@@ -540,7 +539,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
    collection_node->set_remove_child_from_node(base::BindRepeating(
        &TabCollectionAnimatingLayoutManager::AnimateAndDestroyChildView,
        base::Unretained(&layout_manager_.get())));
-@@ -115,6 +230,9 @@ UnpinnedTabContainerView::UnpinnedTabCon
+@@ -111,6 +226,9 @@ UnpinnedTabContainerView::UnpinnedTabCon
    node_destroyed_subscription_ = collection_node_->RegisterWillDestroyCallback(
        base::BindOnce(&UnpinnedTabContainerView::ResetCollectionNode,
                       base::Unretained(this)));
@@ -550,54 +549,17 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  }
  
  UnpinnedTabContainerView::~UnpinnedTabContainerView() = default;
-@@ -140,6 +258,24 @@ views::ProposedLayout UnpinnedTabContain
-   const helium_workspace::WorkspaceService* workspace_service =
-       GetWorkspaceService();
- 
-+  // helium-fork M3.11 轮3: while a sidebar entry hovers Today, the rows
-+  // leave it one plain empty slot -- no line, no tint (`Dia:` measured
-+  // 2026-08-24). The gap is one row pitch and its position only changes when
-+  // the plan does, never per pointer frame, so it cannot feed the container
-+  // animation the way a per-frame host_size would (pitfalls: drag geometry
-+  // must stay monotonic).
-+  // |constructed_| first, and the && matters: this runs once from inside the
-+  // member-initialiser list, before |workspace_drag_host_| exists at all (see
-+  // the header). There cannot be a drag in flight then, so "no slot" is also
-+  // the correct answer.
-+  const std::optional<size_t> drop_slot_row =
-+      (constructed_ && workspace_drag_host_)
-+          ? workspace_drag_host_->TodayDropSlotRow()
-+          : std::nullopt;
-+  const int drop_slot_height =
-+      GetLayoutConstant(LayoutConstant::kVerticalTabHeight) +
-+      kTabVerticalPadding;
-+
-   // Layout children in order. Children will have their preferred height and
-   // fill available width.
-   int laid_out_count = 0;
-@@ -148,6 +284,10 @@ views::ProposedLayout UnpinnedTabContain
-       layouts.child_layouts.emplace_back(child, false, gfx::Rect());
-       continue;
+@@ -224,12 +342,164 @@ UnpinnedTabContainerView::GetLinkDropInd
      }
-+    if (drop_slot_row &&
-+        *drop_slot_row == static_cast<size_t>(laid_out_count)) {
-+      height += drop_slot_height;
-+    }
-     // The leading inset should not be applied for tab groups when the tab strip
-     // is collapsed since the group color line is drawn in that space.
-     int x =
-@@ -191,6 +331,10 @@ views::ProposedLayout UnpinnedTabContain
-   if (laid_out_count > 0) {
-     height -= kTabVerticalPadding;
+     return GetDragHandler().GetLinkDropIndexForNode(*child_node, hint);
    }
 +  // The slot can also sit past the last row (dropping at the end).
 +  if (drop_slot_row && *drop_slot_row >= static_cast<size_t>(laid_out_count)) {
 +    height += drop_slot_height + (laid_out_count > 0 ? kTabVerticalPadding : 0);
 +  }
  
-   if (IsHandlingDrag()) {
-     dragged_view_bottom = GetDraggingViewsBounds().bottom();
-@@ -316,6 +460,154 @@ UnpinnedTabContainerView::GetLinkDropInd
+   // Fallback to the end of the container.
+   return GetDragHandler().GetLinkDropIndexForNode(*collection_node_,
                                                    std::nullopt);
  }
  
@@ -752,7 +714,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  bool UnpinnedTabContainerView::IsDragging() const {
    if (!collection_node_ || !collection_node_->GetController()) {
      return false;
-@@ -342,6 +634,99 @@ bool UnpinnedTabContainerView::ShouldSna
+@@ -256,6 +526,99 @@ bool UnpinnedTabContainerView::ShouldSna
    return views::IsViewClass<SplitTabView>(&child_view);
  }
  
@@ -856,20 +818,22 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 +++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
-@@ -5,6 +5,9 @@
+@@ -5,16 +5,25 @@
  #ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_UNPINNED_TAB_CONTAINER_VIEW_H_
  #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_UNPINNED_TAB_CONTAINER_VIEW_H_
  
 +#include <memory>
 +#include <optional>
 +
++#include <memory>
++#include <optional>
++
  #include "base/callback_list.h"
  #include "base/memory/raw_ptr.h"
  #include "chrome/browser/ui/views/frame/browser_root_view.h"
-@@ -12,10 +15,13 @@
+ #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
  #include "ui/base/metadata/metadata_header_macros.h"
- #include "ui/views/layout/delegating_layout_manager.h"
 +#include "ui/views/controls/scroll_view.h"
  #include "ui/views/view.h"
  
@@ -877,10 +841,10 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  class TabCollectionNode;
  class TabGroupView;
 +class WorkspaceSidebarView;
+ class UnpinnedTabContainerViewLayout;
  
  namespace helium_workspace {
- class WorkspaceService;
-@@ -37,6 +43,10 @@ class UnpinnedTabContainerView
+@@ -38,6 +47,47 @@ class UnpinnedTabContainerView
    UnpinnedTabContainerView& operator=(const UnpinnedTabContainerView&) = delete;
    ~UnpinnedTabContainerView() override;
  
@@ -888,13 +852,6 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 +  void AddedToWidget() override;
 +  void RemovedFromWidget() override;
 +
-   // LayoutDelegate:
-   views::ProposedLayout CalculateProposedLayout(
-       const views::SizeBounds& size_bounds) const override;
-@@ -44,6 +54,43 @@ class UnpinnedTabContainerView
-   // views::View:
-   gfx::Size GetMinimumSize() const override;
- 
 +  // helium-fork M3.11 轮3: the second drop target of the sidebar's entry
 +  // drag. Everything except the hit test is delegated -- the session, the
 +  // floating card and the commit all live in WorkspaceSidebarView, because
@@ -935,7 +892,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
    // TabCollectionAnimatingLayoutManager::Delegate:
    bool IsDragging() const override;
    bool IsViewDragging(const views::View& child_view) const override;
-@@ -58,7 +105,31 @@ class UnpinnedTabContainerView
+@@ -52,7 +102,31 @@ class UnpinnedTabContainerView
    std::optional<BrowserRootView::DropIndex> GetLinkDropIndex(
        const gfx::Point& point_in_local_coords);
  
@@ -967,7 +924,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
    // helium-fork: the profile's workspace model, or null (off-the-record
    // windows, or before this view has a widget). Tabs bound to an entry are
    // drawn by the sidebar and skipped here.
-@@ -80,10 +151,46 @@ class UnpinnedTabContainerView
+@@ -79,10 +153,46 @@ class UnpinnedTabContainerView
  
    void ResetCollectionNode();
  
@@ -1014,3 +971,59 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  };
  
  #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_UNPINNED_TAB_CONTAINER_VIEW_H_
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
+@@ -14,6 +14,7 @@
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_utils.h"
+ #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ #include "components/tabs/public/tab_group.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/views/layout/proposed_layout.h"
+@@ -174,12 +175,35 @@ views::ProposedLayout UnpinnedTabContain
+   const helium_workspace::WorkspaceService* workspace_service =
+       tab_container_view->GetWorkspaceService();
+ 
++  // helium-fork M3.11 轮3: while a sidebar entry hovers Today, the rows
++  // leave it one plain empty slot -- no line, no tint (`Dia:` measured
++  // 2026-08-24). The gap is one row pitch and its position only changes when
++  // the plan does, never per pointer frame, so it cannot feed the container
++  // animation the way a per-frame host_size would (pitfalls: drag geometry
++  // must stay monotonic).
++  // |constructed_| first, and the && matters: the view's animating layout
++  // manager is installed from inside its member-initialiser list, before
++  // |workspace_drag_host_| exists at all (see the header). There cannot be a
++  // drag in flight then, so "no slot" is also the correct answer.
++  const std::optional<size_t> drop_slot_row =
++      (tab_container_view->constructed_ &&
++       tab_container_view->workspace_drag_host_)
++          ? tab_container_view->workspace_drag_host_->TodayDropSlotRow()
++          : std::nullopt;
++  const int drop_slot_height =
++      GetLayoutConstant(LayoutConstant::kVerticalTabHeight) +
++      kTabVerticalPadding;
++  size_t laid_out_row = 0;
++
+   for (auto* child : children) {
+     if (UnpinnedTabContainerView::IsWorkspaceEntryTab(workspace_service,
+                                                       child)) {
+       layouts.child_layouts.emplace_back(child, false, gfx::Rect());
+       continue;
+     }
++    if (drop_slot_row && *drop_slot_row == laid_out_row) {
++      height += drop_slot_height;
++    }
+     int x =
+         views::AsViewClass<TabGroupView>(child) &&
+                 collapse_state != tabs::VerticalTabStripCollapseState::kExpanded
+@@ -221,6 +245,7 @@ views::ProposedLayout UnpinnedTabContain
+     layouts.child_layouts.emplace_back(child, true, bounds);
+     height += bounds.height() + kTabVerticalPadding;
+     width = std::max(width, bounds.width() + bounds.x());
++    ++laid_out_row;
+   }
+ 
+   if (height > 0) {

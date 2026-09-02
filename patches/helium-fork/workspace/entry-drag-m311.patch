@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -393,6 +393,7 @@ static_library("ui") {
+@@ -421,6 +421,7 @@ static_library("ui") {
      "helium/helium_tab_switcher_controller.h",
      "helium_workspace/workspace_entry.cc",
      "helium_workspace/workspace_entry.h",
@@ -10,7 +10,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium_workspace/workspace_favicon_image.h",
      "helium_workspace/workspace_grid_math.h",
      "helium_workspace/workspace_omnibox_match.h",
-@@ -6068,6 +6069,8 @@ test("helium_workspace_unittests") {
+@@ -5854,6 +5855,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_entry.cc",
      "helium_workspace/workspace_entry.h",
      "helium_workspace/workspace_entry_unittest.cc",
@@ -655,15 +655,15 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -12,6 +12,7 @@
- #include "base/check_is_test.h"
- #include "base/containers/adapters.h"
+@@ -9,6 +9,7 @@
+ 
+ #include "base/callback_list.h"
  #include "base/functional/bind.h"
 +#include "base/trace_event/trace_event.h"
  #include "base/i18n/number_formatting.h"
  #include "base/i18n/rtl.h"
  #include "base/metrics/histogram_functions.h"
-@@ -44,6 +45,9 @@
+@@ -40,6 +41,9 @@
  #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
  #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
  #include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
@@ -673,7 +673,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
  #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
-@@ -287,6 +291,17 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -280,6 +284,17 @@ VerticalTabStripRegionView::VerticalTabS
    floating_card_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
    floating_card_shadow_->SetShadowSpec(helium::kFloatingSidebarShadowSpec);
    floating_card_shadow_->SetVisible(false);
@@ -691,7 +691,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    pinned_row_shadow_ =
        AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
    pinned_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
-@@ -441,7 +456,8 @@ bool VerticalTabStripRegionView::IsPosit
+@@ -434,7 +449,8 @@ bool VerticalTabStripRegionView::IsPosit
      // treating them as UI here would eat the window-drag area around every
      // floating card.
      if (views::IsViewClass<HeliumCardShadowView>(child) ||
@@ -701,8 +701,8 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
        continue;
      }
  
-@@ -588,6 +604,124 @@ void VerticalTabStripRegionView::OnWidge
-   }
+@@ -567,6 +583,124 @@ void VerticalTabStripRegionView::Removed
+   BaseTabStripRegionView::RemovedFromWidget();
  }
  
 +// ---- helium-fork M3.11 轮3: the dead space under Today ----
@@ -715,14 +715,14 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +
 +UnpinnedTabContainerView* VerticalTabStripRegionView::TodayDropContainer()
 +    const {
-+  return tab_strip_view_ ? tab_strip_view_->GetUnpinnedTabsContainer()
-+                         : nullptr;
++  return tab_strip_view() ? tab_strip_view()->GetUnpinnedTabsContainer()
++                          : nullptr;
 +}
 +
 +WorkspaceSidebarView* VerticalTabStripRegionView::WorkspaceDragSidebar()
 +    const {
 +  PinnedTabContainerView* const pinned =
-+      tab_strip_view_ ? tab_strip_view_->GetPinnedTabsContainer() : nullptr;
++      tab_strip_view() ? tab_strip_view()->GetPinnedTabsContainer() : nullptr;
 +  return pinned ? pinned->workspace_view() : nullptr;
 +}
 +
@@ -779,7 +779,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +  }
 +  UnpinnedTabContainerView* const today = TodayDropContainer();
 +  PinnedTabContainerView* const pinned =
-+      tab_strip_view_ ? tab_strip_view_->GetPinnedTabsContainer() : nullptr;
++      tab_strip_view() ? tab_strip_view()->GetPinnedTabsContainer() : nullptr;
 +  WorkspaceSidebarView* const sidebar =
 +      pinned ? pinned->workspace_view() : nullptr;
 +  if (!today || !sidebar) {
@@ -826,7 +826,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  void VerticalTabStripRegionView::Layout(PassKey) {
    LayoutSuperclass<views::AccessiblePaneView>(this);
  
-@@ -617,6 +751,15 @@ void VerticalTabStripRegionView::Layout(
+@@ -596,6 +730,15 @@ void VerticalTabStripRegionView::Layout(
        if (WorkspaceSidebarView* const sidebar =
                pinned_container->workspace_view()) {
          sidebar->SetCardShadowFrame(pinned_row_shadow_);
@@ -835,7 +835,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +        // other. This is the only view that owns both, and the injection is
 +        // as lazy as the shadows' above for the same reason.
 +        if (UnpinnedTabContainerView* const unpinned_container =
-+                tab_strip_view_->GetUnpinnedTabsContainer()) {
++                tab_strip_view()->GetUnpinnedTabsContainer()) {
 +          sidebar->SetTodayContainer(unpinned_container);
 +          unpinned_container->SetWorkspaceDragHost(sidebar);
 +        }
@@ -846,7 +846,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -40,6 +40,7 @@ class HeliumMediaStripExpandedView;
+@@ -39,6 +39,7 @@ class HeliumMediaStripExpandedView;
  class HeliumMediaStripView;
  class VerticalTabStripBottomContainer;
  class HeliumCardShadowView;
@@ -854,7 +854,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class ShadowFrameView;
  
  namespace tabs {
-@@ -55,6 +56,9 @@ class FlexLayout;
+@@ -54,6 +55,9 @@ class FlexLayout;
  
  // Container for the vertical tabstrip and the other views sharing space with
  // it, excluding the caption buttons.
@@ -864,7 +864,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class VerticalTabStripRegionView final
      : public BaseTabStripRegionView,
        public views::ResizeAreaDelegate,
-@@ -118,6 +122,30 @@ class VerticalTabStripRegionView final
+@@ -116,6 +120,30 @@ class VerticalTabStripRegionView final
    void AddedToWidget() override;
    void RemovedFromWidget() override;
    void Layout(PassKey) override;
@@ -895,7 +895,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    views::View* GetDefaultFocusableChild() override;
    gfx::Size GetMinimumSize() const override;
    gfx::Size CalculatePreferredSize(
-@@ -331,6 +359,10 @@ class VerticalTabStripRegionView final
+@@ -326,6 +354,10 @@ class VerticalTabStripRegionView final
    raw_ptr<ShadowFrameView> shadow_frame_ = nullptr;
    // helium-fork M3.9d: the floating sidebar card's halo shadow.
    raw_ptr<HeliumCardShadowView> floating_card_shadow_ = nullptr;
@@ -910,7 +910,7 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
 +++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -68,6 +68,10 @@ source_set("impl") {
+@@ -74,6 +74,10 @@ source_set("impl") {
      # take without a cycle.
      "workspace_entry_view.cc",
      "workspace_entry_view.h",

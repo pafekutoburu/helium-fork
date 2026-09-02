@@ -156,8 +156,8 @@ Index: src/chrome/browser/ui/views/page_info/page_info_main_view.cc
 +    header->AddChildViewAt(
 +        make_quick_action(
 +            features::IsRoundedIconsEnabled()
-+                ? kInstallDesktopIcon
-+                : kInstallDesktopChromeRefreshOldIcon,
++                ? vector_icons::kInstallDesktopIcon
++                : vector_icons::kInstallDesktopOldIcon,
 +            IDS_OMNIBOX_PWA_INSTALL_ICON_LABEL,
 +            base::BindRepeating(&PageInfoMainView::QuickInstallPwa,
 +                                base::Unretained(this))),

@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -1752,7 +1752,9 @@ void BrowserView::OnVerticalTabStripMode
+@@ -1774,7 +1774,9 @@ void BrowserView::OnVerticalTabStripMode
    }
  
    // helium-fork: the collapse button follows the layout between the toolbar
@@ -13,7 +13,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    UpdateArcSidebarControlPlacement();
  
    // helium-fork: the hidden sidebar mode's hover monitor follows the
-@@ -1769,6 +1771,13 @@ void BrowserView::OnVerticalTabStripMode
+@@ -1791,6 +1793,13 @@ void BrowserView::OnVerticalTabStripMode
  
  void BrowserView::OnToolbarTabStripStateChanged(
      HeliumLayoutStateController* controller) {
@@ -27,7 +27,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    if (!horizontal_tab_strip_region_view_) {
      return;
    }
-@@ -2134,6 +2143,13 @@ std::optional<SkColor> BrowserView::GetA
+@@ -2163,6 +2172,13 @@ std::optional<SkColor> BrowserView::Comp
    if (!ShouldUseContentCardInsets()) {
      return std::nullopt;
    }
@@ -41,7 +41,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    content::WebContents* const contents =
        const_cast<BrowserView*>(this)->GetActiveWebContents();
    if (!contents) {
-@@ -2349,6 +2365,65 @@ void BrowserView::UpdateArcSidebarContro
+@@ -2368,6 +2384,65 @@ void BrowserView::UpdateArcSidebarContro
    }
  }
  
@@ -107,7 +107,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  bool BrowserView::IsArcSidebarTopRowOnScreen() const {
    // helium-fork: whether the sidebar's top row is somewhere the user can see
    // and click it. Docked, obviously; and also while the hidden sidebar is
-@@ -6199,7 +6274,8 @@ void BrowserView::AddedToWidget() {
+@@ -6282,7 +6357,8 @@ void BrowserView::AddedToWidget() {
      }
    }
  
@@ -121,7 +121,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -988,6 +988,9 @@ class BrowserView : public BrowserWindow
+@@ -994,6 +994,9 @@ class BrowserView : public BrowserWindow
    // helium-fork: whether the Arc shell's sidebar top row is visible and
    // clickable -- docked, or hidden but revealed as a floating card.
    bool IsArcSidebarTopRowOnScreen() const;
@@ -135,7 +135,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -74,6 +74,7 @@
+@@ -67,6 +67,7 @@
  #include "ui/views/controls/separator.h"
  #include "ui/views/focus/focus_manager.h"
  #include "ui/views/interaction/element_tracker_views.h"
@@ -143,7 +143,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "ui/views/layout/flex_layout.h"
  #include "ui/views/layout/flex_layout_types.h"
  #include "ui/views/layout/layout_types.h"
-@@ -139,6 +140,25 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -132,6 +133,25 @@ VerticalTabStripRegionView::VerticalTabS
        gfx::Insets::TLBR(kArcTopContainerGap, region_horizontal_padding,
                          kArcTopContainerGap, region_horizontal_padding));
  
@@ -173,7 +173,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -89,6 +89,11 @@ class VerticalTabStripRegionView final
+@@ -87,6 +87,11 @@ class VerticalTabStripRegionView final
    // navigation controls).
    ArcSidebarTopContainer* arc_top_container() { return arc_top_container_; }
  
@@ -182,10 +182,10 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +  // BrowserView::UpdateArcAddressBarPlacement() owns what goes in it.
 +  views::View* arc_address_row() { return arc_address_row_; }
 +
-   bool IsPositionInWindowCaption(const gfx::Point& point);
+   bool IsPositionInWindowCaption(const gfx::Point& point) override;
  
    void SetHasLeadingExclusionForLayout(bool has_leading_exclusion);
-@@ -254,6 +259,7 @@ class VerticalTabStripRegionView final
+@@ -249,6 +254,7 @@ class VerticalTabStripRegionView final
    bool zen_mode_floating_style_ = false;
  
    raw_ptr<ArcSidebarTopContainer> arc_top_container_ = nullptr;
@@ -197,7 +197,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -1925,8 +1925,18 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -1961,8 +1961,18 @@ void ToolbarView::UpdateToolbarLayout()
                                 views::MaximumFlexSizeRule::kPreferred);
    const int location_bar_margin =
        GetLayoutConstant(LayoutConstant::kLocationBarMargin);
@@ -217,7 +217,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
            ? views::MinimumFlexSizeRule::kScaleToMinimum
            : views::MinimumFlexSizeRule::kPreferred;
    const views::FlexSpecification location_bar_flex_rule =
-@@ -1961,7 +1971,18 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -1997,7 +2007,18 @@ void ToolbarView::UpdateToolbarLayout()
    if (location_bar_view_) {
      location_bar_view_->SetProperty(views::kFlexBehaviorKey,
                                      location_bar_flex_rule);
@@ -237,7 +237,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
        location_bar_view_->SetPreferredSize(gfx::Size(kPreferredCompactWidth, 0));
        location_bar_view_->SetProperty(
            views::kMarginsKey, gfx::Insets::TLBR(0, location_bar_margin, 0, 0));
-@@ -2081,6 +2102,29 @@ std::optional<SkColor> ToolbarView::GetA
+@@ -2117,6 +2138,29 @@ std::optional<SkColor> ToolbarView::GetA
    return std::nullopt;
  }
  
@@ -267,7 +267,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  void ToolbarView::UpdateVerticalTabsCollapseButton() {
    if (!vertical_tabs_collapse_button_) {
      return;
-@@ -2382,7 +2426,8 @@ void ToolbarView::OnShowReloadButtonChan
+@@ -2417,7 +2461,8 @@ void ToolbarView::OnShowReloadButtonChan
  }
  
  void ToolbarView::OnShowAvatarButtonChanged() {
@@ -281,7 +281,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -210,6 +210,11 @@ class ToolbarView : public views::Access
+@@ -215,6 +215,11 @@ class ToolbarView : public views::Access
    // that has no business being on a white band. Asking for the tint itself has
    // no such ambiguity.
    static std::optional<SkColor> GetArcBandTintFor(const views::View* view);
@@ -293,7 +293,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    ToolbarButton* vertical_tabs_collapse_button() const {
      return vertical_tabs_collapse_button_;
    }
-@@ -438,6 +443,8 @@ class ToolbarView : public views::Access
+@@ -442,6 +447,8 @@ class ToolbarView : public views::Access
    // |location_bar_| is guaranteed to exist. These pointers are owned by the
    // view hierarchy.
    raw_ptr<ToolbarButton> vertical_tabs_collapse_button_ = nullptr;
@@ -306,7 +306,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
 +++ src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
-@@ -442,7 +442,8 @@ void ExtensionsToolbarDesktop::UpdateIco
+@@ -554,7 +554,8 @@ void ExtensionsToolbarDesktop::UpdateIco
      action_view->ClearProperty(views::kFlexBehaviorKey);
    }
  
@@ -316,7 +316,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
                      model_->IsActionPinned(extension_id))) {
      GetAnimatingLayoutManager()->FadeIn(action_view);
    } else {
-@@ -450,6 +451,17 @@ void ExtensionsToolbarDesktop::UpdateIco
+@@ -562,6 +563,17 @@ void ExtensionsToolbarDesktop::UpdateIco
    }
  }
  
@@ -334,7 +334,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  void ExtensionsToolbarDesktop::AnchorAndShowWidgetImmediately(
      MayBeDangling<views::Widget> widget) {
    auto iter =
-@@ -499,7 +511,8 @@ ExtensionsToolbarDesktop::GetPoppedOutAc
+@@ -615,7 +627,8 @@ bool ExtensionsToolbarDesktop::IsVisible
  
  bool ExtensionsToolbarDesktop::IsActionVisibleOnToolbar(
      const std::string& action_id) const {
@@ -344,7 +344,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  }
  
  void ExtensionsToolbarDesktop::UndoPopOut() {
-@@ -577,7 +590,8 @@ void ExtensionsToolbarDesktop::CreateAct
+@@ -693,7 +706,8 @@ void ExtensionsToolbarDesktop::CreateAct
    CHECK(icon);
  
    // Set visibility before adding to prevent extraneous animation.

@@ -2,8 +2,8 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -373,6 +373,8 @@ static_library("ui") {
-     "enterprise_startup_dialog.h",
+@@ -401,6 +401,8 @@ static_library("ui") {
+     "crypto_module_password_dialog.h",
      "helium/helium_layout_state_controller.cc",
      "helium/helium_layout_state_controller.h",
 +    "helium/helium_tab_switcher_controller.cc",
@@ -11,7 +11,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "idle_bubble.h",
      "managed_ui.cc",
      "managed_ui.h",
-@@ -4545,6 +4547,8 @@ static_library("ui") {
+@@ -4207,6 +4209,8 @@ static_library("ui") {
        "views/tabs/hovercard/tab_hover_card_thumbnail_observer.h",
        "views/tabs/new_tab_button.cc",
        "views/tabs/new_tab_button.h",
@@ -24,7 +24,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -70,6 +70,7 @@
+@@ -69,6 +69,7 @@
  #include "chrome/browser/ui/dialogs/browser_dialogs.h"
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
@@ -32,14 +32,17 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  #include "chrome/browser/ui/lens/lens_overlay_controller.h"
  #include "chrome/browser/ui/managed_ui.h"
  #include "chrome/browser/ui/navigator/browser_navigator.h"
-@@ -661,6 +662,14 @@ void BrowserCommandController::HandleCom
+@@ -669,6 +670,17 @@ void BrowserCommandController::HandleCom
      base::TimeTicks time_stamp) {
    DCHECK(IsCommandEnabled(id)) << "Invalid/disabled command " << id;
  
 +  // helium-fork: the visual Ctrl+Tab switcher intercepts tab cycling
 +  // commands; when it declines (pref off, <2 tabs) the stock handling
-+  // below applies unchanged.
-+  if ((id == IDC_SELECT_NEXT_TAB || id == IDC_SELECT_PREVIOUS_TAB) &&
++  // below applies unchanged. M152 rebinds Ctrl+Tab / Ctrl+Shift+Tab to
++  // IDC_CYCLE_TO_NEXT_TAB / IDC_CYCLE_TO_PREV_TAB (positional or MRU per
++  // pref); IDC_SELECT_* still arrive from Ctrl+PgDn/PgUp and the menu.
++  if ((id == IDC_SELECT_NEXT_TAB || id == IDC_SELECT_PREVIOUS_TAB ||
++       id == IDC_CYCLE_TO_NEXT_TAB || id == IDC_CYCLE_TO_PREV_TAB) &&
 +      HeliumTabSwitcherController::MaybeHandleCycleCommand(browser_, id)) {
 +    return;
 +  }
@@ -65,7 +68,7 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +++ src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
-@@ -78,6 +78,7 @@
+@@ -77,6 +77,7 @@
  #include "chrome/browser/ui/focus/browser_focus_controller_webui.h"
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
@@ -73,7 +76,7 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
-@@ -594,6 +595,10 @@ void BrowserWindowFeatures::Init(Browser
+@@ -588,6 +589,10 @@ void BrowserWindowFeatures::Init(Browser
          GetUserDataFactory().CreateInstance<HeliumLayoutStateController>(
              *browser, browser, profile->GetPrefs());
  
@@ -96,7 +99,7 @@ Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
  class HistoryClustersSidePanelCoordinator;
  class HistorySidePanelCoordinator;
  class ImmersiveModeController;
-@@ -679,6 +680,7 @@ class BrowserWindowFeatures {
+@@ -667,6 +668,7 @@ class BrowserWindowFeatures {
    std::unique_ptr<BrowserUserEducationInterface> user_education_;
    std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
    std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;
@@ -108,7 +111,7 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
-@@ -0,0 +1,372 @@
+@@ -0,0 +1,374 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -209,7 +212,9 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
 +    return false;
 +  }
 +
-+  Advance(command_id == IDC_SELECT_PREVIOUS_TAB ? -1 : 1);
++  const bool backwards = command_id == IDC_SELECT_PREVIOUS_TAB ||
++                         command_id == IDC_CYCLE_TO_PREV_TAB;
++  Advance(backwards ? -1 : 1);
 +  return true;
 +}
 +
@@ -485,7 +490,7 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium/helium_tab_switcher_controller.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,129 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -528,7 +533,8 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.h
 +//
 +// Cycling commands are intercepted in
 +// BrowserCommandController::HandleCommandWithDisposition() before the default
-+// IDC_SELECT_NEXT_TAB / IDC_SELECT_PREVIOUS_TAB handling; when the
++// IDC_SELECT_NEXT_TAB / IDC_SELECT_PREVIOUS_TAB / IDC_CYCLE_TO_NEXT_TAB /
++// IDC_CYCLE_TO_PREV_TAB handling (M152 binds Ctrl+Tab to the latter pair); when the
 +// helium.workspace.ctrl_tab_hud pref is disabled this class consumes nothing
 +// and the stock (Helium MRU / positional) cycling behavior applies.
 +class HeliumTabSwitcherController : public ui::EventObserver,
@@ -548,8 +554,8 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.h
 +      BrowserWindowInterface* browser_window);
 +
 +  // Returns true if the command was consumed by the switcher. Called from
-+  // BrowserCommandController for IDC_SELECT_NEXT_TAB /
-+  // IDC_SELECT_PREVIOUS_TAB.
++  // BrowserCommandController for IDC_SELECT_NEXT_TAB / IDC_SELECT_PREVIOUS_TAB
++  // and IDC_CYCLE_TO_NEXT_TAB / IDC_CYCLE_TO_PREV_TAB.
 +  static bool MaybeHandleCycleCommand(BrowserWindowInterface* browser_window,
 +                                      int command_id);
 +

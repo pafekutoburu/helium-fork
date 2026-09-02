@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -378,9 +378,11 @@ static_library("ui") {
+@@ -406,9 +406,11 @@ static_library("ui") {
      "helium/arc_band_tint_store.h",
      "helium/arc_caption_opacity.h",
      "helium/arc_card_layout.h",
@@ -14,7 +14,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/helium_layout_state_controller.cc",
      "helium/helium_layout_state_controller.h",
      "helium/helium_tab_switcher_controller.cc",
-@@ -6027,10 +6029,14 @@ test("helium_workspace_unittests") {
+@@ -5813,10 +5815,14 @@ test("helium_workspace_unittests") {
      "helium/arc_caption_opacity_unittest.cc",
      "helium/arc_card_layout.h",
      "helium/arc_card_layout_unittest.cc",
@@ -29,7 +29,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_omnibox_panel.h",
      "helium/arc_omnibox_panel_unittest.cc",
      "helium_workspace/workspace_blank_tab.h",
-@@ -6061,10 +6067,12 @@ test("helium_workspace_unittests") {
+@@ -5847,10 +5853,12 @@ test("helium_workspace_unittests") {
      "//components/tabs:test_support",
      "//testing/gmock",
      "//testing/gtest",
@@ -719,7 +719,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -642,15 +642,15 @@ bool LocationBarView::IsInitialized() co
+@@ -608,15 +608,15 @@ bool LocationBarView::IsInitialized() co
  }
  
  int LocationBarView::GetBorderRadius() const {
@@ -743,7 +743,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    }
    return ComputeBorderRadius(size());
  }
-@@ -1562,7 +1562,8 @@ void LocationBarView::RefreshArcTitleLab
+@@ -1526,7 +1526,8 @@ void LocationBarView::RefreshArcTitleLab
            ShouldMinimizeArcChrome(),
            (omnibox_view_ && omnibox_view_->HasFocus()) ||
                GetOmniboxController()->edit_model()->user_input_in_progress(),
@@ -753,7 +753,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
        helium::ArcFieldContent::kHostAndTitle;
    if (show == arc_title_label_->GetVisible() && title == arc_last_title_) {
      return;
-@@ -2777,9 +2778,18 @@ void LocationBarView::OnOmniboxHovered(b
+@@ -2755,9 +2756,18 @@ void LocationBarView::OnOmniboxHovered(b
  }
  
  bool LocationBarView::IsArcHoverUrlPreview() const {
@@ -779,7 +779,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -336,6 +336,26 @@ void TabStripView::OnChildMoved(TabColle
+@@ -295,6 +295,26 @@ void TabStripView::OnChildMoved(TabColle
  }
  
  void TabStripView::OnTabChanged(const tabs::TabInterface* active_tab) {
@@ -846,41 +846,32 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
  std::optional<SkColor> TabView::GetBackgroundColor() {
    const TabStyle::TabSelectionState selection_state = GetSelectionState();
    const bool hover_animation_active = IsHoverAnimationActive();
-@@ -291,6 +304,12 @@ std::optional<SkColor> TabView::GetBackg
-   }
+@@ -298,6 +311,20 @@ std::optional<SkColor> TabView::GetBackg
  
-   if (active_ || hover_animation_active || should_fill_background_tab_color_) {
-+    if (selection_state == TabStyle::TabSelectionState::kActive) {
-+      // helium-fork: keep every consumer of "what color is this row" (the
-+      // split view's merged background) on the same floating card the fill
-+      // paints -- see PaintTabBackgroundFill.
-+      return FloatingCardColor();
-+    }
-     return tab_style_->GetCurrentTabBackgroundColor(
-         selection_state, hover_animation_active, GetHoverAnimationValue(),
-         IsFrameActive(), GetColorProvider());
-@@ -597,6 +616,16 @@ void TabView::PaintTabBackgroundFill(
-         selection_state != TabStyle::TabSelectionState::kActive) {
-       flags.setColor(
-           GetNativeFrameMaterialTabBackgroundColor(selection_state));
-+    } else if (selection_state == TabStyle::TabSelectionState::kActive) {
-+      // helium-fork: the active row is a Dia floating card (2026-08-20) --
-+      // pure white on a light sidebar, a white lift on a dark one. A paint-
-+      // time bypass, deliberately NOT a recolor of the active token: the
-+      // material mixer derives the hover token from it (SetAlpha 0.45), so
-+      // recoloring the token would drag every hover along. Known face:
-+      // PaintTabBackgroundWithImages still paints the token's color under
-+      // custom image themes. The shadow half of the card lives in
-+      // UnpinnedTabContainerView.
-+      flags.setColor(FloatingCardColor());
-     } else {
-       flags.setColor(tab_style_->GetCurrentTabBackgroundColor(
-           selection_state, IsHoverAnimationActive(), GetHoverAnimationValue(),
+ SkColor TabView::GetCurrentTabBackgroundColor(
+     TabStyle::TabSelectionState selection_state) const {
++  if (selection_state == TabStyle::TabSelectionState::kActive) {
++    // helium-fork: the active row is a Dia floating card (2026-08-20) --
++    // pure white on a light sidebar, a white lift on a dark one. A paint-
++    // time bypass, deliberately NOT a recolor of the active token: the
++    // material mixer derives the hover token from it (SetAlpha 0.45), so
++    // recoloring the token would drag every hover along. Since 152 merged
++    // the fill and background-color paths into this helper, one branch here
++    // keeps every consumer of "what color is this row" (the split view's
++    // merged background included) on the same floating card. Known face:
++    // PaintTabBackgroundWithImages still paints the token's color under
++    // custom image themes. The shadow half of the card lives in
++    // UnpinnedTabContainerView.
++    return FloatingCardColor();
++  }
+   const bool frame_active = IsFrameActive();
+   const ui::ColorProvider* color_provider = GetColorProvider();
+   if (ShouldUseNativeFrameMaterials() &&
 Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.h
-@@ -205,6 +205,9 @@ class TabView : public views::View,
+@@ -208,6 +208,9 @@ class TabView : public views::View,
    SkColor GetNativeFrameMaterialTabBackgroundColor(
        TabStyle::TabSelectionState selection_state) const;
    bool ShouldUseNativeFrameMaterials() const;

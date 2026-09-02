@@ -2,7 +2,7 @@ Index: src/chrome/app/vector_icons/BUILD.gn
 ===================================================================
 --- src.orig/chrome/app/vector_icons/BUILD.gn
 +++ src/chrome/app/vector_icons/BUILD.gn
-@@ -83,6 +83,7 @@ aggregate_vector_icons("chrome_vector_ic
+@@ -81,6 +81,7 @@ aggregate_vector_icons("chrome_vector_ic
      "chevron_right_old.icon",
      "chrome_minimize.icon",
      "chrome_product.icon",
@@ -78,7 +78,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -378,6 +378,7 @@ static_library("ui") {
+@@ -406,6 +406,7 @@ static_library("ui") {
      "helium/arc_band_tint_store.h",
      "helium/arc_caption_opacity.h",
      "helium/arc_card_layout.h",
@@ -86,7 +86,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_favorite_accent.h",
      "helium/arc_loading_bar.h",
      "helium/arc_media_strip.h",
-@@ -4028,6 +4029,8 @@ static_library("ui") {
+@@ -3954,6 +3955,8 @@ static_library("ui") {
        # helium-fork: the Arc card's outline.
        "views/frame/arc_card_outline_view.cc",
        "views/frame/arc_card_outline_view.h",
@@ -95,7 +95,7 @@ Index: src/chrome/browser/ui/BUILD.gn
        "views/frame/arc_loading_bar_view.cc",
        "views/frame/arc_loading_bar_view.h",
        "views/frame/arc_omnibox_panel_view.cc",
-@@ -6037,6 +6040,8 @@ test("helium_workspace_unittests") {
+@@ -5823,6 +5826,8 @@ test("helium_workspace_unittests") {
      "helium/arc_caption_opacity_unittest.cc",
      "helium/arc_card_layout.h",
      "helium/arc_card_layout_unittest.cc",
@@ -1739,7 +1739,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
 +++ src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
-@@ -120,7 +120,14 @@ ExtensionsToolbarDesktop::DropInfo::Drop
+@@ -147,7 +147,14 @@ ExtensionsToolbarDesktop::DropInfo::Drop
  
  ExtensionsToolbarDesktop::ExtensionsToolbarDesktop(Browser* browser,
                                                     DisplayMode display_mode)
@@ -1753,7 +1753,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
 +    // which is what actually says "this is a button".
 +    : ToolbarIconContainerView(/*uses_highlight=*/false),
        browser_(browser),
-       model_(ToolbarActionsModel::Get(browser_->profile())),
+       model_(ToolbarActionsModel::Get(browser_->GetProfile())),
        display_mode_(display_mode),
 Index: src/chrome/browser/ui/views/frame/arc_composer_host_view.cc
 ===================================================================
@@ -1939,7 +1939,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -174,6 +174,9 @@
+@@ -178,6 +178,9 @@
  #include "chrome/browser/ui/views/frame/scrim_view.h"
  #include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
  #include "chrome/browser/ui/views/frame/arc_loading_bar_view.h"
@@ -1949,7 +1949,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
  #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
-@@ -334,6 +337,7 @@
+@@ -336,6 +339,7 @@
  #include "ui/base/metadata/metadata_header_macros.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/base/models/image_model.h"
@@ -1957,7 +1957,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "ui/base/mojom/window_show_state.mojom.h"
  #include "ui/base/resource/resource_bundle.h"
  #include "ui/base/text/bytes_formatting.h"
-@@ -723,7 +727,14 @@ class ArcOmniboxDismissHandler : public
+@@ -725,7 +729,14 @@ class ArcOmniboxDismissHandler : public
      // edit host without carrying focus through a reparent (that dispatches
      // Blur mid-move). The press then dispatches into the very same field at
      // the very same origin, one layout later, and focuses it there.
@@ -1973,7 +1973,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      browser_view_->MaybeEndArcFieldEditing();
    }
  
-@@ -1268,6 +1279,27 @@ BrowserView::BrowserView(Browser* browse
+@@ -1257,6 +1268,27 @@ BrowserView::BrowserView(Browser* browse
    // long after BrowserViewTabbedLayoutImpl.
    arc_omnibox_panel_ = AddChildView(std::make_unique<ArcOmniboxPanelView>());
  
@@ -2001,7 +2001,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    window_scrim_view_ = AddChildView(std::make_unique<ScrimView>());
    window_scrim_view_->layer()->SetName("WindowScrimView");
  
-@@ -2592,20 +2624,37 @@ void BrowserView::MaybeEndArcFieldEditin
+@@ -2608,20 +2640,37 @@ void BrowserView::MaybeEndArcFieldEditin
    UpdateZenModeRevealFromCursor();
  }
  
@@ -2044,7 +2044,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    }
    // helium-fork: only a press that can actually reach the field starts the
    // hand-off. The row's blank stretch is a window-drag point (#337: not moving
-@@ -2614,9 +2663,44 @@ void BrowserView::MaybeBeginArcFieldEdit
+@@ -2630,9 +2679,44 @@ void BrowserView::MaybeBeginArcFieldEdit
    // the caption predicate itself means the two cannot disagree about which
    // pixels are draggable.
    if (location_bar->IsPositionInWindowCaption(local)) {
@@ -2090,7 +2090,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  }
  
  void BrowserView::BeginArcSidebarFieldEdit() {
-@@ -2661,6 +2745,150 @@ void BrowserView::LayoutArcFieldEditHost
+@@ -2677,6 +2761,150 @@ void BrowserView::LayoutArcFieldEditHost
    arc_field_edit_host_->SetVisible(true);
  }
  
@@ -2241,7 +2241,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::EndArcSidebarFieldEdit() {
    if (!arc_field_edit_active_) {
      return;
-@@ -2880,6 +3108,13 @@ void BrowserView::UpdateArcAddressBarPla
+@@ -2896,6 +3124,13 @@ void BrowserView::UpdateArcAddressBarPla
    // event, so flipping kDocked <-> kHidden with the sidebar collapsed left
    // them stale for the gap.
    UpdateCaptionButtonsOpacityForChromeState();
@@ -2255,7 +2255,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    InvalidateLayout();
  }
  
-@@ -4019,6 +4254,10 @@ void BrowserView::SetFocusToLocationBar(
+@@ -4028,6 +4263,10 @@ void BrowserView::SetFocusToLocationBar(
      return;
    }
  #endif
@@ -2266,7 +2266,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    if (!IsLocationBarVisible()) {
      return;
    }
-@@ -6528,6 +6767,10 @@ void BrowserView::Layout(PassKey) {
+@@ -6599,6 +6838,10 @@ void BrowserView::Layout(PassKey) {
    if (arc_omnibox_panel_) {
      arc_omnibox_panel_->UpdateFromField();
    }
@@ -2281,7 +2281,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -96,6 +96,7 @@ class ProjectsPanelView;
+@@ -97,6 +97,7 @@ class OrganizerPanelView;
  class ScrimView;
  class ArcCardOutlineView;
  class ArcLoadingBarView;
@@ -2289,7 +2289,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
  class ArcOmniboxPanelView;
  class ShadowFrameView;
  class SidePanel;
-@@ -133,6 +134,7 @@ enum class Channel;
+@@ -134,6 +135,7 @@ enum class Channel;
  
  namespace views {
  class EventMonitor;
@@ -2319,7 +2319,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    void BeginArcSidebarFieldEdit();
    void ToggleZenModeTopChrome();
  
-@@ -1042,7 +1059,14 @@ class BrowserView : public BrowserWindow
+@@ -1037,7 +1054,14 @@ class BrowserView : public BrowserWindow
    // helium-fork: the begin half, from the same pre-dispatch press monitor --
    // a press landing on the sidebar row's field starts the edit hand-off
    // before the field takes focus. See BeginArcSidebarFieldEdit().
@@ -2335,7 +2335,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
  
    // Places the edit host over the sidebar row (called from Layout() while
    // active, before the panel reads the field's bounds).
-@@ -1329,6 +1353,16 @@ class BrowserView : public BrowserWindow
+@@ -1322,6 +1346,16 @@ class BrowserView : public BrowserWindow
    // here because the band clips its own contents. See ArcOmniboxPanelView.
    raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
  
@@ -2352,7 +2352,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    // helium-fork: while the sidebar row's field is being edited the whole
    // toolbar moves here -- a BrowserView child sharing the row's origin at the
    // panel's width, so the field can be as wide as the panel standing on it
-@@ -1337,6 +1371,8 @@ class BrowserView : public BrowserWindow
+@@ -1330,6 +1364,8 @@ class BrowserView : public BrowserWindow
    // the field through. See BeginArcSidebarFieldEdit().
    raw_ptr<views::View> arc_field_edit_host_ = nullptr;
    bool arc_field_edit_active_ = false;
@@ -2470,7 +2470,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -73,7 +73,11 @@
+@@ -64,7 +64,11 @@
  #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
  #include "chrome/browser/ui/views/chrome_layout_provider.h"
  #include "chrome/browser/ui/views/chrome_typography.h"
@@ -2480,9 +2480,9 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +#include "chrome/browser/ui/views/frame/multi_contents_view.h"
 +#include "chrome/browser/ui/views/frame/top_container_view.h"
  #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
- #include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
+ #include "chrome/browser/ui/views/location_bar/extension_debugger_warning_view.h"
  #include "chrome/browser/ui/views/location_bar/location_bar_layout.h"
-@@ -178,6 +182,8 @@
+@@ -150,6 +154,8 @@
  #include "ui/compositor/paint_recorder.h"
  #include "ui/display/screen.h"
  #include "ui/events/event.h"
@@ -2491,7 +2491,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  #include "ui/gfx/animation/slide_animation.h"
  #include "ui/gfx/canvas.h"
  // helium-fork: deriving the field's colors from the Arc shell's band tint.
-@@ -1081,10 +1087,21 @@ void LocationBarView::Layout(PassKey) {
+@@ -1053,10 +1059,21 @@ void LocationBarView::Layout(PassKey) {
    // sidebar-hosted row they sit out entirely: the row's width belongs to the
    // domain, and the two actions that lived here (install-PWA, bookmark) moved
    // into the page info bubble's header (user's ask, 2026-08-18).
@@ -2517,7 +2517,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    add_trailing_decoration(page_action_icon_container_,
                            /*intra_item_padding=*/0,
                            /*edge_padding=*/
-@@ -1114,6 +1131,7 @@ void LocationBarView::Layout(PassKey) {
+@@ -1081,6 +1098,7 @@ void LocationBarView::Layout(PassKey) {
    // Perform layout.
    int entry_width = width();
  
@@ -2525,7 +2525,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    // Use the unelided omnibox width as the `reserved_width` so preferred size
    // calculations of decorations are calculated to maximize this constraint.
    // TODO(crbug.com/350541615): This can be removed once current non-resizable
-@@ -1153,8 +1171,14 @@ void LocationBarView::Layout(PassKey) {
+@@ -1120,8 +1138,14 @@ void LocationBarView::Layout(PassKey) {
    // target, and (via the caption hit test) the edge of the drag zone, so
    // nothing else needs its own geometry. Focused or editing, the short
    // circuit below reclaims the full width so the edit-state scroll behaves.
@@ -2541,7 +2541,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
        !(omnibox_view_ && omnibox_view_->HasFocus()) &&
        !GetOmniboxController()->edit_model()->user_input_in_progress() &&
        !ime_inline_autocomplete_view_->GetVisible();
-@@ -1381,6 +1405,16 @@ bool LocationBarView::ShouldCloseOmnibox
+@@ -1345,6 +1369,16 @@ bool LocationBarView::ShouldCloseOmnibox
      return false;
    }
  
@@ -2558,7 +2558,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    auto* const view = static_cast<views::View*>(event->target());
    CHECK(view);
    return !Contains(view);
-@@ -1498,6 +1532,15 @@ bool LocationBarView::ShouldMinimizeArcC
+@@ -1462,6 +1496,15 @@ bool LocationBarView::ShouldMinimizeArcC
    // this is reached from GetBorderRadius() in the constructor, before the
    // field has one. Nothing is painted yet at that point, so answering "no" is
    // both safe and correct; the first real layout asks again.
@@ -2574,7 +2574,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    if (!GetWidget()) {
      return false;
    }
-@@ -1965,7 +2008,14 @@ void LocationBarView::RefreshBackground(
+@@ -1951,7 +1994,14 @@ void LocationBarView::RefreshBackground(
      // toolbar (station icon + domain + extensions in one pill) is the hover
      // treatment there; a second wash on the field alone would read as a pill
      // inside a pill.
@@ -2590,7 +2590,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
        hovered = SkColorSetA(hovered, 0);
      }
    }
-@@ -2794,20 +2844,54 @@ bool LocationBarView::IsArcHoverUrlPrevi
+@@ -2772,20 +2822,54 @@ bool LocationBarView::IsArcHoverUrlPrevi
  
  helium::ArcOmniboxPanelMetrics LocationBarView::GetArcOmniboxPanelMetrics()
      const {
@@ -2654,7 +2654,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  }
  
  bool LocationBarView::IsArcFieldEditing() const {
-@@ -2815,6 +2899,79 @@ bool LocationBarView::IsArcFieldEditing(
+@@ -2793,6 +2877,79 @@ bool LocationBarView::IsArcFieldEditing(
           GetOmniboxController()->edit_model()->user_input_in_progress();
  }
  
@@ -2734,7 +2734,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  void LocationBarView::EndArcFieldEditing() {
    if (!omnibox_view_ || !IsArcFieldEditing()) {
      return;
-@@ -3131,16 +3288,32 @@ ui::ImageModel LocationBarView::GetLocat
+@@ -3102,16 +3259,32 @@ ui::ImageModel LocationBarView::GetLocat
      return GetOmniboxController()->edit_model()->GetAddContextIcon(dip_size);
    }
  
@@ -2776,12 +2776,12 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +      std::move(on_icon_fetched), dark_mode);
  }
  
- void LocationBarView::UpdateChipVisibility() {
+ OmniboxPopupUI* LocationBarView::GetOmniboxPopupUI() {
 Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
-@@ -239,6 +239,47 @@ class LocationBarView
+@@ -252,6 +252,47 @@ class LocationBarView
    // is visible or there is in-progress input. The panel is on screen for
    // exactly this, whether the suggestion popup is up or not.
    bool IsArcFieldEditing() const;
@@ -2829,7 +2829,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    // helium-fork: leave the edit state. Clicking anywhere that is not the field
    // ends it, which upstream only gets for free where the click lands on
    // something focusable -- the web contents. Reverts the display text too when
-@@ -689,6 +730,10 @@ class LocationBarView
+@@ -709,6 +750,10 @@ class LocationBarView
    // 200ms after the transition, and the swap must happen exactly once, on the
    // frame the pointer crosses the boundary.
    bool arc_hovered_ = false;
@@ -2840,7 +2840,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    // helium-fork: whether the last mouse press was forwarded to the omnibox.
    // Drag/release forward only when the press did -- Textfield opens its
    // context menu from OnMouseReleased, so an unpaired release forward leaks
-@@ -752,6 +797,9 @@ class LocationBarView
+@@ -771,6 +816,9 @@ class LocationBarView
    // helium-fork: what the last Layout() applied. See
    // UpdateArcMinimalDecorations().
    bool arc_minimal_rest_ = false;
@@ -2854,7 +2854,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_icon_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_icon_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_icon_view.cc
-@@ -102,6 +102,14 @@ bool LocationIconView::OnMouseDragged(co
+@@ -94,6 +94,14 @@ bool LocationIconView::OnMouseDragged(co
  }
  
  SkColor LocationIconView::GetForegroundColor() const {
@@ -2869,7 +2869,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_icon_view.cc
    const std::u16string& display_text = GetText();
    const bool is_text_dangerous =
        display_text == l10n_util::GetStringUTF16(IDS_DANGEROUS_VERBOSE_STATE);
-@@ -333,7 +341,10 @@ void LocationIconView::UpdateIcon() {
+@@ -325,7 +333,10 @@ void LocationIconView::UpdateIcon() {
      if (is_super_g && GetWidget() && GetWidget()->GetCustomTheme()) {
        SetBackgroundColor(SK_ColorWHITE);
      }
@@ -2881,7 +2881,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_icon_view.cc
      views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::ON);
    }
  #endif
-@@ -341,8 +352,33 @@ void LocationIconView::UpdateIcon() {
+@@ -333,8 +344,33 @@ void LocationIconView::UpdateIcon() {
    SetImageModel(icon);
  }
  
@@ -2957,8 +2957,8 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
 +#include "base/task/single_thread_task_runner.h"
  #include "build/build_config.h"
  #include "chrome/browser/page_load_metrics/observers/top_chrome_webui_metrics_observer.h"
- #include "chrome/browser/profiles/profile.h"
-@@ -40,6 +42,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -38,6 +40,7 @@
  #include "ui/accessibility/ax_node_data.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/compositor/closure_animation_observer.h"
@@ -2966,7 +2966,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
  #include "ui/compositor/layer.h"
  #include "ui/compositor/scoped_layer_animation_settings.h"
  #include "ui/gfx/image/image.h"
-@@ -144,7 +147,36 @@ class OmniboxPopupViewViews::PopupWidget
+@@ -142,7 +145,36 @@ class OmniboxPopupViewViews::PopupWidget
      SetBounds(bounds);
    }
  
@@ -3004,7 +3004,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
      // Set the initial opacity to 0 and ease into fully opaque.
      GetLayer()->SetOpacity(0.0);
      ShowInactive();
-@@ -153,11 +185,49 @@ class OmniboxPopupViewViews::PopupWidget
+@@ -151,11 +183,49 @@ class OmniboxPopupViewViews::PopupWidget
      GetLayer()->SetOpacity(1.0);
    }
  
@@ -3055,7 +3055,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
      auto scoped_settings = GetScopedAnimationSettings();
      GetLayer()->SetOpacity(0.0);
      is_animating_closed_ = true;
-@@ -167,6 +237,17 @@ class OmniboxPopupViewViews::PopupWidget
+@@ -165,6 +235,17 @@ class OmniboxPopupViewViews::PopupWidget
          base::BindOnce(&PopupWidget::Close, AsWeakPtr())));
    }
  
@@ -3073,7 +3073,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
    void OnWidgetDestroying(views::Widget* widget) override {
      // ThemeCopyingWidget observation is set on the role_model widget, which in
      // the case of `PopupWidget` is the hosting parent widget.
-@@ -231,6 +312,9 @@ class OmniboxPopupViewViews::PopupWidget
+@@ -229,6 +310,9 @@ class OmniboxPopupViewViews::PopupWidget
    // True if the popup is in the process of closing via animation.
    bool is_animating_closed_ = false;
  
@@ -3083,7 +3083,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
    // True if the popup's bounds are currently being set.
    bool is_setting_popup_bounds_ = false;
  
-@@ -289,6 +373,11 @@ OmniboxPopupViewViews::~OmniboxPopupView
+@@ -287,6 +371,11 @@ OmniboxPopupViewViews::~OmniboxPopupView
    if (widget_) {
      widget_->RemoveObserver(&widget_observer_helper_);
    }
@@ -3095,7 +3095,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
    CHECK(!widget_observer_helper_.IsInObserverList());
    controller()->edit_model()->set_popup_view(nullptr);
    UpdateAccessibleControlIds();
-@@ -334,6 +423,29 @@ bool OmniboxPopupViewViews::IsOpen() con
+@@ -332,6 +421,29 @@ bool OmniboxPopupViewViews::IsOpen() con
    return widget_ != nullptr;
  }
  
@@ -3125,7 +3125,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
  void OmniboxPopupViewViews::InvalidateLine(size_t line) {
    // TODO(tommycli): This is weird, but https://crbug.com/40680508 shows that
    // crashes like this have happened, so we add this to avoid it for now.
-@@ -361,8 +473,18 @@ void OmniboxPopupViewViews::UpdatePopupA
+@@ -359,8 +471,18 @@ void OmniboxPopupViewViews::UpdatePopupA
        }
        // Drop stale metrics callbacks.
        metrics_weak_factory_.InvalidateWeakPtrs();
@@ -3145,7 +3145,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
        widget_->RemoveObserver(&widget_observer_helper_);
        widget_.reset();
  
-@@ -470,7 +592,7 @@ void OmniboxPopupViewViews::UpdatePopupA
+@@ -468,7 +590,7 @@ void OmniboxPopupViewViews::UpdatePopupA
    widget_->SetTargetBounds(GetTargetBounds());
  
    if (!was_open) {
@@ -3154,7 +3154,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
  
      // Popup is now expanded and first item will be selected.
      UpdateAccessibleStates();
-@@ -610,6 +732,26 @@ void OmniboxPopupViewViews::OnWidgetVisi
+@@ -608,6 +730,26 @@ void OmniboxPopupViewViews::OnWidgetVisi
                             .result_ready_time(),
                         popup_create_start_time_));
      popup_create_start_time_.reset();
@@ -3181,7 +3181,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
    } else {
      // Drop metrics callbacks if the widget is not visible.
      metrics_weak_factory_.InvalidateWeakPtrs();
-@@ -624,6 +766,13 @@ void OmniboxPopupViewViews::OnWidgetDest
+@@ -622,6 +764,13 @@ void OmniboxPopupViewViews::OnWidgetDest
    }
    // Drop metrics callbacks when the widget is destroyed.
    metrics_weak_factory_.InvalidateWeakPtrs();
@@ -3210,7 +3210,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h
  namespace viz {
  class FrameTimingDetails;
  }
-@@ -176,6 +180,22 @@ class OmniboxPopupViewViews : public vie
+@@ -175,6 +179,22 @@ class OmniboxPopupViewViews : public vie
    // OmniboxPopupView:
    bool IsOpen() const override;
  
@@ -3233,7 +3233,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h
    // Callback to log presentation metrics.
    void OnPopupFirstPaintPresented(
        base::TimeTicks request_start_time,
-@@ -227,6 +247,10 @@ class OmniboxPopupViewViews : public vie
+@@ -226,6 +246,10 @@ class OmniboxPopupViewViews : public vie
    bool has_logged_content_ready_since_open_ = false;
  
    base::WeakPtrFactory<OmniboxPopupViewViews> metrics_weak_factory_{this};
@@ -3248,7 +3248,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
-@@ -1808,6 +1808,45 @@ void OmniboxViewViews::OnFocus() {
+@@ -1699,6 +1699,45 @@ void OmniboxViewViews::OnFocus() {
    UpdateAccessibleTextOffsetsIfNeeded();
  #endif  // BUILDFLAG(SUPPORTS_AX_TEXT_OFFSETS)
  
@@ -3294,7 +3294,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
    if (location_bar_view_) {
      location_bar_view_->OnOmniboxFocused();
    }
-@@ -1864,7 +1903,15 @@ void OmniboxViewViews::OnBlur() {
+@@ -1758,7 +1797,15 @@ void OmniboxViewViews::OnBlur() {
      RevertAll();
    } else if (auto* popup_closer =
                   controller()->client()->GetOmniboxPopupCloser()) {
@@ -3311,66 +3311,61 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
        popup_closer->CloseWithReason(omnibox::PopupCloseReason::kBlur);
      }
    }
-@@ -2097,6 +2144,18 @@ bool OmniboxViewViews::ShouldShowPlaceho
-     }
+@@ -1910,6 +1957,17 @@ bool OmniboxViewViews::ShouldShowPlaceho
+     return false;
    }
  
-+  // helium-fork r8.6: the composer keeps its hint while focused. Upstream hides
-+  // the DSE placeholder as soon as the caret is up, which is right for a
-+  // toolbar field the user has just reached for -- but the composer is focused
-+  // from the moment a blank new tab opens, so that rule left the middle of the
-+  // page holding a magnifier and nothing else. `Dia:` shows both at once:
-+  // measured 2026-08-22 on the live window, its resting card carries the
-+  // magnifier, "Ask anything..." AND the caret. It is also what makes the
-+  // user's ask about that text's grey mean anything ("示意文字的灰度也参考Dia").
++  // helium-fork r8.6: the composer keeps its hint while focused. Upstream
++  // hides the DSE placeholder as soon as the caret is up, which is right for
++  // a toolbar field the user has just reached for -- but the composer is
++  // focused from the moment a blank new tab opens, so that rule left the
++  // middle of the page holding a magnifier and nothing else. `Dia:` shows
++  // both at once: measured 2026-08-22 on the live window, its resting card
++  // carries the magnifier, "Ask anything..." AND the caret.
 +  if (location_bar_view_ && location_bar_view_->IsArcComposerHosted()) {
 +    return true;
 +  }
 +
-   // If the omnibox is blurred, only show the DSE placeholder if there is no
-   // keyword selected.
-   if (!controller()->edit_model()->is_caret_visible()) {
-@@ -2745,9 +2804,32 @@ void OmniboxViewViews::UpdatePlaceholder
-       controller()->edit_model()->keyword_placeholder().empty() &&
-       !ShouldInstallAimPlaceholderText() &&
-       !ShouldInstallContextualTasksPlaceholderText();
--  SetPlaceholderTextColorId(dse_placeholder_installed
--                                ? kColorOmniboxText
--                                : kColorOmniboxForegroundDisabled);
-+  // helium-fork r8.5: not in the new tab page's composer. Upstream's reasoning
-+  // for the full-contrast DSE placeholder is "draw attention to the omnibox" --
-+  // the composer IS the page, it needs no drawing attention to, and the shell's
-+  // rule is the opposite one: everything the app shows for itself recedes, and
-+  // only what the user typed (and the list under it) is full contrast
-+  // ("除了用户自己添加的标签页，其他所有 app 本身展示用的元素都是半灰色，降低他们
-+  // 的存在感" -- user 2026-08-21). `Arc:` measures its own composer hint at L125
-+  // against an L249 card and its suggestion text at L50 (2026-08-21).
-+  //
+   return omnibox::ShouldShowPlaceholderText(
+       location_bar_view_,
+       /*in_popup_state_transition=*/location_bar_view_ &&
+@@ -2434,6 +2492,22 @@ void OmniboxViewViews::PerformDrop(
+ }
+ 
+ void OmniboxViewViews::UpdatePlaceholderTextColor() {
++  // helium-fork r8.5: not in the new tab page's composer. Upstream's
++  // full-contrast DSE placeholder exists to "draw attention to the omnibox" --
++  // the composer IS the page, and the shell's rule is the opposite one:
++  // everything the app shows for itself recedes ("除了用户自己添加的标签页，
++  // 其他所有 app 本身展示用的元素都是半灰色" -- user 2026-08-21).
++  // r8.6: `Dia:`'s own hint grey (152,153,153) -- the reference for this
++  // module changed from `Arc:` to Dia when the user said
++  // "示意文字的灰度也参考Dia" (2026-08-22). The id carries the light/dark
++  // split; see omnibox_color_mixer.
 +  // ⚠ This is where the colour has to be set, not LocationBarView: this
 +  // function re-runs on every omnibox update and overwrote a colour set from
 +  // outside within a frame.
-+  const bool arc_composer =
-+      location_bar_view_ && location_bar_view_->IsArcComposerHosted();
-+  // kColorOmniboxTextDimmed for the composer rather than the disabled grey the
-+  // other dim placeholders use: measured, the disabled one lands at L170 on our
-+  // white card where `Arc:` sits at L125 on its L249 one -- washed out, not
-+  // half-grey.
-+  // r8.6: `Dia:`'s own hint grey (152,153,153) rather than r8.5's dimmed id
-+  // (L71 measured on our card) -- the reference for this module changed from
-+  // `Arc:` (L125) to Dia when the user said "示意文字的灰度也参考Dia"
-+  // (2026-08-22). The id carries the light/dark split; see omnibox_color_mixer.
-+  SetPlaceholderTextColorId(
-+      arc_composer            ? kColorOmniboxArcComposerHint
-+      : dse_placeholder_installed ? kColorOmniboxText
-+                                  : kColorOmniboxForegroundDisabled);
- }
- 
- bool OmniboxViewViews::AreAimHintImpressionLimitsReached() const {
++  if (location_bar_view_ && location_bar_view_->IsArcComposerHosted()) {
++    SetPlaceholderTextColorId(kColorOmniboxArcComposerHint);
++    return;
++  }
+   SetPlaceholderTextColorId(
+       omnibox::ShouldUseDimPlaceholderColor(location_bar_view_)
+           ? kColorOmniboxForegroundDisabled
 Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
 +++ src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
-@@ -346,10 +346,21 @@ helium::ArcOmniboxPanelMetrics ArcPanelM
+@@ -24,6 +24,8 @@
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/pointer/touch_ui_controller.h"
+ #include "ui/compositor/layer.h"
++// helium-fork: IsDark for the panel plate; 152 dropped this include upstream.
++#include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+ #include "ui/views/border.h"
+ #include "ui/views/bubble/bubble_border.h"
+@@ -342,10 +344,21 @@ helium::ArcOmniboxPanelMetrics ArcPanelM
  int RoundedOmniboxResultsFrame::GetNonResultSectionHeight(
      const LocationBar* location_bar,
      bool include_cutout) {
@@ -3396,7 +3391,7 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
  }
  
  // static
-@@ -442,6 +453,12 @@ void RoundedOmniboxResultsFrame::Layout(
+@@ -438,6 +451,12 @@ void RoundedOmniboxResultsFrame::Layout(
      gfx::Rect top_bounds(contents_host_->GetContentsBounds());
      top_bounds.set_height(GetNonResultSectionHeight(location_bar_, true));
      top_bounds.Inset(GetLocationBarAlignmentInsets(location_bar_));
@@ -3514,7 +3509,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  #include <algorithm>
  #include <memory>
  #include <utility>
-@@ -56,6 +60,8 @@
+@@ -58,6 +62,8 @@
  #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
  #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
  #include "chrome/browser/ui/helium/arc_toolbar_host.h"
@@ -3523,7 +3518,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/intent_picker_tab_helper.h"
  #include "chrome/browser/ui/layout_constants.h"
-@@ -1407,6 +1413,14 @@ void ToolbarView::Update(WebContents* ta
+@@ -1417,6 +1423,14 @@ void ToolbarView::Update(WebContents* ta
      location_bar_->Update(tab);
    }
  
@@ -3538,7 +3533,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    if (extensions_container_) {
      extensions_container_->UpdateAllIcons();
    }
-@@ -2042,6 +2056,7 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -2078,6 +2092,7 @@ void ToolbarView::UpdateToolbarLayout()
    if (!location_bar_) {
      return;
    }
@@ -3546,7 +3541,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  
    const auto flex_preferred =
        views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
-@@ -2163,15 +2178,12 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -2199,15 +2214,12 @@ void ToolbarView::UpdateToolbarLayout()
      }
    }
  
@@ -3568,7 +3563,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  
    // Pinned actions (including downloads) and extensions
    // should not shrink in compact layout.
-@@ -2272,17 +2284,83 @@ bool ToolbarView::IsArcBandHosted() cons
+@@ -2308,17 +2320,83 @@ bool ToolbarView::IsArcBandHosted() cons
           !arc_sidebar_hosted_;
  }
  
@@ -3654,7 +3649,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  void ToolbarView::SetArcRowHovered(bool hovered) {
    if (!arc_sidebar_hosted_) {
      return;
-@@ -2296,6 +2374,126 @@ void ToolbarView::SetArcRowHovered(bool
+@@ -2332,6 +2410,126 @@ void ToolbarView::SetArcRowHovered(bool
    UpdateArcExtensionsReveal();
  }
  
@@ -3781,7 +3776,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  void ToolbarView::UpdateArcExtensionsReveal() {
    if (!arc_sidebar_hosted_) {
      SetArcExtensionsSpaceReserved(true);
-@@ -2435,24 +2633,20 @@ void ToolbarView::SetArcEditHosted(bool
+@@ -2471,24 +2669,20 @@ void ToolbarView::SetArcEditHosted(bool
  }
  
  bool ToolbarView::IsArcSidebarHostedFor(const views::View* view) {
@@ -3820,7 +3815,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -255,6 +255,17 @@ class ToolbarView : public views::Access
+@@ -260,6 +260,17 @@ class ToolbarView : public views::Access
    // The row's edit panel keys off this the way the band's keys off
    // IsArcBandHostedFor.
    static bool IsArcSidebarHostedFor(const views::View* view);
@@ -3838,7 +3833,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    // helium-fork: the sidebar row's field is being edited and the toolbar
    // rides in BrowserView's edit host at the panel's width. Sidebar-hosted
    // stays true throughout; this narrows the row to its edit shape (the
-@@ -276,6 +287,25 @@ class ToolbarView : public views::Access
+@@ -281,6 +292,25 @@ class ToolbarView : public views::Access
    // exit event (the "icons never retract after the menu" bug, 2026-08-19).
    void UpdateArcExtensionsReveal();
  
@@ -3864,7 +3859,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    ToolbarButton* vertical_tabs_collapse_button() const {
      return vertical_tabs_collapse_button_;
    }
-@@ -513,6 +543,15 @@ class ToolbarView : public views::Access
+@@ -517,6 +547,15 @@ class ToolbarView : public views::Access
    raw_ptr<ToolbarButton> vertical_tabs_collapse_button_ = nullptr;
    // helium-fork: see SetArcSidebarHosted().
    bool arc_sidebar_hosted_ = false;
@@ -3884,7 +3879,7 @@ Index: src/components/search/ntp_features.cc
 ===================================================================
 --- src.orig/components/search/ntp_features.cc
 +++ src/components/search/ntp_features.cc
-@@ -175,7 +175,14 @@ BASE_FEATURE(kNtpSharepointModule,
+@@ -215,7 +215,14 @@ BASE_FEATURE(kNtpSharepointModule,
  
  // If enabled, shortcuts will be shown.
  // This is a kill switch. Keep indefinitely.
@@ -3899,4 +3894,4 @@ Index: src/components/search/ntp_features.cc
 +BASE_FEATURE(kNtpShortcuts, base::FEATURE_DISABLED_BY_DEFAULT);
  
  // If enabled, the Tab Resumption module will be shown.
- // TODO(b/516245005): Enable Tab Resumption Module for Android.
+ BASE_FEATURE(kNtpMostRelevantTabResumptionModule,

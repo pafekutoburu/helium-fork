@@ -2,45 +2,45 @@ Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
 ===================================================================
 --- src.orig/chrome/browser/resources/settings/appearance_page/appearance_page.ts
 +++ src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
-@@ -202,9 +202,11 @@ export class SettingsAppearancePageEleme
+@@ -260,9 +260,11 @@ export class SettingsAppearancePageEleme
+     {value: 'true', name: loadTimeData.getString('glassEffectModern')},
+  ];
  
-       showManagedThemeDialog_: Boolean,
+-  // helium-fork: all three forms of the Arc shell. HIDDEN drops the band
+-  // entirely and moves the address entry into the sidebar, so it is only
+-  // offerable now that the sidebar has somewhere to put it.
++  // helium-fork: the Arc shell's two surviving forms. HIDDEN drops the
++  // band entirely and moves the address entry into the sidebar, so it is
++  // only offerable now that the sidebar has somewhere to put it. AUTO
++  // (zen) was retired 2026-08-16 and is no longer offered; the enum value
++  // stays for the C++ mirror, and stale prefs are migrated to DOCKED.
+   protected accessor addressBarModeOptions_: DropdownMenuOptionList = [
+     {
+       value: AddressBarMode.DOCKED,
+@@ -272,10 +274,6 @@ export class SettingsAppearancePageEleme
+       value: AddressBarMode.HIDDEN,
+       name: loadTimeData.getString('addressBarModeHidden'),
+     },
+-    {
+-      value: AddressBarMode.AUTO,
+-      name: loadTimeData.getString('addressBarModeAuto'),
+-    },
+   ];
  
--      // helium-fork: all three forms of the Arc shell. HIDDEN drops the band
--      // entirely and moves the address entry into the sidebar, so it is only
--      // offerable now that the sidebar has somewhere to put it.
-+      // helium-fork: the Arc shell's two surviving forms. HIDDEN drops the
-+      // band entirely and moves the address entry into the sidebar, so it is
-+      // only offerable now that the sidebar has somewhere to put it. AUTO
-+      // (zen) was retired 2026-08-16 and is no longer offered; the enum value
-+      // stays for the C++ mirror, and stale prefs are migrated to DOCKED.
-       addressBarModeOptions_: {
-         readOnly: true,
-         type: Array,
-@@ -218,10 +220,6 @@ export class SettingsAppearancePageEleme
-               value: AddressBarMode.HIDDEN,
-               name: loadTimeData.getString('addressBarModeHidden'),
-             },
--            {
--              value: AddressBarMode.AUTO,
--              name: loadTimeData.getString('addressBarModeAuto'),
--            },
-           ];
-         },
-       },
+   // The values in this array must match the BookmarkBarVisibilityState enum
 Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -372,6 +372,7 @@ static_library("ui") {
-     "confirm_bubble.h",
+@@ -400,6 +400,7 @@ source_set("view_ids") {
+ static_library("ui") {
+   sources = [
      "crypto_module_password_dialog.h",
-     "enterprise_startup_dialog.h",
 +    "helium/arc_address_bar_mode.h",
      "helium/arc_band_colors.h",
      "helium/arc_band_tint_store.cc",
      "helium/arc_band_tint_store.h",
-@@ -6008,6 +6009,8 @@ if (enable_dice_support) {
+@@ -5794,6 +5795,8 @@ source_set("storage_pressure_bubble") {
  # tabs, and a window is only ever compared by pointer.
  test("helium_workspace_unittests") {
    sources = [
@@ -53,7 +53,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -1821,7 +1821,10 @@ void BrowserCommandController::InitComma
+@@ -1848,7 +1848,10 @@ void BrowserCommandController::InitComma
                                           true);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_DOCKED, true);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_HIDDEN, true);
@@ -218,7 +218,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc
 +++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc
-@@ -103,16 +103,22 @@ void ApplyArcShellLayoutPrefs(PrefServic
+@@ -102,16 +102,22 @@ void ApplyArcShellLayoutPrefs(PrefServic
                                std::to_underlying(HeliumLayoutType::kVertical));
    }
  

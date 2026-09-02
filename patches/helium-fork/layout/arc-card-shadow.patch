@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -167,7 +167,10 @@
+@@ -171,7 +171,10 @@
  #include "chrome/browser/ui/views/frame/multi_contents_view_delegate.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
  #include "chrome/browser/ui/views/frame/scrim_view.h"
@@ -13,7 +13,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
  #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
  #include "chrome/browser/ui/views/frame/top_container_view.h"
-@@ -1082,6 +1085,46 @@ BrowserView::BrowserView(Browser* browse
+@@ -1068,6 +1071,46 @@ BrowserView::BrowserView(Browser* browse
    contents_container_ = AddChildView(std::move(contents_container));
    set_contents_view(contents_container_);
  
@@ -60,7 +60,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // InfoBarContainer needs to be added as a child here for drop-shadow, but
    // needs to come after toolbar in focus order (see EnsureFocusOrder()).
    infobar_container_ =
-@@ -1256,6 +1299,8 @@ BrowserView::~BrowserView() {
+@@ -1245,6 +1288,8 @@ BrowserView::~BrowserView() {
    // before `RemoveAllChildViews()` is called to avoid dangling.
    browser_widget_ = nullptr;
    main_background_region_ = nullptr;
@@ -69,7 +69,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    top_container_ = nullptr;
    web_app_frame_toolbar_ = nullptr;
    web_app_window_title_ = nullptr;
-@@ -6074,6 +6119,15 @@ void BrowserView::AddedToWidget() {
+@@ -6152,6 +6197,15 @@ void BrowserView::AddedToWidget() {
  
    views::ClientView::AddedToWidget();
  
@@ -85,7 +85,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #if BUILDFLAG(IS_WIN)
    // Register for screen capture exclusion updates. This is specific to
    // Document PiP windows, which are fully-fledged BrowserViews.
-@@ -6196,6 +6250,8 @@ void BrowserView::AddedToWidget() {
+@@ -6274,6 +6328,8 @@ void BrowserView::AddedToWidget() {
    layout_views.window_scrim = window_scrim_view_;
    layout_views.main_shadow_overlay = main_shadow_overlay_;
    layout_views.main_background_region = main_background_region_;
@@ -98,16 +98,16 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -93,6 +93,8 @@ class LocationBarView;
+@@ -94,6 +94,8 @@ class LocationBarView;
  class MultiContentsView;
- class ProjectsPanelView;
+ class OrganizerPanelView;
  class ScrimView;
 +class ArcCardOutlineView;
 +class ShadowFrameView;
  class SidePanel;
  class TabCyclingEventHandler;
  class TabDragTarget;
-@@ -1272,6 +1274,14 @@ class BrowserView : public BrowserWindow
+@@ -1265,6 +1267,14 @@ class BrowserView : public BrowserWindow
    // WebContents, and Side panel).
    raw_ptr<ShadowOverlayView> main_shadow_overlay_ = nullptr;
  
@@ -126,7 +126,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout.h
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_layout.h
-@@ -61,6 +61,10 @@ struct BrowserViewLayoutViews {
+@@ -62,6 +62,10 @@ struct BrowserViewLayoutViews {
    raw_ptr<views::View> window_scrim = nullptr;
    raw_ptr<views::View> main_background_region = nullptr;
    raw_ptr<views::View> main_shadow_overlay = nullptr;
@@ -149,17 +149,17 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/layout_constants.h"
-@@ -37,7 +38,9 @@
- #include "chrome/browser/ui/views/frame/main_background_region_view.h"
+@@ -34,7 +35,9 @@
+ #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view.h"
  #include "chrome/browser/ui/views/frame/top_container_view.h"
 +#include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
 +#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_background_blur_backdrop.h"
  #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
- #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
- #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
-@@ -1076,6 +1079,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1085,6 +1088,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    // counts as attached top chrome further down. Zero means "not on screen" --
    // in zen at reveal ratio 0, or in the hidden address bar mode.
    int arc_band_height = 0;
@@ -171,7 +171,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  
    // When the tabstrip isn't at the top or in constrained widths, the top
    // container is laid out before all side panels.
-@@ -1111,6 +1119,42 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1120,6 +1128,42 @@ BrowserViewTabbedLayoutImpl::CalculatePr
          top_container_local_bounds, parent_params);
      arc_band_height = top_container_layout.bounds.height();
  
@@ -214,7 +214,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
      // helium-fork: a hidden band has to be hidden, not merely zero-height.
      //
      // The toolbar is not collapsed when zen hides it -- it keeps its full
-@@ -1308,6 +1352,36 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1317,6 +1361,36 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    layout.AddChild(views().main_shadow_overlay, params.visual_client_area,
                    layout_data_->separator_info.shadow_box);
  
@@ -251,7 +251,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
    // Lay out top container. The top container is laid out after the
    // toolbar-height side panel with a horizontal tabstrip if the browser is wide
    // enough.
-@@ -1347,10 +1421,19 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1356,10 +1430,19 @@ BrowserViewTabbedLayoutImpl::CalculatePr
        // extra offset from the toolbar reveal animation. The infobar slides
        // down to stay visible below the revealed toolbar, while the content
        // stays in place. See https://crbug.com/40278831.
@@ -274,7 +274,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
        params.SetTop(params.visual_client_area.y() + infobar_height);
      }
      layout.AddChild(views().infobar_container, infobar_bounds, infobar_visible);
-@@ -1372,7 +1455,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1381,7 +1464,7 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    // which stepped the contents 6px mid-animation, and it answered "attached"
    // in the hidden address bar mode, where there is no band at all.
    const bool band_on_screen = arc_content_card
@@ -283,7 +283,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
                                    : (!zen.enabled || zen.TopChromeVisible());
    views().multi_contents_view->SetTopChromeAttachmentState(
        infobar_visible && should_use_rounded_frame,
-@@ -1383,10 +1466,18 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1392,10 +1475,18 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    // Updating the top, left and right insets for contents container view when
    // in split view. This is dependent on a number of other browser states.
    if (horizontal_layout.is_split_view) {
@@ -302,7 +302,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
              : zen.enabled
                    ? ScaleExtent(MultiContentsView::kSplitViewContentInset,
                                  std::clamp(1.0f - zen.top_chrome_ratio, 0.0f,
-@@ -1501,6 +1592,26 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1510,6 +1601,26 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    // coverage in this fork yet.
    const BrowserView* const browser_view_for_zen =
        views::AsViewClass<BrowserView>(views().browser_view);
@@ -333,18 +333,18 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -373,6 +373,7 @@ static_library("ui") {
+@@ -401,6 +401,7 @@ static_library("ui") {
+   sources = [
      "crypto_module_password_dialog.h",
-     "enterprise_startup_dialog.h",
      "helium/arc_band_colors.h",
 +    "helium/arc_card_layout.h",
      "helium/helium_layout_state_controller.cc",
      "helium/helium_layout_state_controller.h",
      "helium/helium_tab_switcher_controller.cc",
-@@ -4012,6 +4013,10 @@ static_library("ui") {
+@@ -3938,6 +3939,10 @@ static_library("ui") {
+       "views/flying_indicator.h",
        "views/frame/app_menu_button.cc",
        "views/frame/app_menu_button.h",
-       "views/frame/app_menu_button_observer.h",
 +
 +      # helium-fork: the Arc card's outline.
 +      "views/frame/arc_card_outline_view.cc",
@@ -352,7 +352,7 @@ Index: src/chrome/browser/ui/BUILD.gn
        "views/frame/base_tab_strip_region_view.cc",
        "views/frame/base_tab_strip_region_view.h",
        "views/frame/browser_frame_view.cc",
-@@ -6003,6 +6008,8 @@ test("helium_workspace_unittests") {
+@@ -5789,6 +5794,8 @@ test("helium_workspace_unittests") {
    sources = [
      "helium/arc_band_colors.h",
      "helium/arc_band_colors_unittest.cc",
@@ -361,7 +361,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium_workspace/workspace_blank_tab.h",
      "helium_workspace/workspace_blank_tab_unittest.cc",
      "helium_workspace/workspace_entry.cc",
-@@ -6036,6 +6043,9 @@ test("helium_workspace_unittests") {
+@@ -5822,6 +5829,9 @@ test("helium_workspace_unittests") {
      # asserted in this lightweight target. //ui/gfx:color_utils exists for
      # exactly this ("without importing all the gfx").
      "//ui/gfx:color_utils",

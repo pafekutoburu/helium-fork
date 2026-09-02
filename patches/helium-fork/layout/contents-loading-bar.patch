@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -378,6 +378,7 @@ static_library("ui") {
+@@ -406,6 +406,7 @@ static_library("ui") {
      "helium/arc_band_tint_store.h",
      "helium/arc_caption_opacity.h",
      "helium/arc_card_layout.h",
@@ -10,7 +10,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_minimal_field_state.h",
      "helium/arc_omnibox_panel.h",
      "helium/helium_layout_state_controller.cc",
-@@ -4023,6 +4024,8 @@ static_library("ui") {
+@@ -3949,6 +3950,8 @@ static_library("ui") {
        # helium-fork: the Arc card's outline.
        "views/frame/arc_card_outline_view.cc",
        "views/frame/arc_card_outline_view.h",
@@ -19,7 +19,7 @@ Index: src/chrome/browser/ui/BUILD.gn
        "views/frame/arc_omnibox_panel_view.cc",
        "views/frame/arc_omnibox_panel_view.h",
        "views/frame/base_tab_strip_region_view.cc",
-@@ -6024,6 +6027,8 @@ test("helium_workspace_unittests") {
+@@ -5810,6 +5813,8 @@ test("helium_workspace_unittests") {
      "helium/arc_caption_opacity_unittest.cc",
      "helium/arc_card_layout.h",
      "helium/arc_card_layout_unittest.cc",
@@ -667,7 +667,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -170,6 +170,7 @@
+@@ -174,6 +174,7 @@
  #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
  #include "chrome/browser/ui/views/frame/scrim_view.h"
  #include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
@@ -675,7 +675,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
  #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
-@@ -1173,6 +1174,12 @@ BrowserView::BrowserView(Browser* browse
+@@ -1159,6 +1160,12 @@ BrowserView::BrowserView(Browser* browse
    // has run, long after BrowserViewTabbedLayoutImpl.
    arc_omnibox_panel_ = AddChildView(std::make_unique<ArcOmniboxPanelView>());
  
@@ -688,7 +688,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // InfoBarContainer needs to be added as a child here for drop-shadow, but
    // needs to come after toolbar in focus order (see EnsureFocusOrder()).
    infobar_container_ =
-@@ -1359,6 +1366,7 @@ BrowserView::~BrowserView() {
+@@ -1348,6 +1355,7 @@ BrowserView::~BrowserView() {
    arc_card_outline_ = nullptr;
    arc_card_shadow_ = nullptr;
    arc_omnibox_panel_ = nullptr;
@@ -696,7 +696,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    top_container_ = nullptr;
    web_app_frame_toolbar_ = nullptr;
    web_app_window_title_ = nullptr;
-@@ -3297,6 +3305,10 @@ void BrowserView::OnActiveTabChanged(con
+@@ -3300,6 +3308,10 @@ void BrowserView::OnActiveTabChanged(con
    if (top_container_) {
      top_container_->WatchPageColors(new_contents);
    }
@@ -707,7 +707,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    views::WebView* active_contents_view = GetActiveContentsWebView();
    bool tab_change_in_split_view =
        IsTabChangeInSplitView(old_contents, new_contents);
-@@ -6180,6 +6192,33 @@ void BrowserView::Layout(PassKey) {
+@@ -6251,6 +6263,33 @@ void BrowserView::Layout(PassKey) {
      arc_omnibox_panel_->UpdateFromField();
    }
  
@@ -745,15 +745,15 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -94,6 +94,7 @@ class MultiContentsView;
- class ProjectsPanelView;
+@@ -95,6 +95,7 @@ class MultiContentsView;
+ class OrganizerPanelView;
  class ScrimView;
  class ArcCardOutlineView;
 +class ArcLoadingBarView;
  class ArcOmniboxPanelView;
  class ShadowFrameView;
  class SidePanel;
-@@ -1300,6 +1301,11 @@ class BrowserView : public BrowserWindow
+@@ -1293,6 +1294,11 @@ class BrowserView : public BrowserWindow
    // here because the band clips its own contents. See ArcOmniboxPanelView.
    raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
  

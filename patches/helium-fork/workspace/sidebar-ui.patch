@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/color/chrome_color_id.h
 ===================================================================
 --- src.orig/chrome/browser/ui/color/chrome_color_id.h
 +++ src/chrome/browser/ui/color/chrome_color_id.h
-@@ -1112,6 +1112,9 @@
+@@ -1113,6 +1113,9 @@
    /* Vertical tabstrip colors. */ \
    E_CPONLY(kColorVerticalTabStripShadow) \
    E_CPONLY(kColorVerticalTabPinnedOutline) \
@@ -34,7 +34,7 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
-@@ -14,6 +14,7 @@
+@@ -15,6 +15,7 @@
  #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
  #include "chrome/browser/ui/views/tabs/common/tab_view.h"
@@ -42,10 +42,10 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/gfx/geometry/rect.h"
  #include "ui/views/controls/scroll_view.h"
-@@ -50,6 +51,12 @@ PinnedTabContainerView::PinnedTabContain
-   node_destroyed_subscription_ = collection_node_->RegisterWillDestroyCallback(
-       base::BindOnce(&PinnedTabContainerView::ResetCollectionNode,
-                      base::Unretained(this)));
+@@ -69,6 +70,12 @@ PinnedTabContainerView::PinnedTabContain
+               base::Unretained(this)));
+     }
+   }
 +
 +  // helium-fork: the whole Arc sidebar (favorites grid, space header, pinned
 +  // rows) is one child view driven by WorkspaceService::entries(). It is
@@ -55,41 +55,65 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
  }
  
  PinnedTabContainerView::~PinnedTabContainerView() = default;
-@@ -60,125 +67,63 @@ views::ProposedLayout PinnedTabContainer
+@@ -83,24 +90,14 @@ views::ProposedLayout PinnedTabContainer
+ }
+ 
+ gfx::Size PinnedTabContainerView::GetMinimumSize() const {
+-  if (!collection_node_ || ShouldHidePinnedTabs() ||
+-      collection_node_->GetDirectChildren().empty()) {
+-    return gfx::Size();
+-  }
+-
+-  // The minimum size should be enough to show a row and a half, if needed.
+-  auto collapse_state = GetTabStripCollapseState();
+-  const int num_children = collection_node_->GetDirectChildren().size();
+-  const float min_rows = std::min(
+-      (collapse_state != tabs::VerticalTabStripCollapseState::kExpanded ? 1.5f
+-                                                                        : 1.0f),
+-      static_cast<float>(num_children));
+-  const int min_height =
+-      base::ClampCeil(GetLayoutConstant(LayoutConstant::kVerticalTabHeight) *
+-                      min_rows) +
+-      (num_children > 1 ? kTabPadding : 0);
++  // helium-fork: the sidebar decides its own floor. Asking it for a
++  // *preferred* size here would be wrong: with no width bound the grid plans
++  // one capsule per row, so a full Favorites grid would demand enough height
++  // to push Today off the strip.
++  const int workspace_height =
++      workspace_view_ ? workspace_view_->GetMinimumSize().height() : 0;
+   return gfx::Size(GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth),
+-                   min_height);
++                   workspace_height);
+ }
+ 
+ bool PinnedTabContainerView::IsDragging() const {
+@@ -126,7 +123,14 @@ bool PinnedTabContainerView::ShouldAnima
+ 
+ bool PinnedTabContainerView::ShouldSnapToTarget(
+     const views::View& child_view) const {
+-  return views::IsViewClass<SplitTabView>(&child_view);
++  // helium-fork: the sidebar is profile data and is already complete on the
++  // window's first frame -- nothing arrives in it, so nothing should animate
++  // in. Left to itself the animating layout manager treats it as an added
++  // child and, on this container's horizontal axis, grows it from zero width;
++  // every Favorites capsule's x and width scale up together and the row reads
++  // as sweeping in from the left each time a window opens.
++  return views::IsViewClass<SplitTabView>(&child_view) ||
++         &child_view == workspace_view_;
+ }
+ 
+ std::optional<BrowserRootView::DropIndex>
+@@ -339,106 +343,52 @@ views::ProposedLayout PinnedTabContainer
+ views::ProposedLayout PinnedTabContainerView::CalculateVerticalLayout(
+     const views::SizeBounds& size_bounds) const {
+   views::ProposedLayout layouts;
+-  const std::vector<views::View*> children =
+-      collection_node_ ? collection_node_->GetDirectChildren()
+-                       : std::vector<views::View*>();
+-
    int total_width = 0;
    int total_height = 0;
  
-+  const int min_child_width =
-+      GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
-+  const int row_width = size_bounds.width().is_bounded()
-+                            ? std::max(size_bounds.width().value(),
-+                                       min_child_width)
-+                            : min_child_width;
-+
-+  // helium-fork: the workspace sidebar owns the whole pinned region. It is
-+  // laid out from WorkspaceService::entries(), so it needs no children from
-+  // the tab collection at all.
-+  if (workspace_view_) {
-+    const int workspace_height =
-+        workspace_view_
-+            ->GetPreferredSize(views::SizeBounds(row_width, {}))
-+            .height();
-+    layouts.child_layouts.emplace_back(
-+        workspace_view_.get(), true,
-+        gfx::Rect(0, 0, row_width, workspace_height));
-+    total_width = row_width;
-+    total_height = workspace_height;
-+  }
-+
-+  // helium-fork: a natively pinned tab has no sidebar row of its own -- the
-+  // sidebar draws entries. WorkspaceTabController converts any such tab into
-+  // an entry and takes the pin back, but that round trip is posted, so lay
-+  // them out as ordinary rows for the frame or two they exist. Without this
-+  // they would be invisible in the meantime.
-   const std::vector<views::View*> children =
-       collection_node_ ? collection_node_->GetDirectChildren()
-                        : std::vector<views::View*>();
--
 -  int x = 0;
 -  int y = 0;
 -  int children_on_row = children.size();
@@ -136,6 +160,36 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 -
 -  int row_index = 0;
 -  for (auto* child : children) {
++  const int min_child_width =
++      GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
++  const int row_width = size_bounds.width().is_bounded()
++                            ? std::max(size_bounds.width().value(),
++                                       min_child_width)
++                            : min_child_width;
++
++  // helium-fork: the workspace sidebar owns the whole pinned region. It is
++  // laid out from WorkspaceService::entries(), so it needs no children from
++  // the tab collection at all.
++  if (workspace_view_) {
++    const int workspace_height =
++        workspace_view_
++            ->GetPreferredSize(views::SizeBounds(row_width, {}))
++            .height();
++    layouts.child_layouts.emplace_back(
++        workspace_view_.get(), true,
++        gfx::Rect(0, 0, row_width, workspace_height));
++    total_width = row_width;
++    total_height = workspace_height;
++  }
++
++  // helium-fork: a natively pinned tab has no sidebar row of its own -- the
++  // sidebar draws entries. WorkspaceTabController converts any such tab into
++  // an entry and takes the pin back, but that round trip is posted, so lay
++  // them out as ordinary rows for the frame or two they exist. Without this
++  // they would be invisible in the meantime.
++  const std::vector<views::View*> children =
++      collection_node_ ? collection_node_->GetDirectChildren()
++                       : std::vector<views::View*>();
 +  int y = total_height;
 +  for (views::View* child : children) {
 +    y += kTabPadding;
@@ -144,9 +198,10 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 -    bounds.set_width(child_width);
 -
 -    auto drag_data = GetVisualDataForDraggedView(*child);
--    const bool should_show_child = !(drag_data && drag_data->should_hide);
+-    const bool should_show_child =
+-        !(drag_data && drag_data->should_hide) && !ShouldHidePinnedTabs();
 -    if (!should_show_child) {
--      layouts.child_layouts.emplace_back(child, false, bounds);
+-      layouts.child_layouts.emplace_back(child, false, gfx::Rect());
 -      continue;
 -    }
 -
@@ -194,52 +249,6 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
    layouts.host_size =
        gfx::Size(size_bounds.width().value_or(total_width), total_height);
    return layouts;
- }
- 
- gfx::Size PinnedTabContainerView::GetMinimumSize() const {
--  if (!collection_node_) {
--    return gfx::Size();
--  }
--
--  // The minimum size should be enough to show a row and a half, if needed.
--  auto collapse_state = GetTabStripCollapseState();
--  const int num_children = collection_node_->GetDirectChildren().size();
--  const float min_rows = std::min(
--      (collapse_state != tabs::VerticalTabStripCollapseState::kExpanded ? 1.5f
--                                                                        : 1.0f),
--      static_cast<float>(num_children));
--  const int min_height =
--      base::ClampCeil(GetLayoutConstant(LayoutConstant::kVerticalTabHeight) *
--                      min_rows) +
--      (num_children > 1 ? kTabPadding : 0);
-+  // helium-fork: the sidebar decides its own floor. Asking it for a
-+  // *preferred* size here would be wrong: with no width bound the grid plans
-+  // one capsule per row, so a full Favorites grid would demand enough height
-+  // to push Today off the strip.
-+  const int workspace_height =
-+      workspace_view_ ? workspace_view_->GetMinimumSize().height() : 0;
-   return gfx::Size(GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth),
--                   min_height);
-+                   workspace_height);
- }
- 
- bool PinnedTabContainerView::IsDragging() const {
-@@ -204,7 +149,14 @@ bool PinnedTabContainerView::ShouldAnima
- 
- bool PinnedTabContainerView::ShouldSnapToTarget(
-     const views::View& child_view) const {
--  return views::IsViewClass<SplitTabView>(&child_view);
-+  // helium-fork: the sidebar is profile data and is already complete on the
-+  // window's first frame -- nothing arrives in it, so nothing should animate
-+  // in. Left to itself the animating layout manager treats it as an added
-+  // child and, on this container's horizontal axis, grows it from zero width;
-+  // every Favorites capsule's x and width scale up together and the row reads
-+  // as sweeping in from the left each time a window opens.
-+  return views::IsViewClass<SplitTabView>(&child_view) ||
-+         &child_view == workspace_view_;
- }
- 
- std::optional<BrowserRootView::DropIndex>
 Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
@@ -252,8 +261,8 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
  
  // The view class that represents the pinned tab region for the
  // tab strip. It manages the layout of all the pinned tabs and serves
-@@ -70,6 +71,22 @@ class PinnedTabContainerView
-   void ResetCollectionNode();
+@@ -84,6 +85,22 @@ class PinnedTabContainerView
+   bool ShouldHidePinnedTabs() const;
  
    raw_ptr<TabCollectionNode> collection_node_;
 +
@@ -279,7 +288,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -10,6 +10,8 @@
+@@ -12,6 +12,8 @@
  #include "chrome/browser/ui/browser_element_identifiers.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
@@ -288,7 +297,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -114,6 +116,10 @@ TabStripView::TabStripView(TabCollection
+@@ -182,6 +184,10 @@ TabStripView::TabStripView(TabCollection
        views::ScrollView::ScrollWithLayers::kEnabled));
    SetScrollViewProperties(pinned_tabs_scroll_view_);
  
@@ -299,67 +308,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    unpinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
        views::ScrollView::ScrollWithLayers::kEnabled));
    SetScrollViewProperties(unpinned_tabs_scroll_view_);
-@@ -144,8 +150,12 @@ views::ProposedLayout TabStripView::Calc
-   const int region_horizontal_padding =
-       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
- 
--  const int region_vertical_padding = GetLayoutConstant(
--      LayoutConstant::kVerticalTabStripCollapsedVerticalPadding);
-+  // helium-fork: the pinned/Today divider needs more breathing room than the
-+  // generic region padding gives it, or it reads as a hairline crammed
-+  // against the tabs instead of a section break. Kept local rather than
-+  // widening `kVerticalTabStripCollapsedVerticalPadding`, which the vertical
-+  // top container and the WebUI toolbar CSS also consume.
-+  static constexpr int kTabsSeparatorVerticalPadding = 12;
- 
-   int y = 0;
- 
-@@ -164,8 +174,14 @@ views::ProposedLayout TabStripView::Calc
-   int remaining_height = 0;
-   if (size_bounds.height().is_bounded()) {
-     remaining_height = size_bounds.height().value();
--    if (pinned_preferred_height != 0 && unpinned_preferred_height != 0) {
--      remaining_height -= region_vertical_padding;
-+    // helium-fork: the divider is permanent, so its space is reserved
-+    // whenever the pinned section is present -- matching where it is placed
-+    // below. Keying this off Today's contents as well would under-reserve the
-+    // moment Today emptied.
-+    if (pinned_preferred_height != 0) {
-+      remaining_height -= kTabsSeparatorVerticalPadding;
-+      remaining_height -= tabs_separator_->GetPreferredSize().height() +
-+                          kTabsSeparatorVerticalPadding;
-     }
-     // Clamp the remaining height to 0 if we have less space.
-     remaining_height = std::max(remaining_height, 0);
-@@ -194,10 +210,23 @@ views::ProposedLayout TabStripView::Calc
- 
-   if (pinned_container_bounds.height()) {
-     y += pinned_container_bounds.height();
--    // Add padding only if there are pinned and unpinned tabs.
--    if (unpinned_preferred_height != 0) {
--      y += region_vertical_padding;
--    }
-+    y += kTabsSeparatorVerticalPadding;
-+  }
-+
-+  // helium-fork: the divider is permanent -- it is drawn even with Today
-+  // empty. It is the only thing marking where the pinned section ends, and
-+  // without it an empty Today reads as "the sidebar is all there is".
-+  if (pinned_container_bounds.height() && size_bounds.width().is_bounded()) {
-+    gfx::Rect tabs_separator_bounds(
-+        region_horizontal_padding, y,
-+        size_bounds.width().value() - 2 * region_horizontal_padding,
-+        tabs_separator_->GetPreferredSize().height());
-+    layouts.child_layouts.emplace_back(tabs_separator_.get(), true,
-+                                       tabs_separator_bounds);
-+    y += tabs_separator_bounds.height() + kTabsSeparatorVerticalPadding;
-+  } else {
-+    layouts.child_layouts.emplace_back(tabs_separator_.get(), false,
-+                                       gfx::Rect());
-   }
- 
-   // Place the unpinned container using the entire available width, we do not
-@@ -333,6 +362,21 @@ void TabStripView::OnTabChanged(const ta
+@@ -315,6 +321,21 @@ void TabStripView::OnTabChanged(const ta
      }
    }
  
@@ -381,8 +330,8 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    TabCollectionNode* activated_node =
        collection_node_->GetNodeForHandle(active_tab->GetHandle());
    CHECK(activated_node);
-@@ -609,7 +653,10 @@ void TabStripView::DisableOverflowVisual
-   }
+@@ -717,7 +738,10 @@ gfx::Rect TabStripView::GetBoundsInScrol
+   return bounds;
  }
  
 -void TabStripView::UpdateColors() {}
@@ -397,7 +346,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.h
-@@ -80,6 +80,9 @@ class TabView : public views::View,
+@@ -82,6 +82,9 @@ class TabView : public views::View,
    SkPath GetPath() const;
  
    const TabCollectionNode* collection_node() const { return collection_node_; }
@@ -411,7 +360,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -12202,6 +12202,21 @@ Check your passwords anytime in <ph name
+@@ -12137,6 +12137,21 @@ Check your passwords anytime in <ph name
          <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
            Remove from favorites
          </message>
@@ -433,7 +382,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12339,6 +12354,21 @@ Check your passwords anytime in <ph name
+@@ -12274,6 +12289,21 @@ Check your passwords anytime in <ph name
          <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="In Title Case: The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
            Remove from Favorites
          </message>
@@ -524,10 +473,10 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
 +++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -61,6 +61,15 @@ source_set("impl") {
-     "tab_view.cc",
+@@ -67,6 +67,15 @@ source_set("impl") {
      "tab_view.h",
      "unpinned_tab_container_view.cc",
+     "unpinned_tab_container_view_layout.cc",
 +
 +    # helium-fork: the Arc-style workspace sidebar. These live in ":impl"
 +    # rather than ":common" because they need the complete WorkspaceService
@@ -540,7 +489,7 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
    ]
  
    deps = [
-@@ -68,6 +77,7 @@ source_set("impl") {
+@@ -74,6 +83,7 @@ source_set("impl") {
      "//chrome/browser/glic",
      "//chrome/browser/glic/browser_ui:glow",
      "//chrome/browser/glic/browser_ui:glow_controller",
@@ -562,17 +511,19 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
  #include "chrome/browser/ui/layout_constants.h"
 +#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/tabs/tab_style.h"
  #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
  #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
- #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
-@@ -28,6 +33,20 @@
- namespace {
- constexpr int kTabVerticalPadding = 2;
+@@ -110,6 +115,40 @@ UnpinnedTabContainerView::UnpinnedTabCon
  
+ UnpinnedTabContainerView::~UnpinnedTabContainerView() = default;
+ 
++// static
 +// helium-fork: true when |child| is a tab the workspace sidebar already
 +// draws as one of its entries. Such a tab is a real, ordinary tab -- it is
-+// simply presented in the sidebar instead of in Today.
-+bool IsWorkspaceEntryTab(
++// simply presented in the sidebar instead of in Today. Static so that
++// UnpinnedTabContainerViewLayout (a friend) shares the one definition.
++bool UnpinnedTabContainerView::IsWorkspaceEntryTab(
 +    const helium_workspace::WorkspaceService* service,
 +    const views::View* child) {
 +  if (!service) {
@@ -583,58 +534,6 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +  return tab && service->IsWorkspaceTab(tab->GetHandle());
 +}
 +
- // The following are percentages used to determine the amount that dragged
- // tabs must be peeking into/out of a tab group view in order for the handling
- // drag container to change.
-@@ -116,9 +135,19 @@ views::ProposedLayout UnpinnedTabContain
-       collection_node_ ? collection_node_->GetDirectChildren()
-                        : std::vector<views::View*>();
- 
-+  // helium-fork: a tab bound to a workspace entry is drawn by the sidebar, not
-+  // here -- otherwise clicking an entry would show the same page twice.
-+  const helium_workspace::WorkspaceService* workspace_service =
-+      GetWorkspaceService();
-+
-   // Layout children in order. Children will have their preferred height and
-   // fill available width.
-+  int laid_out_count = 0;
-   for (auto* child : children) {
-+    if (IsWorkspaceEntryTab(workspace_service, child)) {
-+      layouts.child_layouts.emplace_back(child, false, gfx::Rect());
-+      continue;
-+    }
-     // The leading inset should not be applied for tab groups when the tab strip
-     // is collapsed since the group color line is drawn in that space.
-     int x =
-@@ -144,12 +173,22 @@ views::ProposedLayout UnpinnedTabContain
-       bounds.set_width(size_bounds.width().value() - bounds.x() -
-                        horizontal_padding);
-     }
--    layouts.child_layouts.emplace_back(child, child->GetVisible(), bounds);
-+    // helium-fork: `true`, not `child->GetVisible()`. The entry filter above
-+    // really does hide the view (LayoutManagerBase applies ChildLayout::visible
-+    // via SetViewVisibility), so a tab that stops being an entry -- the entry
-+    // was removed, or its tab was unbound -- would read back as invisible and
-+    // stay that way, while still being given a full row of height here. That
-+    // is a phantom blank row. Anything laid out at real bounds must be drawn.
-+    layouts.child_layouts.emplace_back(child, true, bounds);
-     height += bounds.height() + kTabVerticalPadding;
-     width = std::max(width, bounds.width() + bounds.x());
-+    ++laid_out_count;
-   }
-   // Remove excess padding if needed.
--  if (!children.empty()) {
-+  // helium-fork: keyed off what was actually laid out, not off `children` --
-+  // a Today section holding nothing but entry tabs lays out nothing, and
-+  // subtracting the padding anyway would leave a negative height.
-+  if (laid_out_count > 0) {
-     height -= kTabVerticalPadding;
-   }
- 
-@@ -169,13 +208,40 @@ views::ProposedLayout UnpinnedTabContain
-   return layouts;
- }
- 
 +const helium_workspace::WorkspaceService*
 +UnpinnedTabContainerView::GetWorkspaceService() const {
 +  if (!GetWidget()) {
@@ -650,33 +549,16 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +    return nullptr;
 +  }
 +  return helium_workspace::WorkspaceServiceFactory::GetForProfile(
-+      browser_view->browser()->profile());
++      browser_view->browser()->GetProfile());
 +}
 +
- gfx::Size UnpinnedTabContainerView::GetMinimumSize() const {
-   if (!collection_node_) {
-     return gfx::Size();
-   }
  
-   // The minimum size should be enough to show a tab and a half, if needed.
--  const int num_children = collection_node_->GetDirectChildren().size();
-+  // helium-fork: entry tabs are not drawn here, so they must not reserve
-+  // height either -- a Today section holding only entry tabs is empty.
-+  const helium_workspace::WorkspaceService* workspace_service =
-+      GetWorkspaceService();
-+  int num_children = 0;
-+  for (views::View* child : collection_node_->GetDirectChildren()) {
-+    if (!IsWorkspaceEntryTab(workspace_service, child)) {
-+      ++num_children;
-+    }
-+  }
-   const int min_height =
-       base::ClampCeil(GetLayoutConstant(LayoutConstant::kVerticalTabHeight) *
-                       std::min(1.5f, static_cast<float>(num_children))) +
-@@ -189,9 +255,16 @@ UnpinnedTabContainerView::GetLinkDropInd
-   if (!collection_node_) {
-     return std::nullopt;
-   }
+ std::optional<BrowserRootView::DropIndex>
+ UnpinnedTabContainerView::GetLinkDropIndex(const gfx::Point& loc_in_container) {
+@@ -119,9 +158,16 @@ UnpinnedTabContainerView::GetLinkDropInd
+   const bool is_horizontal =
+       collection_node_->orientation() == TabStripOrientation::kHorizontal;
+ 
 +  const helium_workspace::WorkspaceService* workspace_service =
 +      GetWorkspaceService();
    for (auto& child_node : collection_node_->children()) {
@@ -687,9 +569,9 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +    if (IsWorkspaceEntryTab(workspace_service, view)) {
 +      continue;
 +    }
-     if (loc_in_container.y() >= view->bounds().bottom()) {
-       continue;
-     }
+     if (is_horizontal) {
+       if (loc_in_container.x() >= view->bounds().right()) {
+         continue;
 Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
 ===================================================================
 --- /dev/null
@@ -1890,17 +1772,18 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 +++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
-@@ -17,6 +17,9 @@
- class TabCollectionNode;
+@@ -17,6 +17,10 @@ class TabCollectionNode;
  class TabGroupView;
+ class UnpinnedTabContainerViewLayout;
  
 +namespace helium_workspace {
 +class WorkspaceService;
 +}  // namespace helium_workspace
- 
++
  // The view class that represents the unpinned tab region for the
- // tab strip. It manages the layout of the all the unpinned tabs and
-@@ -56,6 +59,10 @@ class UnpinnedTabContainerView
+ // tab strip. It hosts all the unpinned tabs and serves as the drag target
+ // for unpinned tabs which aren't grouped. Layout is managed by
+@@ -49,6 +53,16 @@ class UnpinnedTabContainerView
        const gfx::Point& point_in_local_coords);
  
   private:
@@ -1908,14 +1791,20 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 +  // windows, or before this view has a widget). Tabs bound to an entry are
 +  // drawn by the sidebar and skipped here.
 +  const helium_workspace::WorkspaceService* GetWorkspaceService() const;
- 
++
++  // helium-fork: shared with UnpinnedTabContainerViewLayout (a friend).
++  static bool IsWorkspaceEntryTab(
++      const helium_workspace::WorkspaceService* service,
++      const views::View* child);
++
    // DraggedTabsContainer:
    views::ScrollView* GetScrollViewForContainer() const override;
+   void UpdateTargetLayoutForDrag(
 Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
-@@ -1062,7 +1062,17 @@ void TabView::UpdateTabData(const tabs::
+@@ -1106,7 +1106,17 @@ void TabView::UpdateTabData(const tabs::
      UpdateAccessibleName();
    }
  
@@ -1934,7 +1823,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
    icon_->SetActiveState(tab->IsActivated());
    icon_->SetAttention(TabIcon::AttentionType::kBlockedWebContents,
                        !tab->IsActivated() && tab->IsBlocked());
-@@ -1076,9 +1086,14 @@ void TabView::UpdateTabData(const tabs::
+@@ -1136,9 +1146,14 @@ void TabView::SetDataForTesting(tabs::Ta
  void TabView::UpdateTitle(std::u16string title,
                            bool should_render_loading_title) {
    if (should_render_loading_title) {
@@ -2002,3 +1891,112 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_favicon.h
 +}  // namespace helium_workspace
 +
 +#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_FAVICON_H_
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
+@@ -125,8 +125,14 @@ views::ProposedLayout TabStripViewLayout
+   const int region_horizontal_padding =
+       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
+ 
+-  const int region_vertical_padding = GetLayoutConstant(
+-      LayoutConstant::kVerticalTabStripCollapsedVerticalPadding);
++  // helium-fork: the pinned/Today divider needs more breathing room than the
++  // generic region padding gives it, or it reads as a hairline crammed
++  // against the tabs instead of a section break. Kept local rather than
++  // widening `kVerticalTabStripCollapsedVerticalPadding`, which the vertical
++  // top container and the WebUI toolbar CSS also consume.
++  static constexpr int kTabsSeparatorVerticalPadding = 12;
++
++  views::Separator* tabs_separator = tab_strip_view->GetTabsSeparator();
+ 
+   int y = 0;
+ 
+@@ -145,8 +151,14 @@ views::ProposedLayout TabStripViewLayout
+   int remaining_height = 0;
+   if (size_bounds.height().is_bounded()) {
+     remaining_height = size_bounds.height().value();
+-    if (pinned_preferred_height != 0 && unpinned_preferred_height != 0) {
+-      remaining_height -= region_vertical_padding;
++    // helium-fork: the divider is permanent, so its space is reserved
++    // whenever the pinned section is present -- matching where it is placed
++    // below. Keying this off Today's contents as well would under-reserve the
++    // moment Today emptied.
++    if (pinned_preferred_height != 0) {
++      remaining_height -= kTabsSeparatorVerticalPadding;
++      remaining_height -= tabs_separator->GetPreferredSize().height() +
++                          kTabsSeparatorVerticalPadding;
+     }
+     // Clamp the remaining height to 0 if we have less space.
+     remaining_height = std::max(remaining_height, 0);
+@@ -175,10 +187,22 @@ views::ProposedLayout TabStripViewLayout
+ 
+   if (pinned_container_bounds.height()) {
+     y += pinned_container_bounds.height();
+-    // Add padding only if there are pinned and unpinned tabs.
+-    if (unpinned_preferred_height != 0) {
+-      y += region_vertical_padding;
+-    }
++    y += kTabsSeparatorVerticalPadding;
++  }
++
++  // helium-fork: the divider is permanent -- it is drawn even with Today
++  // empty. It is the only thing marking where the pinned section ends, and
++  // without it an empty Today reads as "the sidebar is all there is".
++  if (pinned_container_bounds.height() && size_bounds.width().is_bounded()) {
++    gfx::Rect tabs_separator_bounds(
++        region_horizontal_padding, y,
++        size_bounds.width().value() - 2 * region_horizontal_padding,
++        tabs_separator->GetPreferredSize().height());
++    layouts.child_layouts.emplace_back(tabs_separator, true,
++                                       tabs_separator_bounds);
++    y += tabs_separator_bounds.height() + kTabsSeparatorVerticalPadding;
++  } else {
++    layouts.child_layouts.emplace_back(tabs_separator, false, gfx::Rect());
+   }
+ 
+   // Place the unpinned container using the entire available width, we do not
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
+@@ -166,7 +166,20 @@ views::ProposedLayout UnpinnedTabContain
+   const int horizontal_padding =
+       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
+ 
++  // helium-fork: a tab bound to a workspace entry is drawn by the sidebar, not
++  // here -- otherwise clicking an entry would show the same page twice. The
++  // zero rect really hides it (LayoutManagerBase applies ChildLayout::visible),
++  // and upstream's `height > 0` guard below already keeps an all-entry Today
++  // from going negative.
++  const helium_workspace::WorkspaceService* workspace_service =
++      tab_container_view->GetWorkspaceService();
++
+   for (auto* child : children) {
++    if (UnpinnedTabContainerView::IsWorkspaceEntryTab(workspace_service,
++                                                      child)) {
++      layouts.child_layouts.emplace_back(child, false, gfx::Rect());
++      continue;
++    }
+     int x =
+         views::AsViewClass<TabGroupView>(child) &&
+                 collapse_state != tabs::VerticalTabStripCollapseState::kExpanded
+@@ -259,9 +272,18 @@ gfx::Size UnpinnedTabContainerViewLayout
+   std::optional<tab_groups::TabGroupId> focused_group_id =
+       GetFocusedGroupId(tab_container_view);
+ 
++  // helium-fork: entry tabs are not drawn here, so they must not reserve
++  // height either -- a Today section holding only entry tabs is empty.
++  const helium_workspace::WorkspaceService* workspace_service =
++      tab_container_view->GetWorkspaceService();
++
+   int num_children = 0;
+   for (const auto* child :
+        tab_container_view->collection_node_->GetDirectChildren()) {
++    if (UnpinnedTabContainerView::IsWorkspaceEntryTab(workspace_service,
++                                                      child)) {
++      continue;
++    }
+     bool should_show = true;
+     if (focused_group_id.has_value()) {
+       std::optional<tab_groups::TabGroupId> group_id =

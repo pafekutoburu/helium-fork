@@ -45,7 +45,7 @@ Index: src/chrome/browser/extensions/api/settings_private/prefs_util.cc
  #include "chrome/browser/extensions/api/settings_private/prefs_util.h"
  
  #include <memory>
-@@ -231,6 +232,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+@@ -240,6 +241,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kHeliumNativeFrameMaterials] =
        settings_api::PrefType::kBoolean;
@@ -84,7 +84,7 @@ Index: src/chrome/browser/resources/settings/appearance_page/appearance_behavior
 ===================================================================
 --- src.orig/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.ts
 +++ src/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.ts
-@@ -2,10 +2,13 @@
+@@ -2,9 +2,12 @@
  // You can use, redistribute, and/or modify this source code under
  // the terms of the GPL-3.0 license that can be found in the LICENSE file.
  
@@ -92,13 +92,12 @@ Index: src/chrome/browser/resources/settings/appearance_page/appearance_behavior
  import '../controls/settings_toggle_button.js';
  import '../settings_page/settings_section.js';
  
- import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 +import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 +import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
  import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
  
  import {getTemplate} from './appearance_behavior_page.html.js';
-@@ -21,6 +24,33 @@ export class AppearanceBehaviorPageEleme
+@@ -17,6 +20,33 @@ export class AppearanceBehaviorPageEleme
    static get template() {
      return getTemplate();
    }
@@ -136,7 +135,7 @@ Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.
 ===================================================================
 --- src.orig/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -592,6 +592,15 @@ void AddAppearanceStrings(content::WebUI
+@@ -619,6 +619,15 @@ void AddAppearanceStrings(content::WebUI
         IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS},
        {"sidebarAutoHideExtensionsDescription",
         IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS_DESCRIPTION},

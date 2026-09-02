@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -378,6 +378,7 @@ static_library("ui") {
+@@ -406,6 +406,7 @@ static_library("ui") {
      "helium/arc_band_tint_store.h",
      "helium/arc_caption_opacity.h",
      "helium/arc_card_layout.h",
@@ -10,7 +10,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/helium_layout_state_controller.cc",
      "helium/helium_layout_state_controller.h",
      "helium/helium_tab_switcher_controller.cc",
-@@ -6018,6 +6019,8 @@ test("helium_workspace_unittests") {
+@@ -5804,6 +5805,8 @@ test("helium_workspace_unittests") {
      "helium/arc_caption_opacity_unittest.cc",
      "helium/arc_card_layout.h",
      "helium/arc_card_layout_unittest.cc",
@@ -189,15 +189,15 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -18,6 +18,7 @@
+@@ -16,6 +16,7 @@
+ #include "base/functional/bind.h"
  #include "base/functional/callback_helpers.h"
- #include "base/i18n/rtl.h"
  #include "base/metrics/field_trial_params.h"
 +#include "base/strings/strcat.h"
- #include "base/strings/utf_string_conversions.h"
  #include "base/trace_event/trace_event.h"
- #include "base/trace_event/typed_macros.h"
-@@ -48,6 +49,7 @@
+ #include "build/build_config.h"
+ #include "chrome/app/vector_icons/vector_icons.h"
+@@ -39,6 +40,7 @@
  #include "chrome/browser/ui/color/chrome_color_id.h"
  #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
  #include "chrome/browser/ui/helium/arc_band_colors.h"
@@ -205,7 +205,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
-@@ -599,6 +601,16 @@ void LocationBarView::Init() {
+@@ -563,6 +565,16 @@ void LocationBarView::Init() {
    ai_mode_hint_label->SetVisible(false);
    ai_mode_hint_label_ = AddChildView(std::move(ai_mode_hint_label));
  
@@ -222,7 +222,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    // Initialize the location entry. We do this to avoid a black flash which is
    // visible when the location entry has just been initialized.
    Update(nullptr);
-@@ -1116,14 +1128,29 @@ void LocationBarView::Layout(PassKey) {
+@@ -1083,14 +1095,29 @@ void LocationBarView::Layout(PassKey) {
        !ime_inline_autocomplete_view_->GetVisible();
    if (arc_minimal_unfocused_field) {
      // Dia's forgiveness margin: clicks and the I-beam extend this far past
@@ -256,7 +256,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
      // Short circuit the below logic when the additional views aren't visible.
      // This is necessary as resizing the omnibox can throw off it's scroll,
      // i.e., which chars are visible when its text overflows its width.
-@@ -1225,6 +1252,13 @@ void LocationBarView::RefreshPushedIconC
+@@ -1192,6 +1219,13 @@ void LocationBarView::RefreshPushedIconC
    for (ContentSettingImageView* image_view : content_setting_views_) {
      image_view->SetIconColor(icon_color);
    }
@@ -270,7 +270,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  }
  
  void LocationBarView::ChildPreferredSizeChanged(views::View* child) {
-@@ -1266,6 +1300,11 @@ void LocationBarView::Update(WebContents
+@@ -1230,6 +1264,11 @@ void LocationBarView::Update(WebContents
    RefreshPageActionContainerViewAndIconsVisibility(
        /*should_hide_page_actions=*/ShouldHidePageActionIcons());
  
@@ -282,7 +282,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    OnChanged();  // NOTE: Triggers layout.
  
    // A permission prompt may be suspended due to an invalid state (empty or
-@@ -1456,6 +1495,42 @@ void LocationBarView::UpdateArcMinimalDe
+@@ -1420,6 +1459,42 @@ void LocationBarView::UpdateArcMinimalDe
    InvalidateLayout();
  }
  
@@ -325,7 +325,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  double LocationBarView::GetArcRevealAmount() const {
    if (!ShouldMinimizeArcChrome()) {
      return 1.0;
-@@ -2401,6 +2476,11 @@ void LocationBarView::OnChanged() {
+@@ -2379,6 +2454,11 @@ void LocationBarView::OnChanged() {
        !omnibox_view_->GetText().empty() &&
        IsVirtualKeyboardVisible(GetWidget()));
  
@@ -349,7 +349,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
  #include "services/device/public/cpp/geolocation/buildflags.h"
  #include "third_party/metrics_proto/omnibox_event.pb.h"
  #include "third_party/skia/include/core/SkColor.h"
-@@ -107,7 +108,10 @@ class LocationBarView
+@@ -122,7 +123,10 @@ class LocationBarView
        public device::GeolocationSystemPermissionManager::PermissionObserver,
  #endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
        public PageActionIconView::Delegate,
@@ -361,7 +361,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    METADATA_HEADER(LocationBarView, views::View)
  
   public:
-@@ -284,6 +288,12 @@ class LocationBarView
+@@ -298,6 +302,12 @@ class LocationBarView
    // changes which decorations lay out -- ask for a relayout, but only when it
    // actually changed.
    void UpdateArcMinimalDecorations();
@@ -374,7 +374,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    // helium-fork: the reveal's single curve. 0 at rest, 1 revealed, the hover
    // tween in between -- every part of the reveal is a function of this one
    // value, so the parts cannot come and go at different times.
-@@ -633,6 +643,13 @@ class LocationBarView
+@@ -653,6 +663,13 @@ class LocationBarView
    // feature flag is disabled.
    raw_ptr<views::Label> omnibox_additional_text_view_ = nullptr;
  

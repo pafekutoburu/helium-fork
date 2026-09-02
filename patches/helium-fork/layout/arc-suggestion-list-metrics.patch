@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/color/chrome_color_id.h
 ===================================================================
 --- src.orig/chrome/browser/ui/color/chrome_color_id.h
 +++ src/chrome/browser/ui/color/chrome_color_id.h
-@@ -428,6 +428,14 @@
+@@ -438,6 +438,14 @@
    /* Omnibox colors. */ \
    E_CPONLY(kColorOmniboxActionIcon) \
    E_CPONLY(kColorOmniboxActionIconHover) \
@@ -100,15 +100,15 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
-@@ -9,6 +9,7 @@
+@@ -8,6 +8,7 @@
+ #include <optional>
  
- #include "base/metrics/field_trial_params.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
 +#include "chrome/browser/ui/helium/arc_composer.h"
- #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/omnibox/omnibox_theme.h"
- #include "chrome/browser/ui/views/chrome_layout_provider.h"
-@@ -598,7 +599,24 @@ int OmniboxMatchCellView::GetImageIndent
+ #include "chrome/browser/ui/views/chrome_typography.h"
+ #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
+@@ -589,7 +590,24 @@ int OmniboxMatchCellView::GetImageIndent
    // b) Entities, answers, and icons continue to be center-aligned.
    // c) Regardless of the state of those other features and their widths.
    // This applies to both touch-UI and non-touch-UI.
@@ -134,7 +134,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
  
    indent += omnibox_feature_configs::AdjustOmniboxIndent()
                  .Get()
-@@ -608,7 +626,11 @@ int OmniboxMatchCellView::GetImageIndent
+@@ -599,7 +617,11 @@ int OmniboxMatchCellView::GetImageIndent
  }
  
  int OmniboxMatchCellView::GetTextIndent() const {
@@ -177,7 +177,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_result_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_result_view.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_result_view.cc
-@@ -367,13 +367,27 @@ void OmniboxResultView::SetMatch(const A
+@@ -353,13 +353,27 @@ void OmniboxResultView::SetMatch(const A
    // that looks better when there's not room for both. But in the normal case,
    // we want to scale the suggestion text to zero since an elided suggestion
    // still provides useful information.
@@ -210,15 +210,15 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_row_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_row_view.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_row_view.cc
-@@ -6,6 +6,7 @@
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/views/omnibox/omnibox_row_view.h"
  
  #include "base/strings/string_number_conversions.h"
- #include "chrome/browser/ui/color/chrome_color_id.h"
 +#include "chrome/browser/ui/helium/arc_composer.h"
- #include "chrome/browser/ui/omnibox/omnibox_controller.h"
- #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
  #include "chrome/browser/ui/omnibox/omnibox_theme.h"
-@@ -106,7 +107,20 @@ views::View* OmniboxRowView::GetActiveAu
+ #include "chrome/browser/ui/views/omnibox/omnibox_header_view.h"
+ #include "chrome/browser/ui/views/omnibox/omnibox_match_cell_view.h"
+@@ -99,7 +100,20 @@ views::View* OmniboxRowView::GetActiveAu
  }
  
  gfx::Insets OmniboxRowView::GetInsets() const {
@@ -244,7 +244,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.cc
-@@ -195,7 +195,18 @@ class OmniboxSuggestionButtonRowLayout :
+@@ -191,7 +191,18 @@ class OmniboxSuggestionButtonRowLayout :
      // allowed to expand.
      int total_width_used = GetMinimumSize(host).width();
  
@@ -264,7 +264,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.cc
      int current_x = row_insets_.left();
      bool allow_expansion = true;
      // This loop positions the visible children one by one, checking to see if
-@@ -358,16 +369,20 @@ class OmniboxSuggestionRowButton : publi
+@@ -354,16 +365,20 @@ class OmniboxSuggestionRowButton : publi
        SetImageModel(views::Button::STATE_NORMAL,
                      ui::ImageModel::FromImage(image_));
      } else {
@@ -294,7 +294,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_suggestion_button_row_view.cc
      ConfigureInkDropForRefresh2023(
          this,
          /*hover_color_id=*/
-@@ -376,21 +391,52 @@ class OmniboxSuggestionRowButton : publi
+@@ -372,21 +387,52 @@ class OmniboxSuggestionRowButton : publi
          /*ripple_color_id=*/
          selected ? kColorOmniboxResultsButtonInkDropSelectedRowSelected
                   : kColorOmniboxResultsButtonInkDropSelectedRowHovered);

@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -4023,6 +4023,8 @@ static_library("ui") {
+@@ -3949,6 +3949,8 @@ static_library("ui") {
        # helium-fork: the Arc card's outline.
        "views/frame/arc_card_outline_view.cc",
        "views/frame/arc_card_outline_view.h",
@@ -52,7 +52,7 @@ Index: src/chrome/browser/ui/location_bar/location_bar.h
    };
  
    explicit LocationBar(CommandUpdater* command_updater);
-@@ -227,6 +233,8 @@ class LocationBar {
+@@ -235,6 +241,8 @@ class LocationBar {
    virtual ~LocationBar();
  
    void NotifyBoundsChanged();
@@ -288,7 +288,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -170,6 +170,7 @@
+@@ -174,6 +174,7 @@
  #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
  #include "chrome/browser/ui/views/frame/scrim_view.h"
  #include "chrome/browser/ui/views/frame/arc_card_outline_view.h"
@@ -296,7 +296,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
  #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
  #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
-@@ -1127,6 +1128,13 @@ BrowserView::BrowserView(Browser* browse
+@@ -1113,6 +1114,13 @@ BrowserView::BrowserView(Browser* browse
    // colors, and there is no color provider until this view is in a widget.
    arc_card_shadow_->SetVisible(false);
  
@@ -310,7 +310,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // InfoBarContainer needs to be added as a child here for drop-shadow, but
    // needs to come after toolbar in focus order (see EnsureFocusOrder()).
    infobar_container_ =
-@@ -1297,12 +1305,20 @@ BrowserView::~BrowserView() {
+@@ -1286,12 +1294,20 @@ BrowserView::~BrowserView() {
    // child views and it is an observer for avatar toolbar button if any.
    autofill_bubble_handler_.reset();
  
@@ -331,7 +331,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    top_container_ = nullptr;
    web_app_frame_toolbar_ = nullptr;
    web_app_window_title_ = nullptr;
-@@ -6079,6 +6095,19 @@ void BrowserView::Layout(PassKey) {
+@@ -6150,6 +6166,19 @@ void BrowserView::Layout(PassKey) {
  
    LayoutSuperclass<views::View>(this);
  
@@ -351,7 +351,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // TODO(jamescook): Why was this in the middle of layout code?
    toolbar_->location_bar()->UpdateFocusBehavior(IsToolbarVisible());
    GetFrameView()->UpdateMinimumSize();
-@@ -6216,6 +6245,12 @@ void BrowserView::AddedToWidget() {
+@@ -6294,6 +6323,12 @@ void BrowserView::AddedToWidget() {
  
    toolbar_->Init();
  
@@ -368,15 +368,15 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -94,6 +94,7 @@ class MultiContentsView;
- class ProjectsPanelView;
+@@ -95,6 +95,7 @@ class MultiContentsView;
+ class OrganizerPanelView;
  class ScrimView;
  class ArcCardOutlineView;
 +class ArcOmniboxPanelView;
  class ShadowFrameView;
  class SidePanel;
  class TabCyclingEventHandler;
-@@ -1286,6 +1287,10 @@ class BrowserView : public BrowserWindow
+@@ -1279,6 +1280,10 @@ class BrowserView : public BrowserWindow
    raw_ptr<ArcCardOutlineView> arc_card_outline_ = nullptr;
    raw_ptr<ShadowFrameView> arc_card_shadow_ = nullptr;
  
@@ -391,7 +391,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -2424,6 +2424,14 @@ void LocationBarView::OnPopupStateChange
+@@ -2402,6 +2402,14 @@ void LocationBarView::OnPopupStateChange
      views::FocusRing::Get(this)->Refresh();
    }
  
@@ -406,19 +406,19 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    // Notify accessibility that the popup controls changed.
    omnibox_view_->NotifyAccessibilityEventDeprecated(
        ax::mojom::Event::kControlsChanged, true);
-@@ -2558,6 +2566,10 @@ void LocationBarView::OnOmniboxFocused()
-   // The AI mode page action icon view should only be visible when the omnibox
+@@ -2536,6 +2544,10 @@ void LocationBarView::OnOmniboxFocused()
+   // The AI mode page action should only be visible when the omnibox
    // is focused, so if there is a change in focus, refresh the icon.
-   RefreshAiModePageActionIconView();
+   RefreshAiModePageAction();
 +
 +  // helium-fork: the edit-state panel is drawn outside the band (which clips
 +  // its own contents), so it has to be told.
 +  NotifyEditStateChanged();
  }
  
- void LocationBarView::OpenOmniboxPopup() {
-@@ -2583,6 +2595,9 @@ void LocationBarView::OnOmniboxBlurred()
-   RefreshAiModePageActionIconView();
+ void LocationBarView::OpenOmniboxPopup(bool query_zps) {
+@@ -2561,6 +2573,9 @@ void LocationBarView::OnOmniboxBlurred()
+   RefreshAiModePageAction();
  
    location_icon_view_->Update(false, false);
 +

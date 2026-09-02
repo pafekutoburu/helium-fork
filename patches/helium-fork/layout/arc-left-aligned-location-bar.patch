@@ -1,27 +1,8 @@
-Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.html
-===================================================================
---- src.orig/chrome/browser/resources/settings/appearance_page/appearance_page.html
-+++ src/chrome/browser/resources/settings/appearance_page/appearance_page.html
-@@ -115,10 +115,10 @@
-               pref="{{prefs.helium.browser.vertical_right_aligned}}"
-               label="$i18n{tabStripRightAlign}">
-           </settings-toggle-button>
--          <settings-toggle-button class="hr"
--              pref="{{prefs.helium.browser.centered_location_bar}}"
--              label="$i18n{centeredLocationBar}">
--          </settings-toggle-button>
-+          <!-- helium-fork r8.3: the centered address bar option is gone. The
-+               Arc shell has one placement and it is left (user 2026-08-21);
-+               the pref stays registered but nothing reads it, so leaving the
-+               toggle here would be a switch that does nothing. -->
-           <settings-toggle-button class="hr"
-               pref="{{prefs.helium.browser.minimal_location_bar}}"
-               label="$i18n{minimalLocationBar}">
 Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
-@@ -257,11 +257,6 @@ OmniboxViewViews::OmniboxViewViews(bool
+@@ -245,11 +245,6 @@ OmniboxViewViews::OmniboxViewViews(bool
      pref_change_registrar_.Add(
          prefs::kHeliumMinimalLocationBar,
          base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
@@ -33,7 +14,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
      pref_change_registrar_.Add(
          omnibox::kPreventUrlElisionsInOmnibox,
          base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
-@@ -939,22 +934,22 @@ void OmniboxViewViews::UpdateAccessibleT
+@@ -895,22 +890,22 @@ void OmniboxViewViews::UpdateAccessibleT
  }
  
  void OmniboxViewViews::UpdateSteadyStateTextAlignment() {
@@ -76,7 +57,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -246,7 +246,7 @@ void SetRefreshMargins(views::View* butt
+@@ -248,7 +248,7 @@ void SetRefreshMargins(views::View* butt
                                    : kBrowserAppMenuRefreshCollapsedMargin));
  }
  
@@ -85,7 +66,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  
  struct CenteredLocationBarStep {
    int min_toolbar_width;
-@@ -259,7 +259,9 @@ constexpr CenteredLocationBarStep kCente
+@@ -261,7 +261,9 @@ constexpr CenteredLocationBarStep kCente
      {600, 5},
  };
  
@@ -96,7 +77,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    for (const auto& step : kCenteredLocationBarSteps) {
      if (toolbar_width >= step.min_toolbar_width) {
        return toolbar_width * step.toolbar_width_reduction_percent / 100;
-@@ -2872,40 +2874,31 @@ void ToolbarView::OnLocationBarCenteredC
+@@ -2907,40 +2909,31 @@ void ToolbarView::OnLocationBarCenteredC
  
  gfx::Rect ToolbarView::GetCenteredLocationBarBounds(gfx::Rect bounds,
                                                      int toolbar_width) const {
@@ -159,3 +140,22 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  void ToolbarView::OnTouchUiChanged() {
    if (display_mode_ == DisplayMode::kNormal) {
      // Update the internal margins for touch layout.
+Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
+===================================================================
+--- src.orig/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
++++ src/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
+@@ -83,10 +83,10 @@ export function getHtml(this: SettingsAp
+           pref-key="helium.browser.vertical_right_aligned"
+           label="$i18n{tabStripRightAlign}">
+       </settings-toggle-button>
+-      <settings-toggle-button class="hr"
+-          pref-key="helium.browser.centered_location_bar"
+-          label="$i18n{centeredLocationBar}">
+-      </settings-toggle-button>
++      <!-- helium-fork r8.3: the centered address bar option is gone. The
++           Arc shell has one placement and it is left (user 2026-08-21);
++           the pref stays registered but nothing reads it, so leaving the
++           toggle here would be a switch that does nothing. -->
+       <settings-toggle-button class="hr"
+           pref-key="helium.browser.minimal_location_bar"
+           label="$i18n{minimalLocationBar}">

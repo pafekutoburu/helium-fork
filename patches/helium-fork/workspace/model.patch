@@ -2,7 +2,7 @@ Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 ===================================================================
 --- src.orig/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -651,6 +651,7 @@
+@@ -664,6 +664,7 @@
  #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
  #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_service_factory.h"
  #endif
@@ -10,7 +10,7 @@ Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
  
  #if BUILDFLAG(USE_NSS_CERTS)
  #include "chrome/browser/net/nss_service_factory.h"
-@@ -845,6 +846,7 @@ void ChromeBrowserMainExtraPartsProfiles
+@@ -857,6 +858,7 @@ void ChromeBrowserMainExtraPartsProfiles
  #if defined(TOOLKIT_VIEWS)
    browser_shortcuts::BrowserShortcutServiceFactory::GetInstance();
  #endif
@@ -30,7 +30,7 @@ Index: src/chrome/browser/ui/BUILD.gn
  import("//components/compose/features.gni")
  import("//components/enterprise/buildflags/buildflags.gni")
  import("//components/lens/features.gni")
-@@ -375,8 +376,15 @@ static_library("ui") {
+@@ -403,8 +404,15 @@ static_library("ui") {
      "helium/helium_layout_state_controller.h",
      "helium/helium_tab_switcher_controller.cc",
      "helium/helium_tab_switcher_controller.h",
@@ -46,9 +46,9 @@ Index: src/chrome/browser/ui/BUILD.gn
      "idle_bubble.h",
      "managed_ui.cc",
      "managed_ui.h",
-@@ -5977,3 +5985,45 @@ if (enable_dice_support) {
-     deps = [ "//base" ]
-   }
+@@ -5763,3 +5771,45 @@ source_set("storage_pressure_bubble") {
+   public = [ "storage_pressure_bubble.h" ]
+   public_deps = [ "//url" ]
  }
 +
 +# helium-fork: standalone workspace unit tests. The full unit_tests target is
@@ -1035,52 +1035,236 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_grid_math.h
 +#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_GRID_MATH_H_
 Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
 ===================================================================
---- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+--- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
-@@ -7,10 +7,12 @@
- #include <memory>
- #include <string>
- 
+@@ -0,0 +1,230 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++
++#include <memory>
++#include <string>
++
 +#include "base/strings/string_number_conversions.h"
 +#include "base/test/task_environment.h"
- #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
- #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
- #include "chrome/common/pref_names.h"
--#include "components/prefs/testing_pref_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
++#include "chrome/common/pref_names.h"
 +#include "components/sync_preferences/testing_pref_service_syncable.h"
- #include "components/tabs/public/mock_tab_interface.h"
- #include "testing/gmock/include/gmock/gmock.h"
- #include "testing/gtest/include/gtest/gtest.h"
-@@ -27,7 +29,9 @@ using ::testing::Return;
- class WorkspaceServiceTest : public testing::Test {
-  protected:
-   void SetUp() override {
--    RegisterWorkspacePrefs(prefs_.registry());
++#include "components/tabs/public/mock_tab_interface.h"
++#include "testing/gmock/include/gmock/gmock.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace helium_workspace {
++namespace {
++
++using ::testing::Return;
++
++// Every test here corresponds to a defect that reached the user at least
++// once. The sidebar's invariants used to live only in comments; this is
++// where they are actually held.
++class WorkspaceServiceTest : public testing::Test {
++ protected:
++  void SetUp() override {
 +    // The real registration function, so a pref renamed in production is a
 +    // compile error here rather than a silent behaviour change.
 +    prefs::RegisterProfilePrefs(prefs_.registry());
-     prefs_.registry()->RegisterListPref(::prefs::kPinnedTabs);
-     service_ = std::make_unique<WorkspaceService>(&prefs_);
-   }
-@@ -53,7 +57,11 @@ class WorkspaceServiceTest : public test
-     return reinterpret_cast<BrowserWindowInterface*>(0x2);
-   }
- 
--  TestingPrefServiceSimple prefs_;
++    prefs_.registry()->RegisterListPref(::prefs::kPinnedTabs);
++    service_ = std::make_unique<WorkspaceService>(&prefs_);
++  }
++
++  // A tab that reports |url| and claims to live in |window|. Destroying it
++  // invalidates its handle, which is the point of several tests below.
++  std::unique_ptr<tabs::MockTabInterface> MakeTab(
++      const std::string& url,
++      BrowserWindowInterface* window) {
++    auto tab = std::make_unique<tabs::MockTabInterface>();
++    ON_CALL(*tab, GetURL()).WillByDefault(Return(GURL(url)));
++    ON_CALL(*tab, GetBrowserWindowInterface())
++        .WillByDefault(Return(window));
++    return tab;
++  }
++
++  // Stand-ins for two different windows. The service only ever compares
++  // these by pointer, so they never need to be real.
++  BrowserWindowInterface* window_a() {
++    return reinterpret_cast<BrowserWindowInterface*>(0x1);
++  }
++  BrowserWindowInterface* window_b() {
++    return reinterpret_cast<BrowserWindowInterface*>(0x2);
++  }
++
 +  // Title and favicon writes go through a debounced OneShotTimer, which
 +  // needs a task runner even when the test never lets it fire.
 +  base::test::TaskEnvironment task_environment_{
 +      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 +  sync_preferences::TestingPrefServiceSyncable prefs_;
-   std::unique_ptr<WorkspaceService> service_;
- };
- 
-@@ -189,7 +197,7 @@ TEST_F(WorkspaceServiceTest, RemovingAnE
- TEST_F(WorkspaceServiceTest, LegacyPinnedTabsAreClearedOnce) {
-   EXPECT_TRUE(prefs_.GetBoolean(prefs::kWorkspaceMigratedFromPinnedTabs));
- 
--  base::Value::List pinned;
++  std::unique_ptr<WorkspaceService> service_;
++};
++
++// Regression: a closed tab's handle kept resolving, so its entry looked
++// permanently bound. It was never reclaimed, so pinning the same URL again
++// minted a fresh entry every time -- six URLs bred thirty-two entries and
++// filled the favorites cap.
++TEST_F(WorkspaceServiceTest, DeadHandleDoesNotKeepAnEntryBound) {
++  const std::string id = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                            GURL("https://example.com/"), u"E");
++  ASSERT_FALSE(id.empty());
++
++  auto tab = MakeTab("https://example.com/", window_a());
++  const tabs::TabHandle handle = tab->GetHandle();
++  service_->BindTab(handle, id);
++  EXPECT_EQ(id, service_->FindEntryIdForTab(handle));
++  EXPECT_EQ(nullptr, service_->FindEntryByUrlUnboundInWindow(
++                         GURL("https://example.com/"), window_a()));
++
++  tab.reset();  // The tab goes away without anyone calling UnbindTab().
++
++  EXPECT_TRUE(service_->FindEntryIdForTab(handle).empty());
++  EXPECT_FALSE(service_->IsWorkspaceTab(handle));
++  // And the entry is adoptable again, rather than breeding a duplicate.
++  const WorkspaceEntry* found = service_->FindEntryByUrlUnboundInWindow(
++      GURL("https://example.com/"), window_a());
++  ASSERT_NE(nullptr, found);
++  EXPECT_EQ(id, found->id);
++  EXPECT_EQ(1u, service_->entries().size());
++}
++
++// Regression: each window re-numbered positions from zero, so entries
++// collided and the sidebar order drifted between launches.
++TEST_F(WorkspaceServiceTest, PositionsAreUniqueWithinASection) {
++  for (int i = 0; i < 5; ++i) {
++    ASSERT_FALSE(service_
++                     ->AddEntry(WorkspaceEntry::Section::kPinned,
++                                GURL("https://example.com/" +
++                                     base::NumberToString(i)),
++                                u"E")
++                     .empty());
++  }
++  std::set<int> positions;
++  for (const WorkspaceEntry& entry : service_->entries()) {
++    if (entry.section == WorkspaceEntry::Section::kPinned) {
++      EXPECT_TRUE(positions.insert(entry.position).second)
++          << "duplicate position " << entry.position;
++    }
++  }
++  EXPECT_EQ(5u, positions.size());
++}
++
++// The favorites grid tops out at twelve; Arc does the same. Rejection has to
++// be visible to the caller, which is how the UI disables "Add to Favorites".
++TEST_F(WorkspaceServiceTest, FavoritesCapIsEnforcedAndReported) {
++  for (size_t i = 0; i < WorkspaceService::kMaxFavorites; ++i) {
++    ASSERT_FALSE(service_
++                     ->AddEntry(WorkspaceEntry::Section::kFavorite,
++                                GURL("https://example.com/" +
++                                     base::NumberToString(i)),
++                                u"F")
++                     .empty())
++        << "favorite " << i << " should fit";
++  }
++  EXPECT_TRUE(service_
++                  ->AddEntry(WorkspaceEntry::Section::kFavorite,
++                             GURL("https://example.com/overflow"), u"F")
++                  .empty());
++  // Pinned rows are not capped.
++  EXPECT_FALSE(service_
++                   ->AddEntry(WorkspaceEntry::Section::kPinned,
++                              GURL("https://example.com/row"), u"P")
++                   .empty());
++}
++
++// One entry may be open in several windows at once -- the sidebar is
++// profile-scoped while tabs are per-window -- so lookups that care about a
++// window must not see another window's tab.
++TEST_F(WorkspaceServiceTest, BindingsAreTrackedPerWindow) {
++  const std::string id = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                            GURL("https://example.com/"), u"E");
++  auto tab_a = MakeTab("https://example.com/", window_a());
++  auto tab_b = MakeTab("https://example.com/", window_b());
++  service_->BindTab(tab_a->GetHandle(), id);
++  service_->BindTab(tab_b->GetHandle(), id);
++
++  EXPECT_EQ(tab_a->GetHandle(), service_->FindTabForEntryInWindow(id, window_a()));
++  EXPECT_EQ(tab_b->GetHandle(), service_->FindTabForEntryInWindow(id, window_b()));
++  EXPECT_EQ(2u, service_->FindTabsForEntry(id).size());
++
++  service_->UnbindTab(tab_a->GetHandle());
++  EXPECT_EQ(tabs::TabHandle::Null(),
++            service_->FindTabForEntryInWindow(id, window_a()));
++  EXPECT_EQ(tab_b->GetHandle(), service_->FindTabForEntryInWindow(id, window_b()));
++  EXPECT_EQ(1u, service_->FindTabsForEntry(id).size());
++}
++
++// Adoption must not hand a window an entry that window already has open --
++// that is what would show the same page twice.
++TEST_F(WorkspaceServiceTest, UnboundLookupIgnoresEntriesOpenInThatWindow) {
++  const std::string id = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                            GURL("https://example.com/"), u"E");
++  auto tab_a = MakeTab("https://example.com/", window_a());
++  service_->BindTab(tab_a->GetHandle(), id);
++
++  EXPECT_EQ(nullptr, service_->FindEntryByUrlUnboundInWindow(
++                         GURL("https://example.com/"), window_a()));
++  // ... but the same entry is still adoptable by a different window.
++  const WorkspaceEntry* other = service_->FindEntryByUrlUnboundInWindow(
++      GURL("https://example.com/"), window_b());
++  ASSERT_NE(nullptr, other);
++  EXPECT_EQ(id, other->id);
++}
++
++// Removing an entry must drop its bindings too; a stale binding would keep
++// the tab hidden from the Today section forever.
++TEST_F(WorkspaceServiceTest, RemovingAnEntryUnbindsItsTabs) {
++  const std::string id = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                            GURL("https://example.com/"), u"E");
++  auto tab = MakeTab("https://example.com/", window_a());
++  service_->BindTab(tab->GetHandle(), id);
++  ASSERT_TRUE(service_->IsWorkspaceTab(tab->GetHandle()));
++
++  EXPECT_TRUE(service_->RemoveEntry(id));
++  EXPECT_FALSE(service_->IsWorkspaceTab(tab->GetHandle()));
++  EXPECT_TRUE(service_->FindEntryIdForTab(tab->GetHandle()).empty());
++  EXPECT_TRUE(service_->entries().empty());
++}
++
++// The pinned-tab pref is cleared exactly once, on the first run after the
++// upgrade. Clearing it on every launch would throw away a list the user may
++// have rebuilt with a different build.
++TEST_F(WorkspaceServiceTest, LegacyPinnedTabsAreClearedOnce) {
++  EXPECT_TRUE(prefs_.GetBoolean(prefs::kWorkspaceMigratedFromPinnedTabs));
++
 +  base::ListValue pinned;
-   pinned.Append("https://example.com/");
-   prefs_.SetList(::prefs::kPinnedTabs, std::move(pinned));
- 
++  pinned.Append("https://example.com/");
++  prefs_.SetList(::prefs::kPinnedTabs, std::move(pinned));
++
++  // A second service on the same prefs must leave the list alone.
++  WorkspaceService second(&prefs_);
++  EXPECT_EQ(1u, prefs_.GetList(::prefs::kPinnedTabs).size());
++}
++
++// Entries survive a restart, icons included: the sidebar draws rows that
++// have no tab behind them, so a cold start has nothing else to draw from.
++TEST_F(WorkspaceServiceTest, EntriesRoundTripThroughPrefs) {
++  const std::string id = service_->AddEntry(WorkspaceEntry::Section::kFavorite,
++                                            GURL("https://example.com/"), u"E");
++  ASSERT_TRUE(service_->SetEntryFavicon(id, "not-really-a-png"));
++  ASSERT_TRUE(service_->SetEntryTitle(id, u"Renamed"));
++  service_->Shutdown();
++
++  WorkspaceService reloaded(&prefs_);
++  ASSERT_EQ(1u, reloaded.entries().size());
++  const WorkspaceEntry& entry = reloaded.entries().front();
++  EXPECT_EQ(GURL("https://example.com/"), entry.url);
++  EXPECT_EQ(u"Renamed", entry.title);
++  EXPECT_EQ("not-really-a-png", entry.favicon_png);
++  EXPECT_EQ(WorkspaceEntry::Section::kFavorite, entry.section);
++  // Bindings are runtime state and must never be persisted.
++  EXPECT_TRUE(reloaded.FindTabsForEntry(entry.id).empty());
++}
++
++}  // namespace
++}  // namespace helium_workspace

@@ -1,6 +1,8 @@
---- a/chrome/app/generated_resources.grd
-+++ b/chrome/app/generated_resources.grd
-@@ -12217,6 +12217,9 @@ Check your passwords anytime in <ph name
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -12152,6 +12152,9 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
            Remove
          </message>
@@ -10,7 +12,7 @@
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12369,6 +12372,9 @@ Check your passwords anytime in <ph name
+@@ -12304,6 +12307,9 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="In Title Case: The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
            Remove
          </message>
@@ -20,9 +22,11 @@
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="In Title Case: The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute Site} other {Mute Sites}}
          </message>
---- a/chrome/browser/ui/BUILD.gn
-+++ b/chrome/browser/ui/BUILD.gn
-@@ -396,6 +396,8 @@ static_library("ui") {
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -424,6 +424,8 @@ static_library("ui") {
      "helium_workspace/workspace_favicon_image.h",
      "helium_workspace/workspace_grid_math.h",
      "helium_workspace/workspace_omnibox_match.h",
@@ -31,7 +35,7 @@
      "helium_workspace/workspace_prefs.cc",
      "helium_workspace/workspace_prefs.h",
      "helium_workspace/workspace_service.cc",
-@@ -6069,6 +6071,8 @@ test("helium_workspace_unittests") {
+@@ -5855,6 +5857,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_grid_math.h",
      "helium_workspace/workspace_omnibox_match.h",
      "helium_workspace/workspace_omnibox_match_unittest.cc",
@@ -40,8 +44,10 @@
      "helium_workspace/workspace_prefs.cc",
      "helium_workspace/workspace_prefs.h",
      "helium_workspace/workspace_service.cc",
---- a/chrome/browser/ui/helium/arc_sidebar_surface.h
-+++ b/chrome/browser/ui/helium/arc_sidebar_surface.h
+Index: src/chrome/browser/ui/helium/arc_sidebar_surface.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_sidebar_surface.h
++++ src/chrome/browser/ui/helium/arc_sidebar_surface.h
 @@ -8,7 +8,9 @@
  #include "base/containers/span.h"
  #include <algorithm>
@@ -227,8 +233,10 @@
  }  // namespace helium
  
  #endif  // CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_SURFACE_H_
---- a/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
-+++ b/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
+Index: src/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
++++ src/chrome/browser/ui/helium/arc_sidebar_surface_unittest.cc
 @@ -21,18 +21,15 @@ int Luminance(SkColor color) {
    return (SkColorGetR(color) + SkColorGetG(color) + SkColorGetB(color)) / 3;
  }
@@ -373,8 +381,10 @@
  TEST(ArcSidebarSurfaceTest, TheUnselectedFillsStepTowardTheGray) {
    EXPECT_LT(Luminance(GetSidebarSurfaceColor(kLightSidebar,
                                               /*hovered=*/false)),
+Index: src/chrome/browser/ui/helium_workspace/workspace_pin_semantics.cc
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/helium_workspace/workspace_pin_semantics.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_pin_semantics.cc
 @@ -0,0 +1,55 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
@@ -431,8 +441,10 @@
 +}
 +
 +}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_pin_semantics.h
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/helium_workspace/workspace_pin_semantics.h
++++ src/chrome/browser/ui/helium_workspace/workspace_pin_semantics.h
 @@ -0,0 +1,76 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
@@ -510,8 +522,10 @@
 +}  // namespace helium_workspace
 +
 +#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_PIN_SEMANTICS_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_pin_semantics_unittest.cc
+===================================================================
 --- /dev/null
-+++ b/chrome/browser/ui/helium_workspace/workspace_pin_semantics_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_pin_semantics_unittest.cc
 @@ -0,0 +1,92 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
@@ -605,8 +619,10 @@
 +
 +}  // namespace
 +}  // namespace helium_workspace
---- a/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-+++ b/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 @@ -17,12 +17,17 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
@@ -715,8 +731,10 @@
    const tabs::TabData data = tabs::TabData::FromTabInterface(tab);
    service_->SetEntryTitle(entry_id, data.title);
  
---- a/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
-+++ b/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 @@ -65,6 +65,18 @@ class WorkspaceTabController : public Ta
    // URL. Each window keeps its own tab for an entry.
    void OpenEntry(const std::string& entry_id);
@@ -736,33 +754,35 @@
    // Puts the tab at |index| straight into Favorites: records (or adopts) the
    // entry and binds the tab to it. Arc lets an ordinary tab become a favorite
    // in one step; promoting an existing Pinned entry is
---- a/chrome/browser/ui/views/tabs/common/tab_view.cc
-+++ b/chrome/browser/ui/views/tabs/common/tab_view.cc
-@@ -612,8 +612,21 @@ void TabView::PaintTabBackgroundFill(
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -635,7 +635,22 @@ void TabView::PaintTabBackgroundFill(
                                      hovered)) {
      cc::PaintFlags flags;
      flags.setAntiAlias(true);
--    if (ShouldUseNativeFrameMaterials() &&
--        selection_state != TabStyle::TabSelectionState::kActive) {
+-    flags.setColor(GetCurrentTabBackgroundColor(selection_state));
 +    if (hovered_ && !split_ &&
 +        selection_state == TabStyle::TabSelectionState::kInactive) {
 +      // helium-fork M3.10: a hovered row is Dia's white capsule (L243 on an
 +      // L228 sidebar, 2026-08-23), painted straight from the hovered bit: Dia
 +      // has no fade (sckrec at 120fps, first changed frame is the final
 +      // value), and neither the glow tween nor the native-materials tint
-+      // below ever reached a color this sidebar could show (the hover token
-+      // is the sidebar's own color at 0.45 over itself; the glass tint is
-+      // fainter still). Ahead of the materials branch on purpose: with the
-+      // glass on by default, that branch used to win and the hover vanished.
-+      // Selected-but-inactive rows keep upstream's blend.
++      // (both folded into GetCurrentTabBackgroundColor since 152) ever
++      // reached a color this sidebar could show (the hover token is the
++      // sidebar's own color at 0.45 over itself; the glass tint is fainter
++      // still). Paint-time only, so GetBackgroundColor consumers keep
++      // upstream's answer. Selected-but-inactive rows keep upstream's blend.
 +      flags.setColor(helium::GetSidebarHoverSurfaceColor(
 +          GetColorProvider()->GetColor(kColorToolbar)));
-+    } else if (ShouldUseNativeFrameMaterials() &&
-+               selection_state != TabStyle::TabSelectionState::kActive) {
-       flags.setColor(
-           GetNativeFrameMaterialTabBackgroundColor(selection_state));
-     } else if (selection_state == TabStyle::TabSelectionState::kActive) {
-@@ -646,8 +659,10 @@ bool TabView::ShouldPaintTabBackgroundCo
++    } else {
++      flags.setColor(GetCurrentTabBackgroundColor(selection_state));
++    }
+     canvas->DrawRect(GetContentsBounds(), flags);
+   }
+ 
+@@ -651,8 +666,10 @@ bool TabView::ShouldPaintTabBackgroundCo
      bool has_custom_background,
      bool hovered) const {
    if (ShouldUseNativeFrameMaterials()) {
@@ -774,7 +794,7 @@
    }
  
    if (selection_state == TabStyle::TabSelectionState::kActive) {
-@@ -830,7 +845,11 @@ bool TabView::IsChildVisible(const views
+@@ -839,7 +856,11 @@ bool TabView::IsChildVisible(const views
                           (close_button_ && close_button_->HasFocus()));
      }
  
@@ -787,8 +807,10 @@
             (close_button_ && close_button_->HasFocus());
    }
  
---- a/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
-+++ b/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
 @@ -9,7 +9,8 @@
  #include <algorithm>
  
@@ -1398,8 +1420,10 @@
      default:
        break;
    }
---- a/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
-+++ b/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
 @@ -15,13 +15,14 @@
  #include "components/favicon_base/favicon_types.h"
  #include "ui/base/metadata/metadata_header_macros.h"
@@ -1596,8 +1620,10 @@
  
    std::unique_ptr<ui::SimpleMenuModel> menu_model_;
    std::unique_ptr<views::MenuRunner> menu_runner_;
---- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
-+++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 @@ -10,6 +10,7 @@
  #include <utility>
  
@@ -2246,8 +2272,10 @@
  bool WorkspaceSidebarView::CanEntryBecomeFavorite(
      const std::string& entry_id) const {
    if (!service_) {
---- a/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-+++ b/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 @@ -6,6 +6,7 @@
  #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SIDEBAR_VIEW_H_
  

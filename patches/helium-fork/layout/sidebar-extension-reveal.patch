@@ -3,8 +3,8 @@ Index: src/chrome/app/settings_strings.grdp
 --- src.orig/chrome/app/settings_strings.grdp
 +++ src/chrome/app/settings_strings.grdp
 @@ -322,6 +322,12 @@
-     <message name="IDS_SETTINGS_MINIMAL_LOCATION_BAR" desc="Label for the toggle that enables the minimal address bar.">
-       Minimal address bar
+     <message name="IDS_SETTINGS_MINIMAL_LOCATION_BAR" desc="Label for the toggle that enables the minimal URL in the address bar, showing only the site origin.">
+       Minimal URL in the address bar
      </message>
 +    <message name="IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS" desc="Label for the toggle that hides the extension icons in the sidebar's address row until the pointer enters the sidebar.">
 +      Hide extension icons until hover
@@ -19,7 +19,7 @@ Index: src/chrome/browser/extensions/api/settings_private/prefs_util.cc
 ===================================================================
 --- src.orig/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ src/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -222,6 +222,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+@@ -231,6 +231,8 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
    // the zen-mode boolean, which is now only read once during migration.
    (*s_allowlist)[::prefs::kHeliumAddressBarMode] =
        settings_api::PrefType::kNumber;
@@ -51,7 +51,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -383,6 +383,7 @@ static_library("ui") {
+@@ -411,6 +411,7 @@ static_library("ui") {
      "helium/arc_minimal_field_state.h",
      "helium/arc_omnibox_panel.h",
      "helium/arc_sidebar_surface.h",
@@ -59,7 +59,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/helium_layout_state_controller.cc",
      "helium/helium_layout_state_controller.h",
      "helium/helium_tab_switcher_controller.cc",
-@@ -6037,6 +6038,8 @@ test("helium_workspace_unittests") {
+@@ -5823,6 +5824,8 @@ test("helium_workspace_unittests") {
      "helium/arc_minimal_field_state_unittest.cc",
      "helium/arc_sidebar_surface.h",
      "helium/arc_sidebar_surface_unittest.cc",
@@ -526,7 +526,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc
 +++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc
-@@ -40,6 +40,10 @@ void RegisterProfilePrefs(user_prefs::Pr
+@@ -39,6 +39,10 @@ void RegisterProfilePrefs(user_prefs::Pr
    registry->RegisterIntegerPref(
        prefs::kHeliumAddressBarMode,
        std::to_underlying(HeliumAddressBarMode::kDocked));
@@ -541,7 +541,7 @@ Index: src/chrome/browser/ui/toolbar/toolbar_actions_model.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/toolbar/toolbar_actions_model.cc
 +++ src/chrome/browser/ui/toolbar/toolbar_actions_model.cc
-@@ -601,6 +601,16 @@ void ToolbarActionsModel::SetActionVisib
+@@ -630,6 +630,16 @@ void ToolbarActionsModel::SetActionVisib
    DCHECK(!profile_->IsOffTheRecord())
        << "Changing action pin state is disallowed in incognito.";
  
@@ -558,7 +558,7 @@ Index: src/chrome/browser/ui/toolbar/toolbar_actions_model.cc
    auto stored_pinned_action_ids = extension_prefs_->GetPinnedExtensions();
    DCHECK_NE(is_now_visible,
              std::ranges::contains(stored_pinned_action_ids, action_id));
-@@ -623,6 +633,18 @@ const extensions::Extension* ToolbarActi
+@@ -652,6 +662,18 @@ const extensions::Extension* ToolbarActi
    return extension_registry_->enabled_extensions().GetByID(action_id);
  }
  
@@ -581,7 +581,7 @@ Index: src/chrome/browser/ui/toolbar/toolbar_actions_model.h
 ===================================================================
 --- src.orig/chrome/browser/ui/toolbar/toolbar_actions_model.h
 +++ src/chrome/browser/ui/toolbar/toolbar_actions_model.h
-@@ -130,6 +130,18 @@ class ToolbarActionsModel
+@@ -141,6 +141,18 @@ class ToolbarActionsModel
    // Returns true if the action is force-pinned to the toolbar.
    bool IsActionForcePinned(const ActionId& action_id) const;
  
@@ -604,7 +604,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_menu_item_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/extensions/extensions_menu_item_view.cc
 +++ src/chrome/browser/ui/views/extensions/extensions_menu_item_view.cc
-@@ -210,8 +210,15 @@ void ExtensionMenuItemView::UpdatePinBut
+@@ -211,8 +211,15 @@ void ExtensionMenuItemView::UpdatePinBut
        is_force_pinned, is_pinned, view_model_->GetActionName()));
    // Extension pinning is not available in Incognito as it leaves a trace of
    // user activity.
@@ -626,7 +626,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
 +++ src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
-@@ -60,6 +60,7 @@
+@@ -61,6 +61,7 @@
  #include "ui/base/models/image_model.h"
  #include "ui/base/ui_base_features.h"
  #include "ui/views/interaction/element_tracker_views.h"
@@ -634,7 +634,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  #include "ui/views/layout/animating_layout_manager.h"
  #include "ui/views/layout/flex_layout.h"
  #include "ui/views/layout/flex_layout_types.h"
-@@ -227,6 +228,20 @@ ExtensionsToolbarDesktop::ExtensionsTool
+@@ -254,6 +255,20 @@ ExtensionsToolbarDesktop::ExtensionsTool
    GetTargetLayoutManager()->SetDefault(views::kMarginsKey,
                                         gfx::Insets::VH(0, 2));
  
@@ -655,7 +655,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
    UpdateControlsVisibility();
  
    toolbar_view_model_observation_.Observe(toolbar_view_model_.get());
-@@ -340,6 +355,7 @@ void ExtensionsToolbarDesktop::ShowWidge
+@@ -452,6 +467,7 @@ void ExtensionsToolbarDesktop::ShowWidge
    anchored_widgets_.push_back({widget, extension_id});
    widget->AddObserver(this);
    UpdateIconVisibility(extension_id);
@@ -663,7 +663,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
    GetAnimatingLayoutManager()->PostOrQueueAction(
        base::BindOnce(&ExtensionsToolbarDesktop::AnchorAndShowWidgetImmediately,
                       weak_ptr_factory_.GetWeakPtr(),
-@@ -442,8 +458,7 @@ void ExtensionsToolbarDesktop::UpdateIco
+@@ -554,8 +570,7 @@ void ExtensionsToolbarDesktop::UpdateIco
      action_view->ClearProperty(views::kFlexBehaviorKey);
    }
  
@@ -673,7 +673,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
                      model_->IsActionPinned(extension_id))) {
      GetAnimatingLayoutManager()->FadeIn(action_view);
    } else {
-@@ -451,17 +466,6 @@ void ExtensionsToolbarDesktop::UpdateIco
+@@ -563,17 +578,6 @@ void ExtensionsToolbarDesktop::UpdateIco
    }
  }
  
@@ -691,7 +691,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  void ExtensionsToolbarDesktop::AnchorAndShowWidgetImmediately(
      MayBeDangling<views::Widget> widget) {
    auto iter =
-@@ -511,8 +515,7 @@ ExtensionsToolbarDesktop::GetPoppedOutAc
+@@ -627,8 +631,7 @@ bool ExtensionsToolbarDesktop::IsVisible
  
  bool ExtensionsToolbarDesktop::IsActionVisibleOnToolbar(
      const std::string& action_id) const {
@@ -701,7 +701,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  }
  
  void ExtensionsToolbarDesktop::UndoPopOut() {
-@@ -521,6 +524,7 @@ void ExtensionsToolbarDesktop::UndoPopOu
+@@ -637,6 +640,7 @@ void ExtensionsToolbarDesktop::UndoPopOu
    popped_out_action_ = std::nullopt;
    UpdateIconVisibility(popped_out_action);
    UpdateContainerVisibilityAfterAnimation();
@@ -709,7 +709,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  }
  
  void ExtensionsToolbarDesktop::SetPopupOwner(
-@@ -538,6 +542,7 @@ void ExtensionsToolbarDesktop::SetPopupO
+@@ -654,6 +658,7 @@ void ExtensionsToolbarDesktop::SetPopupO
    } else {
      UpdateContainerVisibilityAfterAnimation();
    }
@@ -717,7 +717,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  }
  
  void ExtensionsToolbarDesktop::PopOutAction(
-@@ -549,6 +554,7 @@ void ExtensionsToolbarDesktop::PopOutAct
+@@ -665,6 +670,7 @@ void ExtensionsToolbarDesktop::PopOutAct
    UpdateIconVisibility(action_id);
    GetAnimatingLayoutManager()->PostOrQueueAction(std::move(closure));
    UpdateContainerVisibility();
@@ -725,7 +725,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  }
  
  void ExtensionsToolbarDesktop::ReorderAllChildViews() {
-@@ -590,8 +596,7 @@ void ExtensionsToolbarDesktop::CreateAct
+@@ -706,8 +712,7 @@ void ExtensionsToolbarDesktop::CreateAct
    CHECK(icon);
  
    // Set visibility before adding to prevent extraneous animation.
@@ -735,7 +735,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
                     model_->IsActionPinned(action_id));
    views::FocusRing::Get(icon.get())->SetOutsetFocusRingDisabled(true);
    ObserveButton(icon.get());
-@@ -653,6 +658,7 @@ void ExtensionsToolbarDesktop::OnContext
+@@ -769,6 +774,7 @@ void ExtensionsToolbarDesktop::OnContext
  
    extension_with_open_context_menu_id_ = action_id;
    UpdateIconVisibility(extension_with_open_context_menu_id_.value());
@@ -743,7 +743,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  }
  
  void ExtensionsToolbarDesktop::OnContextMenuClosed(
-@@ -663,6 +669,7 @@ void ExtensionsToolbarDesktop::OnContext
+@@ -779,6 +785,7 @@ void ExtensionsToolbarDesktop::OnContext
        extension_with_open_context_menu_id_.value();
    extension_with_open_context_menu_id_.reset();
    UpdateIconVisibility(extension_id);
@@ -751,7 +751,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  }
  
  void ExtensionsToolbarDesktop::WriteDragDataForView(View* sender,
-@@ -959,6 +966,7 @@ void ExtensionsToolbarDesktop::OnWidgetD
+@@ -1076,6 +1083,7 @@ void ExtensionsToolbarDesktop::OnWidgetD
    if (GetWidget() && !GetWidget()->IsClosed()) {
      UpdateIconVisibility(extension_id);
    }
@@ -759,7 +759,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  }
  
  size_t ExtensionsToolbarDesktop::WidthToIconCount(int x_offset) {
-@@ -1052,6 +1060,24 @@ bool ExtensionsToolbarDesktop::ShouldCon
+@@ -1169,6 +1177,24 @@ bool ExtensionsToolbarDesktop::ShouldCon
    return false;
  }
  
@@ -784,7 +784,7 @@ Index: src/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
  void ExtensionsToolbarDesktop::UpdateContainerVisibilityAfterAnimation() {
    GetAnimatingLayoutManager()->PostOrQueueAction(
        base::BindOnce(&ExtensionsToolbarDesktop::UpdateContainerVisibility,
-@@ -1079,10 +1105,12 @@ void ExtensionsToolbarDesktop::OnMenuOpe
+@@ -1196,10 +1222,12 @@ void ExtensionsToolbarDesktop::OnMenuOpe
    }
  
    UpdateContainerVisibility();
@@ -862,7 +862,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/navigator/browser_navigator.h"
  #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
-@@ -159,6 +160,7 @@
+@@ -163,6 +164,7 @@
  #include "chrome/browser/ui/views/frame/browser_frame_view.h"
  #include "chrome/browser/ui/views/frame/browser_native_widget.h"
  #include "chrome/browser/ui/views/frame/browser_widget.h"
@@ -870,7 +870,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/frame/contents_container_view.h"
  #include "chrome/browser/ui/views/frame/contents_layout_manager.h"
  #include "chrome/browser/ui/views/frame/contents_separator.h"
-@@ -2202,7 +2204,16 @@ void BrowserView::UpdateZenModeReveal(bo
+@@ -2218,7 +2220,16 @@ void BrowserView::UpdateZenModeReveal(bo
    // the docked band, but here a click on the page must release the card even
    // with input pending -- the input survives invisibly and the panel returns
    // with the next reveal.
@@ -888,7 +888,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      reveal_side = true;
    }
  
-@@ -2232,7 +2243,7 @@ void BrowserView::UpdateZenModeReveal(bo
+@@ -2248,7 +2259,7 @@ void BrowserView::UpdateZenModeReveal(bo
        if (!zen_top_chrome_animation_.IsShowing()) {
          zen_top_chrome_animation_.Show();
          if (toolbar_) {
@@ -897,7 +897,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
          }
        }
        // helium-fork: revealing only ever makes the contents shorter, and viz
-@@ -2541,8 +2552,7 @@ void BrowserView::UpdateArcSidebarContro
+@@ -2557,8 +2568,7 @@ void BrowserView::UpdateArcSidebarContro
  void BrowserView::MaybeEndArcFieldEditing() {
    LocationBarView* const location_bar =
        toolbar_ ? toolbar_->location_bar_view() : nullptr;
@@ -907,7 +907,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
    // A press inside the field is the field's own business -- moving the caret,
-@@ -2556,7 +2566,24 @@ void BrowserView::MaybeEndArcFieldEditin
+@@ -2572,7 +2582,24 @@ void BrowserView::MaybeEndArcFieldEditin
    if (location_bar->HitTestPoint(local)) {
      return;
    }
@@ -933,7 +933,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // helium-fork: ending the edit releases the floating sidebar's edit pin
    // (UpdateZenModeReveal above), but nothing re-evaluates the cursor until the
    // next mouse move -- and a click that lands and never moves again would
-@@ -2579,6 +2606,15 @@ void BrowserView::MaybeBeginArcFieldEdit
+@@ -2595,6 +2622,15 @@ void BrowserView::MaybeBeginArcFieldEdit
    if (!location_bar->HitTestPoint(local)) {
      return;
    }
@@ -949,7 +949,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    BeginArcSidebarFieldEdit();
  }
  
-@@ -2595,13 +2631,12 @@ void BrowserView::BeginArcSidebarFieldEd
+@@ -2611,13 +2647,12 @@ void BrowserView::BeginArcSidebarFieldEd
        !address_row->IsDrawn()) {
      return;
    }
@@ -967,7 +967,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // The caller focuses the field right after this returns; the layout must be
    // synchronous so the focus (and the panel reading the field's bounds off
    // the edit-state notification) sees the widened geometry, not the row's.
-@@ -2642,16 +2677,11 @@ void BrowserView::EndArcSidebarFieldEdit
+@@ -2658,16 +2693,11 @@ void BrowserView::EndArcSidebarFieldEdit
        focus_manager->ClearFocus();
      }
    }
@@ -988,7 +988,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  }
  
  void BrowserView::OnLocationBarBoundsChanged() {
-@@ -2677,14 +2707,29 @@ void BrowserView::OnLocationBarEditState
+@@ -2693,14 +2723,29 @@ void BrowserView::OnLocationBarEditState
  }
  
  void BrowserView::UpdateArcAddressBarPlacement() {
@@ -1022,7 +1022,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // to write and no assumptions inside ToolbarView to break. Everything that
    // skips the band when it is absent is already guarded by
    // IsParentedTo(toolbar, top_container) in the layout, so the top container
-@@ -2699,65 +2744,117 @@ void BrowserView::UpdateArcAddressBarPla
+@@ -2715,65 +2760,117 @@ void BrowserView::UpdateArcAddressBarPla
      return;
    }
    auto* const layout_controller = HeliumLayoutStateController::From(browser_);
@@ -1187,7 +1187,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // helium-fork: the page tint is published on the toolbar as a cascading
    // property, and everything under it -- button icons, the omnibox's own
    // opaque field fill -- derives a contrasting foreground from it. Moving the
-@@ -2834,6 +2931,15 @@ void BrowserView::OnSidebarCollapseState
+@@ -2850,6 +2947,15 @@ void BrowserView::OnSidebarCollapseState
    // for one), and re-evaluating now would pop the card straight back out.
    // The monitor re-evaluates on the next mouse move anyway.
    UpdateZenModeEventMonitor();
@@ -1203,7 +1203,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // helium-fork: non-choreographed collapse flips snap the window controls
    // with the ratio they just reset.
    UpdateCaptionButtonsOpacityForChromeState();
-@@ -2913,6 +3019,12 @@ void BrowserView::RunSidebarDockFlip() {
+@@ -2929,6 +3035,12 @@ void BrowserView::RunSidebarDockFlip() {
    // Symmetric with the hide path: hand the controls back inside the flip
    // rather than a tick later, so the URL moves once.
    UpdateArcSidebarControlPlacement();
@@ -1216,7 +1216,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    DeprecatedLayoutImmediately();
    DisarmContentsResizeHold();
    sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
-@@ -6398,24 +6510,14 @@ void BrowserView::Layout(PassKey) {
+@@ -6469,24 +6581,14 @@ void BrowserView::Layout(PassKey) {
    if (arc_field_edit_active_) {
      LayoutArcFieldEditHost();
    }
@@ -1253,7 +1253,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -54,6 +54,8 @@
+@@ -56,6 +56,8 @@
  #include "chrome/browser/ui/global_error/global_error_service.h"
  #include "chrome/browser/ui/global_error/global_error_service_factory.h"
  #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
@@ -1262,15 +1262,15 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/intent_picker_tab_helper.h"
  #include "chrome/browser/ui/layout_constants.h"
-@@ -80,6 +82,7 @@
- #include "chrome/browser/ui/views/glic/glic_button_interface.h"
+@@ -84,6 +86,7 @@
+ #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button.h"
  #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_contextual_menu.h"
  #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_view.h"
 +#include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
- #include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
- #include "chrome/browser/ui/views/location_bar/star_view.h"
  #include "chrome/browser/ui/views/location_bar/webui_location_bar.h"
-@@ -595,6 +598,11 @@ void ToolbarView::Init() {
+ #include "chrome/browser/ui/views/page_action/page_action_container_view.h"
+ #include "chrome/browser/ui/views/page_action/page_action_icon_container.h"
+@@ -586,6 +589,11 @@ void ToolbarView::Init() {
      extensions_toolbar_coordinator_ =
          std::make_unique<ExtensionsToolbarCoordinator>(browser_,
                                                         extensions_container_);
@@ -1282,7 +1282,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    }
  
    if (!features::IsWebUIPinnedToolbarActionsEnabled()) {
-@@ -774,6 +782,22 @@ void ToolbarView::Init() {
+@@ -767,6 +775,22 @@ void ToolbarView::Init() {
        base::BindRepeating(&ToolbarView::UpdateToolbarLayout,
                            base::Unretained(this)));
  
@@ -1305,7 +1305,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    show_avatar_button_.Init(
        prefs::kShowAvatarButton, prefs,
        base::BindRepeating(&ToolbarView::OnShowAvatarButtonChanged,
-@@ -1306,6 +1330,11 @@ void ToolbarView::SetGlicPanelIsOpen(boo
+@@ -1316,6 +1340,11 @@ void ToolbarView::SetGlicPanelIsOpen(boo
  
  void ToolbarView::MouseMovedOutOfHost() {
    SetLockedExpansionMode(ExpansionMode::kNone, /*button=*/nullptr);
@@ -1317,7 +1317,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  }
  
  void ToolbarView::SetLockedExpansionMode(ExpansionMode mode,
-@@ -1325,6 +1354,32 @@ void ToolbarView::SetLockedExpansionMode
+@@ -1335,6 +1364,32 @@ void ToolbarView::SetLockedExpansionMode
  }
  
  void ToolbarView::AnimationEnded(const gfx::Animation* animation) {
@@ -1350,7 +1350,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    if (animation->GetCurrentValue() == 0) {
      SetToolbarVisibility(false);
    }
-@@ -1334,6 +1389,10 @@ void ToolbarView::AnimationEnded(const g
+@@ -1344,6 +1399,10 @@ void ToolbarView::AnimationEnded(const g
  
  void ToolbarView::AnimationProgressed(const gfx::Animation* animation) {
    if (animation == &arc_row_hover_animation_) {
@@ -1361,7 +1361,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
      SchedulePaint();
      return;
    }
-@@ -2054,15 +2113,26 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -2090,15 +2149,26 @@ void ToolbarView::UpdateToolbarLayout()
        // and since it is also the only child allowed to scale to zero it then
        // absorbs the entire deficit and elides the domain away to "...". This
        // asks for a domain's worth and lets the trailing buttons keep theirs.
@@ -1394,7 +1394,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
      } else if (is_compact_layout) {
        location_bar_view_->SetPreferredSize(gfx::Size(kPreferredCompactWidth, 0));
        location_bar_view_->SetProperty(
-@@ -2078,6 +2148,19 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -2114,6 +2184,19 @@ void ToolbarView::UpdateToolbarLayout()
                                    location_bar_flex_rule);
    }
  
@@ -1414,7 +1414,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    if (arc_trailing_spacer_) {
      // helium-fork: parked since the full-width field took over the slack
      // (2026-08-16). The View stays in the tree so the child order is stable
-@@ -2108,7 +2191,7 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -2144,7 +2227,7 @@ void ToolbarView::UpdateToolbarLayout()
    InvalidateLayout();
  }
  
@@ -1423,7 +1423,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    if (extensions_container_) {
      extensions_container_->GetAnimatingLayoutManager()->ResetLayout();
    }
-@@ -2202,39 +2285,137 @@ void ToolbarView::SetArcRowHovered(bool
+@@ -2238,39 +2321,137 @@ void ToolbarView::SetArcRowHovered(bool
    if (!arc_sidebar_hosted_) {
      return;
    }
@@ -1578,7 +1578,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    canvas->DrawRoundRect(
        gfx::RectF(GetLocalBounds()),
        GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius), flags);
-@@ -2245,9 +2426,10 @@ void ToolbarView::SetArcEditHosted(bool
+@@ -2281,9 +2462,10 @@ void ToolbarView::SetArcEditHosted(bool
      return;
    }
    arc_edit_hosted_ = edit_hosted;
@@ -1592,7 +1592,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  }
  
  bool ToolbarView::IsArcSidebarHostedFor(const views::View* view) {
-@@ -2284,22 +2466,85 @@ void ToolbarView::SetArcSidebarHosted(bo
+@@ -2320,22 +2502,85 @@ void ToolbarView::SetArcSidebarHosted(bo
    if (!hosted) {
      arc_row_hover_animation_.Reset(0);
    }
@@ -1650,8 +1650,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    if (app_menu_button_) {
 -    app_menu_button_->SetVisible(!hosted);
 +    app_menu_button_->SetVisible(!arc_sidebar_hosted_);
-   }
--  UpdateToolbarLayout();
++  }
 +  UpdateMediaButtonAvailability();
 +  // helium-fork: the row shows the bare domain and the band shows "host /
 +  // title", so the label's answer changes with the host and nothing else asks
@@ -1659,7 +1658,8 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +  // navigation happens to refresh it.
 +  if (location_bar_view_) {
 +    location_bar_view_->RefreshArcTitleLabel();
-+  }
+   }
+-  UpdateToolbarLayout();
 +}
 +
 +void ToolbarView::UpdateMediaButtonAvailability() {
@@ -1680,20 +1680,20 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +  // re-shows it on every media item change otherwise. Windows without the
 +  // sidebar (popups, web apps) are never sidebar-hosted and keep the stock
 +  // behaviour.
-+  if (!media_button_ || !media_button_->media_toolbar_button_controller()) {
++  if (!media_button_ || !media_button_->GetController()) {
 +    return;
 +  }
-+  media_button_->media_toolbar_button_controller()->SetCanShowToolbarButton(
++  media_button_->GetController()->SetCanShowToolbarButton(
 +      show_media_button_.GetValue() && !arc_sidebar_hosted_);
  }
  
  void ToolbarView::UpdateVerticalTabsCollapseButton() {
-@@ -2617,8 +2862,7 @@ void ToolbarView::OnShowMenuButtonChange
+@@ -2652,8 +2897,7 @@ void ToolbarView::OnShowMenuButtonChange
  }
  
  void ToolbarView::OnShowMediaButtonChanged() {
--  media_button_->media_toolbar_button_controller()->
--      SetCanShowToolbarButton(show_media_button_.GetValue());
+-  media_button_->GetController()->SetCanShowToolbarButton(
+-      show_media_button_.GetValue());
 +  UpdateMediaButtonAvailability();
    InvalidateLayout();
  }
@@ -1702,9 +1702,9 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -175,9 +175,13 @@ class ToolbarView : public views::Access
+@@ -180,9 +180,13 @@ class ToolbarView : public views::Access
    // Attaches the tab strip region view when compact layout is enabled.
-   void AttachTabStripRegionView(HorizontalTabStripRegionView* view);
+   void AttachTabStripRegionView(TabStripRegionView* view);
  
 -  // Resets extension-related toolbar container animations so they don't animate
 -  // while zen mode is revealing the toolbar.
@@ -1719,7 +1719,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
  
    // Updates the vertical tabs collapse button visibility and icon.
    void UpdateVerticalTabsCollapseButton();
-@@ -214,6 +218,31 @@ class ToolbarView : public views::Access
+@@ -219,6 +223,31 @@ class ToolbarView : public views::Access
    // sidebar instead of being the top chrome band, which is far narrower than
    // the location bar's minimum width. See LayoutCommon().
    void SetArcSidebarHosted(bool hosted);
@@ -1751,7 +1751,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    // helium-fork: true while this toolbar *is* the Arc shell's band, i.e. the
    // top strip of the contents card.
    bool IsArcBandHosted() const;
-@@ -238,6 +267,15 @@ class ToolbarView : public views::Access
+@@ -243,6 +272,15 @@ class ToolbarView : public views::Access
    // events, and notify-enter-exit-on-child proved a no-show in probing.
    void SetArcRowHovered(bool hovered);
  
@@ -1767,7 +1767,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    ToolbarButton* vertical_tabs_collapse_button() const {
      return vertical_tabs_collapse_button_;
    }
-@@ -295,6 +333,11 @@ class ToolbarView : public views::Access
+@@ -302,6 +340,11 @@ class ToolbarView : public views::Access
    gfx::Size GetMinimumSize() const override;
    void Layout(PassKey) override;
    void OnThemeChanged() override;
@@ -1779,7 +1779,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    bool AcceleratorPressed(const ui::Accelerator& acc) override;
    void ChildPreferredSizeChanged(views::View* child) override;
    void ChildVisibilityChanged(View* child) override;
-@@ -471,6 +514,9 @@ class ToolbarView : public views::Access
+@@ -475,6 +518,9 @@ class ToolbarView : public views::Access
    // helium-fork: see SetArcSidebarHosted().
    bool arc_sidebar_hosted_ = false;
    bool arc_edit_hosted_ = false;
@@ -1789,7 +1789,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    // helium-fork: drives the sidebar row's hover capsule, 200ms to match the
    // field-side tween it replaces there.
    gfx::SlideAnimation arc_row_hover_animation_{this};
-@@ -560,6 +606,9 @@ class ToolbarView : public views::Access
+@@ -564,6 +610,9 @@ class ToolbarView : public views::Access
    BooleanPrefMember show_dynamic_new_tab_button_;
  
    BooleanPrefMember show_avatar_button_;
@@ -1803,7 +1803,7 @@ Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.
 ===================================================================
 --- src.orig/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -588,6 +588,10 @@ void AddAppearanceStrings(content::WebUI
+@@ -615,6 +615,10 @@ void AddAppearanceStrings(content::WebUI
        {"centeredLocationBar", IDS_SETTINGS_CENTERED_LOCATION_BAR},
        {"verticalCollapseShortcut", IDS_SETTINGS_VERTICAL_COLLAPSE_SHORTCUT},
        {"minimalLocationBar", IDS_SETTINGS_MINIMAL_LOCATION_BAR},
