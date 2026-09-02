@@ -1,0 +1,106 @@
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.cc
+@@ -62,7 +62,8 @@
+                                       SkColor surface,
+                                       SkColor text_color,
+                                       const gfx::Size& row_size,
+-                                      const gfx::Vector2dF& grab) {
++                                      const gfx::Vector2dF& grab,
++                                      bool as_capsule) {
+   active_ = true;
+   favicon_ = favicon;
+   title_ = title;
+@@ -71,8 +72,13 @@
+   row_size_ = row_size;
+   capsule_size_ = row_size;
+   grab_ = grab;
+-  as_capsule_ = false;
+-  morph_animation_.Reset(0.0);
++  as_capsule_ = as_capsule;
++  // The morph is parked at the form the card is born in, so its first
++  // change of form tweens from there (SetForm drives Show()/Hide() only on
++  // a change); born as a row with a capsule-sized row_size_, the first
++  // SetForm(row) used to be a same-form resize -- one frame, no tween
++  // (user 2026-09-02 recording, frame #91->#92).
++  morph_animation_.Reset(as_capsule ? 1.0 : 0.0);
+   settle_animation_.Reset(0.0);
+   settle_done_.Reset();
+   // -1 is not a morph value, so the first ApplyBounds always paints.
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h
+@@ -52,12 +52,18 @@
+   // Picks the entry up. |grab| is where inside the row the pointer went
+   // down, as a fraction of its size, so the card keeps sitting under the
+   // pointer as it changes shape.
++  // |as_capsule| is the form the card is born in: a row lifted out of the
++  // rows, or a capsule lifted out of the favorites grid. helium-fork r1
++  // (user 2026-09-02): born as a row regardless, a grid capsule's first
++  // SetForm(row) saw no form change and resized in one frame -- the only
++  // morph that ever snapped.
+   void Start(const ui::ImageModel& favicon,
+              const std::u16string& title,
+              SkColor surface,
+              SkColor text_color,
+              const gfx::Size& row_size,
+-             const gfx::Vector2dF& grab);
++             const gfx::Vector2dF& grab,
++             bool as_capsule);
+   // Pointer moved, in this view's parent's coordinates.
+   void SetPointer(const gfx::Point& point_in_parent);
+   // The shape the card should be wearing: a full row, or a grid capsule of
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -1514,8 +1514,10 @@
+     return;
+   }
+   // Read the settled geometry before the session exists, so the frozen
+-  // frame is the one the user was looking at when they pressed.
+-  const int settled_boundary = ComputeLayout(width()).grid_segment;
++  // frame is the one the user was looking at when they pressed. The same
++  // frame seeds the pick-up glide below.
++  const SidebarLayout settled = CurrentLayout(width());
++  const int settled_boundary = settled.grid_segment;
+ 
+   drag_ = std::make_unique<DragState>();
+   if (DragPerfRequested()) {
+@@ -1576,13 +1578,13 @@
+     if (row) {
+       drag_overlay_->Start(row->drag_favicon(), row->drag_title(),
+                            row->drag_surface_color(), row->drag_text_color(),
+-                           row->size(), drag_->grab);
++                           row->size(), drag_->grab, drag_->from_favorite);
+     } else {
+       drag_overlay_->Start(folder_row->drag_favicon(),
+                            folder_row->drag_title(),
+                            folder_row->drag_surface_color(),
+                            folder_row->drag_text_color(), folder_row->size(),
+-                           drag_->grab);
++                           drag_->grab, /*as_capsule=*/false);
+     }
+   }
+   // Today's slot resizes its container while the layout is still animating
+@@ -1592,6 +1594,18 @@
+   if (today_container_) {
+     today_container_->SetWorkspaceEntryDragActive(true);
+   }
++  // helium-fork r1 (user 2026-09-02 recording): the pick-up reflow -- the
++  // grid re-planning to N-1 tiles under a lifted capsule, the rows closing
++  // over a lifted row -- landed in one frame (#81) while every later
++  // re-plan glided (#123-#133). Seed the yield tween from the frame the user
++  // was looking at, so leaving the grid reads like entering it: the same
++  // 200ms EASE_OUT, driven by CurrentLayout. RetargetDragYield() cannot be
++  // used here: it would snapshot the layout *with* the session already
++  // lifting the entry out.
++  drag_prev_layout_ = settled;
++  drag_prev_layout_valid_ = true;
++  drag_yield_animation_.Reset(0.0);
++  drag_yield_animation_.Show();
+   InvalidateLayout();
+   SchedulePaint();
+ }

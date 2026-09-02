@@ -1,0 +1,106 @@
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -1994,13 +1994,17 @@
+     return false;
+   }
+   TRACE_EVENT0("ui", "WorkspaceSidebarView::OnTodayDragUpdate");
+-  if (drag_->source_is_folder) {
+-    // M3.13-r1: Today takes tabs, not containers -- no slot opens and a
+-    // release does nothing. The gate matters: the drop path below would
+-    // open a blank tab off the folder's empty URL and RemoveEntry would
+-    // cascade-delete the folder with all its children, silently. (⚠ what
+-    // Arc does here is unmeasured; refusal is the v1 reading.) The card
+-    // still tracks the pointer.
++  if (drag_->kind == DragKind::kEntry) {
++    // helium-fork 2026-09-02 (user ruling, decisions "M3.11 轮4 改判"):
++    // nothing crosses between Today and the pinned/favorites zones by drag,
++    // in either direction -- Cmd+D and the context menus are the only way
++    // over. Arc and Dia both allow the cross-zone drag; the user let the
++    // reference yield so an accidental drop can never silently unpin a
++    // row. So no slot opens and a release does nothing, for every entry --
++    // not just folders, whose M3.13-r1 reason still stands on its own (the
++    // drop path would open a blank tab off the folder's empty URL and
++    // RemoveEntry would cascade-delete its children). The card still tracks
++    // the pointer; URL sessions keep their Today slot (M3.12-r2).
+     UpdateDragOverlay(source, point_in_source);
+     return false;
+   }
+@@ -2049,14 +2053,17 @@
+   if (!drag_ || drag_->settling || !drag_->plan_today_index) {
+     return base::NullCallback();
+   }
+-  if (drag_->kind == DragKind::kExternalUrl) {
+-    KeepUrlDragSessionAlive();
+-    return base::BindOnce(&WorkspaceSidebarView::PerformTodayUrlDrop,
+-                          weak_factory_.GetWeakPtr(),
+-                          *drag_->plan_today_index);
++  if (drag_->kind != DragKind::kExternalUrl) {
++    // helium-fork 2026-09-02: the second half of OnTodayDragUpdate's gate
++    // (the plan is bound by value, so the drop guards for itself). Entries
++    // never land in Today by drag any more; PerformTodayDrop stays sealed
++    // rather than deleted -- it is the measured `Arc:` behaviour, kept the
++    // way the zen layouts are, should the ruling ever be revisited.
++    return base::NullCallback();
+   }
+-  return base::BindOnce(&WorkspaceSidebarView::PerformTodayDrop,
+-                        weak_factory_.GetWeakPtr(), drag_->entry_id,
++  KeepUrlDragSessionAlive();
++  return base::BindOnce(&WorkspaceSidebarView::PerformTodayUrlDrop,
++                        weak_factory_.GetWeakPtr(),
+                         *drag_->plan_today_index);
+ }
+ 
+@@ -2731,14 +2738,15 @@
+   // favorite) leaves no slot, and the card stays the row it started as.
+   const SidebarLayout preview = ComputeLayout(width());
+   gfx::Size form_size = preview.drag_slot_bounds.size();
+-  // The no-slot fallback dresses the card for the slot Today would open --
+-  // an entry can land there. A folder cannot land anywhere a folder session
+-  // leaves no slot (Today, the grid), so re-dressing it is a lie: the card
+-  // visibly shrank by the child indent the moment the pointer crossed the
+-  // Today line, and grew back on the way out (user 2026-09-01). No slot for
+-  // a folder = keep the form it has; its only real slots are identical
+-  // top-level rows anyway.
+-  if (form_size.IsEmpty() && !as_capsule && !drag_->source_is_folder) {
++  // The no-slot fallback dresses the card for the slot Today would open.
++  // Only a URL can still land there (2026-09-02: entries never cross into
++  // Today by drag, see OnTodayDragUpdate). An entry with no slot is in a
++  // refused zone, and re-dressing it there is a lie: the card visibly
++  // shrank by the child indent the moment the pointer crossed the Today
++  // line, and grew back on the way out (user 2026-09-01, folders then; now
++  // every entry). No slot = keep the form it has.
++  if (form_size.IsEmpty() && !as_capsule &&
++      drag_->kind == DragKind::kExternalUrl) {
+     const int indent_width =
+         width() -
+         GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding) -
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -220,7 +220,11 @@
+   // out nowhere here but still occupy model indices -- and deriving one from
+   // the other during layout would mean hit-testing from inside a layout
+   // pass. |tab_index| is nullopt when Today has no landing spot at all.
+-  // Returns whether a release here would be taken.
++  // Returns whether a release here would be taken. helium-fork 2026-09-02:
++  // never for an entry session -- Today and the pinned/favorites zones do
++  // not exchange rows by drag in either direction (user ruling; Cmd+D and
++  // the context menus are the only way over). Only a URL session gets a
++  // Today plan.
+   bool OnTodayDragUpdate(const views::View& source,
+                          const gfx::Point& point_in_source,
+                          std::optional<int> tab_index,
+@@ -539,7 +543,9 @@
+   // The cross-boundary commit: the entry stops being one. `Arc:` semantics
+   // (measured 2026-08-24): a bound tab in this window is unbound and moved
+   // to |tab_index|; an entry with no tab here opens one there carrying its
+-  // URL. Either way the entry is removed.
++  // URL. Either way the entry is removed. ⚠ Sealed since 2026-09-02: no
++  // drop callback binds it any more (GetTodayDropCallback), kept as the
++  // measured behaviour in case the no-cross-zone ruling is ever revisited.
+   void PerformTodayDrop(std::string entry_id,
+                         int tab_index,
+                         const ui::DropTargetEvent& event,
