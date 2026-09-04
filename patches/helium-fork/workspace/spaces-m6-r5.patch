@@ -1,0 +1,336 @@
+Index: src/chrome/browser/ui/helium/arc_floating_sidebar.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_floating_sidebar.h
++++ src/chrome/browser/ui/helium/arc_floating_sidebar.h
+@@ -30,18 +30,24 @@
+ // --- 1. geometry -----------------------------------------------------------
+ 
+ // Gap between the floating card and the window edges (all four sides), in
+-// DIPs. Dia: 3 top/bottom, 4 left counting its own 1px window edge line --
+-// i.e. the same 3 as ours. The contents card keeps its own inset
+-// (MultiContentsView::kContentCardInset, user-ruled 3); the two used to be
+-// one alias.
+-inline constexpr int kFloatingSidebarGap = 3;
++// DIPs. Dia: 3 top/bottom, 4 left counting its own 1px window edge line.
++// Was 3 like the contents card's inset; M6-r5.1 (user 2026-09-04): 4, the
++// same as MultiContentsView::kContentCardInset again -- "浮出的悬停卡与窗口边
++// 都统一为 4" -- but kept a separate constant so the two can still be told
++// apart in the layout code.
++inline constexpr int kFloatingSidebarGap = 4;
+ 
+-// The card's corner radius: concentric with the system window radius
+-// (user-ruled "先走同心"), i.e. the window radius minus the gap. Dia measures
+-// 14.0 -- exactly 17 - 3. Never negative: a gap wider than the window radius
+-// degrades to square corners.
+-inline constexpr int FloatingSidebarCornerRadius(int window_radius) {
+-  return std::max(0, window_radius - kFloatingSidebarGap);
++// The card's corner radius. Was concentric with the system window radius
++// (window radius minus the gap: Dia measures 14.0 = 17 - 3). M6-r5.1: the
++// shell's one radius, 12 -- the user's rule of 2026-09-03 ("圆角只有一个数")
++// admits no exception, and M6-r3.1 already dropped concentricity for the
++// contents card; moving the gap to 4 would have left this at an accidental
++// 13. Literal 12 here because this header is header-only and cannot see
++// LayoutConstant::kVerticalTabCornerRadius (which is that same 12). The
++// window radius is no longer an input; the parameter stays so the callers
++// and the unit test read unchanged.
++inline constexpr int FloatingSidebarCornerRadius(int /*window_radius*/) {
++  return 12;
+ }
+ 
+ // --- 2. rim ----------------------------------------------------------------
+Index: src/chrome/browser/ui/helium/arc_floating_sidebar_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_floating_sidebar_unittest.cc
++++ src/chrome/browser/ui/helium/arc_floating_sidebar_unittest.cc
+@@ -11,14 +11,16 @@
+ namespace helium {
+ namespace {
+ 
+-// The card's corners stay concentric with the window: radius = window radius
+-// minus the gap, never negative, monotone in the window radius.
+-TEST(ArcFloatingSidebarTest, CornerRadiusIsConcentricWithTheWindow) {
+-  EXPECT_EQ(17 - kFloatingSidebarGap, FloatingSidebarCornerRadius(17));
+-  EXPECT_EQ(12 - kFloatingSidebarGap, FloatingSidebarCornerRadius(12));
+-  EXPECT_EQ(0, FloatingSidebarCornerRadius(kFloatingSidebarGap));
+-  EXPECT_EQ(0, FloatingSidebarCornerRadius(0));
+-  EXPECT_LE(FloatingSidebarCornerRadius(12), FloatingSidebarCornerRadius(17));
++// The card's corners take the shell's one radius (M6-r5.1), whatever the
++// window's; the gap is the contents card's 4.
++TEST(ArcFloatingSidebarTest, CornerRadiusIsTheShellRadius) {
++  // M6-r5.1: the shell's one radius, whatever the window's (was concentric,
++  // window radius minus the gap).
++  EXPECT_EQ(12, FloatingSidebarCornerRadius(17));
++  EXPECT_EQ(12, FloatingSidebarCornerRadius(12));
++  EXPECT_EQ(12, FloatingSidebarCornerRadius(kFloatingSidebarGap));
++  EXPECT_EQ(12, FloatingSidebarCornerRadius(0));
++  EXPECT_EQ(4, kFloatingSidebarGap);
+ }
+ 
+ // The gap must keep the macOS window controls inside the card's top row: an
+Index: src/chrome/browser/ui/helium/arc_sidebar_surface.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_sidebar_surface.h
++++ src/chrome/browser/ui/helium/arc_sidebar_surface.h
+@@ -181,22 +181,6 @@
+   return color_utils::AlphaBlend(SK_ColorWHITE, sidebar, kSelectedAlpha);
+ }
+ 
+-// M6: the rounded square behind the current space's icon in the sidebar's
+-// bottom bar -- a resting fill, not a hover.
+-//
+-// Arc measured 2026-09-02 (g1 f_00300, dark theme only -- the whole round-0
+-// recording is dark): square RGB 93 on a sidebar of 80, i.e. white at
+-// ≈0.074. The light theme could not be measured, so it is *derived* by the
+-// equal-L* rule the user chose for the hover pair (r1, 2026-08-23): the dark
+-// step is L 33.6 -> 39.0, +5.4; walking the light sidebar (L228 = L* 90.6)
+-// the same distance the other way lands at L* 85.2 ≈ RGB 213, which is
+-// black at ≈0.066 over 228. Acceptance-tunable.
+-inline SkColor GetSidebarCurrentSpaceSurfaceColor(SkColor sidebar) {
+-  return color_utils::IsDark(sidebar)
+-             ? color_utils::AlphaBlend(SK_ColorWHITE, sidebar, 0.074f)
+-             : color_utils::AlphaBlend(SK_ColorBLACK, sidebar, 0.066f);
+-}
+-
+ // The floating card -- the active tab row and the media strip, Dia's
+ // treatment of "the tab you are on" (user 2026-08-20).
+ //
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1294,7 +1294,7 @@
+   helium_sidebar_menu_->SetShadowFrame(helium_sidebar_menu_shadow_);
+ 
+   // helium-fork M6-r1: the sidebar's own resize grip is the 5pt inside its
+-  // right edge, but the content card only starts kContentCardInset (3pt)
++  // right edge, but the content card only starts kContentCardInset (4pt since M6-r5)
+   // further right, so the cursor changed shape 3-8pt left of the edge the
+   // user sees and not on it (user 2026-09-03, photo). This grip covers the
+   // gap column and hands the drag to the region, so the hit zone runs up to
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -75,7 +75,8 @@
+ // helium-fork: the floating sidebar card's inset from the window edges. It
+ // used to alias the contents card's inset; since M3.9d it is its own number
+ // (helium/arc_floating_sidebar.h) so the card can be calibrated against the
+-// reference browser while the contents card keeps its user-ruled 3.
++// reference browser while the contents card keeps its own inset (both 4
++// since M6-r5 / r5.1).
+ // The macOS traffic lights are pinned by AppKit (x≈11, vertically centered in
+ // the caption band) and cannot follow the card, so the card must come to
+ // them: with the upstream 8px inset the lights sat 3px from the card edge and
+Index: src/chrome/browser/ui/views/frame/multi_contents_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/multi_contents_view.h
++++ src/chrome/browser/ui/views/frame/multi_contents_view.h
+@@ -64,11 +64,12 @@
+   static constexpr int kSplitViewContentInset = 3;
+   // helium-fork: uniform breathing room around the contents card in the Arc
+   // shell (single-contents layout only; split view keeps its own inset).
+-  // Matches kSplitViewContentInset: stock Helium's frame gap is 3, and the
+-  // padded frame radius (8 - 3 = 5) is derived from that same 3, so any other
+-  // value both widens the window border against stock and breaks the corner
+-  // concentricity.
+-  static constexpr int kContentCardInset = kSplitViewContentInset;
++  // Was kSplitViewContentInset (3: stock Helium's frame gap, kept for corner
++  // concentricity with the window). M6-r5, user ruling 2026-09-04: 4 on every
++  // side (Arc measures 10, Dia 6). The concentricity reason went away with
++  // M6-r3.1 -- the card's radius is the shell's 12 now, not the window's
++  // minus this inset -- so nothing else derives from the 3 any more.
++  static constexpr int kContentCardInset = 4;
+ 
+   MultiContentsView(BrowserView* browser_view,
+                     std::unique_ptr<MultiContentsViewDelegate> delegate);
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -593,9 +593,9 @@
+     CustomCornersBackground::Corner rounded_corner;
+     rounded_corner.type = CustomCornersBackground::CornerType::kRounded;
+     // helium-fork: the floating card sits kFloatingSidebarGap from the window
+-    // edges, so its radius must be concentric with the system window radius
+-    // (window radius minus that gap). The generic 8 visibly mismatched the
+-    // window's corners ("侧边栏的R角和app窗口的R角没有匹配").
++    // edges; its radius is the shell's one (12, M6-r5.1 -- it used to be
++    // concentric with the window, window radius minus the gap, after the
++    // generic 8 visibly mismatched the window's corners).
+     rounded_corner.radius =
+         helium::FloatingSidebarCornerRadius(GetSystemWindowRadius());
+     corners[CornerOrientation::kTopLeading] = rounded_corner;
+Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
++++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
+@@ -22,6 +22,8 @@
+ #include "components/vector_icons/vector_icons.h"
+ #include "ui/accessibility/ax_enums.mojom.h"
+ #include "ui/base/l10n/l10n_util.h"
++#include "ui/color/color_id.h"
++#include "ui/views/animation/ink_drop.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/base/models/image_model.h"
+ #include "ui/color/color_provider.h"
+@@ -42,10 +44,9 @@
+ 
+ namespace {
+ 
+-// Arc g1 f_00300 (2x px / 2): the current space's square is 32x32 with a
+-// ≈7pt radius; the emoji glyph is 13-14pt tall; the icon-less dot is 8pt.
+-// M6-r3: was Arc's 7; the user's rule (2026-09-03) is one radius for every
+-// rounded rect in the shell, the capsules' 12.
++// Arc g1 f_00300 (2x px / 2): the emoji glyph is 13-14pt tall; the icon-less
++// dot is 8pt. The 32x32 square is the *hover* square since M6-r5 (below);
++// its radius is the shell's one (user rule 2026-09-03), the capsules' 12.
+ constexpr int kSquareRadius = 12;
+ constexpr int kEmojiFontSize = 13;
+ constexpr int kDotSize = 8;
+@@ -85,10 +86,38 @@
+   const base::RepeatingCallback<void(int)> on_command_;
+ };
+ 
++// The hover square every button on the bar wears (M6-r5, user ruling
++// 2026-09-04): the resting square behind the current space is gone -- Arc
++// has none, light (measured 2026-09-03) or dark (2026-09-04); which space is
++// current is told by saturation alone, as in Arc -- and a square shows only
++// under the mouse. One recipe for the whole row (user rule: every hover on a
++// row is the same colour): the sidebar's hover for surfaces with no resting
++// fill (GetSidebarHoverSurfaceColor, the rows'), instant like the rows'
++// (no tween), radius 12 like every rounded rect. Arc's own hover square was
++// not measured (it takes moving the mouse over the user's Arc).
++void PaintBarHoverSquare(const views::Button& button, gfx::Canvas* canvas) {
++  const views::Button::ButtonState state = button.GetState();
++  if (state != views::Button::STATE_HOVERED &&
++      state != views::Button::STATE_PRESSED) {
++    return;
++  }
++  const ui::ColorProvider* colors = button.GetColorProvider();
++  if (!colors) {
++    return;
++  }
++  cc::PaintFlags fill;
++  fill.setStyle(cc::PaintFlags::kFill_Style);
++  fill.setAntiAlias(true);
++  fill.setColor(
++      helium::GetSidebarHoverSurfaceColor(colors->GetColor(kColorToolbar)));
++  canvas->DrawRoundRect(gfx::RectF(button.GetLocalBounds()), kSquareRadius,
++                        fill);
++}
++
+ }  // namespace
+ 
+ // One space's icon. A leaf: it may carry its own menu one day, the bar may
+-// not. Paints the current-space square behind the emoji (or the dot), and
++// not. Paints the hover square behind the emoji (or the dot), and
+ // desaturates itself through a layer filter when it is not current.
+ class WorkspaceSpaceBarView::SpaceButton : public views::Button,
+                                            public views::ContextMenuController {
+@@ -167,18 +196,11 @@
+   // Button::OnPaint is final; the background pass paints under the emoji
+   // label, which is where the square belongs anyway.
+   void OnPaintBackground(gfx::Canvas* canvas) override {
++    PaintBarHoverSquare(*this, canvas);
+     const ui::ColorProvider* colors = GetColorProvider();
+     if (!colors) {
+       return;
+     }
+-    const SkColor sidebar = colors->GetColor(kColorToolbar);
+-    if (current_) {
+-      cc::PaintFlags fill;
+-      fill.setStyle(cc::PaintFlags::kFill_Style);
+-      fill.setAntiAlias(true);
+-      fill.setColor(helium::GetSidebarCurrentSpaceSurfaceColor(sidebar));
+-      canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), kSquareRadius, fill);
+-    }
+     if (icon_.empty()) {
+       cc::PaintFlags dot;
+       dot.setStyle(cc::PaintFlags::kFill_Style);
+@@ -200,6 +222,39 @@
+ BEGIN_METADATA(WorkspaceSpaceBarView, SpaceButton)
+ END_METADATA
+ 
++// The "⌄" (M6-r5): what CreateVectorImageButtonWithNativeTheme builds --
++// same glyph, colours, alignment and 4pt border -- minus its ink drop: the
++// bar's hover square is painted here instead, so the "⌄" and the space
++// icons wear one and the same hover (user rule), with no fade.
++class WorkspaceSpaceBarView::MenuButton : public views::ImageButton {
++  METADATA_HEADER(MenuButton, views::ImageButton)
++
++ public:
++  explicit MenuButton(PressedCallback callback)
++      : views::ImageButton(std::move(callback)) {
++    views::ConfigureVectorImageButton(this);
++    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
++    SetHasInkDropActionOnClick(false);
++  }
++
++  // views::ImageButton:
++  void OnThemeChanged() override {
++    views::ImageButton::OnThemeChanged();
++    const ui::ColorProvider* cp = GetColorProvider();
++    views::SetImageFromVectorIconWithColor(
++        this, vector_icons::kKeyboardArrowDownIcon, kMenuGlyphSize,
++        {cp->GetColor(ui::kColorIcon), cp->GetColor(ui::kColorIconDisabled),
++         ui::kColorIconHovered});
++  }
++  void OnPaintBackground(gfx::Canvas* canvas) override {
++    views::ImageButton::OnPaintBackground(canvas);
++    PaintBarHoverSquare(*this, canvas);
++  }
++};
++
++BEGIN_METADATA(WorkspaceSpaceBarView, MenuButton)
++END_METADATA
++
+ WorkspaceSpaceBarView::WorkspaceSpaceBarView(
+     BrowserWindowInterface* browser,
+     base::RepeatingClosure on_menu_pressed,
+@@ -209,11 +264,9 @@
+       on_menu_pressed_(std::move(on_menu_pressed)),
+       on_current_space_changed_(std::move(on_current_space_changed)),
+       on_current_space_will_change_(std::move(on_current_space_will_change)) {
+-  auto menu_button = views::CreateVectorImageButtonWithNativeTheme(
+-      base::BindRepeating(
+-          [](WorkspaceSpaceBarView* bar) { bar->on_menu_pressed_.Run(); },
+-          base::Unretained(this)),
+-      vector_icons::kKeyboardArrowDownIcon, kMenuGlyphSize);
++  auto menu_button = std::make_unique<MenuButton>(base::BindRepeating(
++      [](WorkspaceSpaceBarView* bar) { bar->on_menu_pressed_.Run(); },
++      base::Unretained(this)));
+   menu_button->SetTooltipText(
+       l10n_util::GetStringUTF16(IDS_HELIUM_WS_SIDEBAR_MENU_BUTTON));
+   menu_button->GetViewAccessibility().SetName(
+Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
++++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
+@@ -32,11 +32,14 @@
+ // left-packed, and the Dia-style "⌄" at the right that opens the sidebar
+ // menu. Sits in the 42pt band the user reserved for it on 2026-08-20.
+ //
+-// Arc, measured 2026-09-02 (g1 f_00300, 2x px / 2): the current space's
+-// icon on a 32x32pt rounded square (radius ≈7), icons 32pt apart edge to
+-// edge, non-current icons fully desaturated but not dimmed (their luminance
+-// matches the current one's), an icon-less space drawn as an 8pt grey dot,
+-// the square's bottom 9pt above the window's bottom. Arc's Library button
++// Arc, measured 2026-09-02 (g1 f_00300, 2x px / 2): icons on a 32pt pitch
++// edge to edge, non-current icons fully desaturated but not dimmed (their
++// luminance matches the current one's), an icon-less space drawn as an 8pt
++// grey dot, the icon row's bottom 9pt above the window's bottom. The faint
++// square that recording showed behind the current icon is not there in
++// Arc's light theme (2026-09-03) nor in its dark one (2026-09-04): M6-r5,
++// user ruling 2026-09-04 -- no resting square, saturation alone marks the
++// current space; a square appears only under the mouse. Arc's Library button
+ // and its trailing "+" are not here: New Space lives in the "⌄" menu (user
+ // ruling 2026-09-02).
+ //
+@@ -90,6 +93,7 @@
+ 
+  private:
+   class SpaceButton;
++  class MenuButton;
+ 
+   void Rebuild();
+   void UpdateCurrent();
