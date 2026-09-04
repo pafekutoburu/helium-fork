@@ -1,0 +1,168 @@
+Index: src/chrome/browser/ui/color/omnibox_color_mixer.cc
+===================================================================
+--- src.orig/chrome/browser/ui/color/omnibox_color_mixer.cc
++++ src/chrome/browser/ui/color/omnibox_color_mixer.cc
+@@ -574,4 +574,11 @@
+       /*output_for_dark_input=*/ui::FromTransformInput(),
+       /*output_for_light_input=*/helium::kArcListUrlColor);
+   mixer[kColorOmniboxResultsUrlSelected] = {kColorOmniboxResultsUrl};
++
++  // helium-fork M6-r3: the site-settings icon's hover wash is the toolbar
++  // buttons' -- one grey for every icon hover in the address row (user
++  // 2026-09-03: the omnibox's text-tinted wash read blue next to the
++  // extensions' neutral one).
++  mixer[kColorOmniboxIconHover] = {kColorToolbarInkDropHover};
++  mixer[kColorOmniboxIconPressed] = {kColorToolbarInkDropRipple};
+ }
+Index: src/chrome/browser/ui/helium/arc_omnibox_panel.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_omnibox_panel.h
++++ src/chrome/browser/ui/helium/arc_omnibox_panel.h
+@@ -81,7 +81,9 @@
+ // `card_inset` ABOVE the card's top edge and starts `card_inset` inside its
+ // left one, so that corner no longer coincides with anything -- there is
+ // nothing left to be concentric with, and the measured value wins.
+-inline constexpr int kArcOmniboxPanelRadius = 20;
++// M6-r3: was Dia's 20; the user's rule (2026-09-03) is one radius for
++// every rounded rect in the shell -- the capsules' 12.
++inline constexpr int kArcOmniboxPanelRadius = 12;
+ 
+ // How far *past the band's bottom edge* the panel reaches while there is
+ // nothing to suggest yet -- the "it popped out" cue, and the only reason the
+Index: src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
++++ src/chrome/browser/ui/helium/arc_omnibox_panel_unittest.cc
+@@ -96,15 +96,16 @@
+   EXPECT_TRUE(Placed().Contains(kField));
+ }
+ 
+-// The radius is Dia's 20 and no longer the card's: the r8 panel hangs above
+-// the card's top edge, so it shares no corner to be concentric with.
+-TEST(ArcOmniboxPanelTest, PanelRadiusIsDiasAndNotTheCards) {
++// M6-r3: the radius is the shell's one capsule radius (12) -- the user's
++// rule of 2026-09-03 replaced Dia's 20 -- and still not the card's: the r8
++// panel hangs above the card's top edge, so it shares no corner to be
++// concentric with.
++TEST(ArcOmniboxPanelTest, PanelRadiusIsTheShellRadiusAndNotTheCards) {
+   const ArcOmniboxPanelMetrics metrics = Metrics();
+   EXPECT_EQ(kArcOmniboxPanelRadius, metrics.panel_radius);
+-  EXPECT_EQ(20, metrics.panel_radius);
+-  // The card's radius at this window is 14 (17 - 3); the field's is 11.
++  EXPECT_EQ(12, metrics.panel_radius);
++  // The card's radius at this window is 14 (17 - 3).
+   EXPECT_NE(14, metrics.panel_radius);
+-  EXPECT_NE(metrics.field_radius, metrics.panel_radius);
+ }
+ 
+ // The outsets are the panel minus the field, per edge. Two of the four are
+Index: src/chrome/browser/ui/layout_constants.cc
+===================================================================
+--- src.orig/chrome/browser/ui/layout_constants.cc
++++ src/chrome/browser/ui/layout_constants.cc
+@@ -57,7 +57,10 @@
+     case LayoutConstant::kLocationBarChildInternalSpacing:
+       return touch_ui ? 10 : 7;
+     case LayoutConstant::kLocationBarChildCornerRadius:
+-      return 6;
++      // helium-fork M6-r3: the site-settings / chip hover takes the one
++      // capsule radius (user rule 2026-09-03: every rounded rect in the
++      // shell shares kVerticalTabCornerRadius, whatever its size).
++      return GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius);
+     case LayoutConstant::kLocationBarChipIconSize:
+       return 16;
+     case LayoutConstant::kLocationBarChipPadding:
+Index: src/chrome/browser/ui/views/helium/frame_corner_radius.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/helium/frame_corner_radius.cc
++++ src/chrome/browser/ui/views/helium/frame_corner_radius.cc
+@@ -18,6 +18,9 @@
+ #endif
+ 
+ int GetPaddedFrameRadius() {
+-  return GetSystemWindowRadius() -
+-         GetLayoutConstant(LayoutConstant::kHeliumBasePadding);
++  // helium-fork M6-r3.1: the content card's radius is the shell's one
++  // capsule radius (user 2026-09-03: "内容卡圆角也改 12"), no longer the
++  // window's minus the card inset. The window keeps the system radius; the
++  // card inside it is 12 like every other rounded rect in the shell.
++  return GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius);
+ }
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -899,7 +899,10 @@
+   // TODO(manukh): Move constants to layout_constants.cc.
+   // The padding between the left edges of the location bar and the LHS icon,
+   // e.g. the page info icon, the google G icon, the selected suggestion icon.
+-  int icon_left = 2;
++  // helium-fork M6-r3.1: none in the sidebar row -- the toolbar's interior
++  // margin (3pt) is the whole gap between the capsule and the chip's hover
++  // wash, the same 3pt the extension icons keep (user 2026-09-03).
++  int icon_left = ToolbarView::IsArcSidebarHostedFor(this) ? 0 : 2;
+   // The padding between the LHS icon and the text.
+   int text_left = 5;
+ 
+@@ -950,8 +953,14 @@
+   // to position our child views in this case, because other things may be
+   // positioned relative to them (e.g. the "bookmark added" bubble if the user
+   // hits ctrl-d).
+-  const int vertical_padding = GetLayoutConstant(
+-      LayoutConstant::kLocationBarPageInfoIconVerticalPadding);
++  // helium-fork M6-r3.1: in the sidebar row the chip takes the field's full
++  // 28pt, so its hover wash sits 3pt off the capsule above and below, like
++  // the extension icons' (it was 24pt / 5pt; user 2026-09-03: one inset).
++  const int vertical_padding =
++      ToolbarView::IsArcSidebarHostedFor(this)
++          ? 0
++          : GetLayoutConstant(
++                LayoutConstant::kLocationBarPageInfoIconVerticalPadding);
+   const int trailing_decorations_edge_padding = GetLayoutConstant(
+       LayoutConstant::kLocationBarTrailingDecorationEdgePadding);
+ 
+Index: src/chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.cc
++++ src/chrome/browser/ui/views/tabs/switcher/tab_switcher_hud_view.cc
+@@ -36,7 +36,7 @@
+ constexpr int kCardCornerRadius = 12;
+ constexpr int kCardBorderThickness = 2;
+ constexpr int kCardPadding = 8;
+-constexpr int kHudCornerRadius = 16;
++constexpr int kHudCornerRadius = 12;  // M6-r3: one shell radius (user rule)
+ constexpr int kHudPadding = 16;
+ constexpr int kCardSpacing = 12;
+ constexpr int kFaviconSize = 16;
+Index: src/chrome/browser/ui/views/toolbar/toolbar_button.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_button.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_button.cc
+@@ -169,8 +169,9 @@
+ }
+ 
+ int ToolbarButton::GetRoundedCornerRadius() const {
+-  return ChromeLayoutProvider::Get()->GetCornerRadiusMetric(
+-      views::Emphasis::kHigh, GetTargetSize());
++  // helium-fork M6-r3: the one capsule radius (user rule 2026-09-03), not
++  // the layout provider's 8.
++  return GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius);
+ }
+ 
+ float ToolbarButton::GetCornerRadiusFor(ToolbarButton::Edge edge) const {
+Index: src/chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.cc
+@@ -40,8 +40,9 @@
+     gfx::Rect rect(view->size());
+     rect.Inset(GetToolbarInkDropInsets(view));
+ 
+-    const int radii = ChromeLayoutProvider::Get()->GetCornerRadiusMetric(
+-        views::Emphasis::kHigh, rect.size());
++    // helium-fork M6-r3: the one capsule radius (user rule 2026-09-03).
++    const int radii =
++        GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius);
+ 
+     return SkPath::RRect(
+         SkRRect::MakeRectXY(gfx::RectToSkRect(rect), radii, radii));

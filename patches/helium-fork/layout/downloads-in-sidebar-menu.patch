@@ -1,0 +1,120 @@
+Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
++++ src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
+@@ -40,6 +40,7 @@
+ #include "chrome/browser/ui/views/download/bubble/download_bubble_contents_view.h"
+ #include "chrome/browser/ui/views/download/bubble/download_bubble_started_animation_views.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h"
+ #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+@@ -472,7 +473,29 @@
+   browser_view_ = nullptr;
+ }
+ 
++// helium-fork M6: the downloads button has moved out of the toolbar into the
++// sidebar's bottom "⌄" menu (user ruling 2026-09-02 -- in the hidden
++// address bar mode it was squeezed in among the extension icons, and both
++// modes now keep it in one place). Show()/Hide() light a dot on the "⌄"
++// instead of popping the toolbar button, the bubble anchors to the "⌄", and
++// everything behind them -- the bubble controller, the display controller's
++// progress state machine, the action item -- runs unchanged. A window with
++// no sidebar (an app or popup window) keeps the toolbar button.
++VerticalTabStripRegionView* DownloadToolbarUIController::SidebarRegion() const {
++  return browser_view_ ? browser_view_->vertical_tab_strip_region_view()
++                       : nullptr;
++}
++
++views::View* DownloadToolbarUIController::SidebarAnchor() const {
++  VerticalTabStripRegionView* const region = SidebarRegion();
++  return region ? region->SidebarMenuAnchor() : nullptr;
++}
++
+ void DownloadToolbarUIController::Show() {
++  if (VerticalTabStripRegionView* const region = SidebarRegion()) {
++    region->SetDownloadIndicator(true);
++    return;
++  }
+   auto* container = GetPinnedToolbarActions(browser_view_);
+   if (!container) {
+     return;
+@@ -482,6 +505,10 @@
+ 
+ void DownloadToolbarUIController::Hide() {
+   HideDetails();
++  if (VerticalTabStripRegionView* const region = SidebarRegion()) {
++    region->SetDownloadIndicator(false);
++    return;
++  }
+   auto* container = GetPinnedToolbarActions(browser_view_);
+   if (!container) {
+     return;
+@@ -490,6 +517,12 @@
+ }
+ 
+ bool DownloadToolbarUIController::IsShowing() const {
++  // With the sidebar anchor the bubble always has somewhere to go, so the
++  // downloads command (Cmd+Shift+J) keeps opening the bubble rather than
++  // falling through to chrome://downloads.
++  if (SidebarAnchor()) {
++    return true;
++  }
+   auto* button = GetDownloadsButton(browser_view_);
+   return button && button->GetVisible();
+ }
+@@ -946,6 +979,13 @@
+     return;
+   }
+ 
++  // helium-fork M6: the sidebar's "⌄" is the anchor when there is one.
++  if (views::View* const sidebar_anchor = SidebarAnchor()) {
++    pending_bubble_ = true;
++    OnBubbleAnchorAssembled(views::BubbleAnchor(sidebar_anchor));
++    return;
++  }
++
+   auto* container = GetPinnedToolbarActions(browser_view_);
+   if (!container) {
+     return;
+@@ -981,8 +1021,13 @@
+           ImmersiveModeController::ANIMATE_REVEAL_YES);
+     }
+   }
++  // helium-fork M6: anchored to the sidebar's bottom-right "⌄", the bubble
++  // opens to its right, bottom-aligned, instead of hanging under a toolbar
++  // button.
+   auto bubble_delegate = std::make_unique<views::BubbleDialogDelegate>(
+-      anchor.value(), views::BubbleBorder::TOP_RIGHT,
++      anchor.value(),
++      SidebarAnchor() ? views::BubbleBorder::LEFT_BOTTOM
++                      : views::BubbleBorder::TOP_RIGHT,
+       views::BubbleBorder::DIALOG_SHADOW,
+       /*autosize=*/true);
+   bubble_delegate->SetOwnedByWidget(
+Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h
++++ src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h
+@@ -41,6 +41,7 @@
+ class BrowserView;
+ class DownloadDisplayController;
+ class DownloadBubbleUIController;
++class VerticalTabStripRegionView;
+ class ProfileBrowserCollection;
+ 
+ // DownloadToolbarUIController is a controller for the downloads button shown in
+@@ -210,6 +211,12 @@
+ 
+   bool ShouldShowBubbleAsInactive() const;
+ 
++  // helium-fork M6: the sidebar region and its "⌄" button, which stand in
++  // for the toolbar's downloads button (see Show()). Null in windows with
++  // no sidebar.
++  VerticalTabStripRegionView* SidebarRegion() const;
++  views::View* SidebarAnchor() const;
++
+   void CloseAutofillPopup();
+ 
+   // Whether to show the progress ring as a continuously spinning ring, during

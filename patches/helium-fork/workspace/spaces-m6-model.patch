@@ -1,0 +1,3052 @@
+Index: src/chrome/browser/sessions/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/sessions/BUILD.gn
++++ src/chrome/browser/sessions/BUILD.gn
+@@ -10,6 +10,7 @@
+   public = [
+     "chrome_serialized_navigation_driver.h",
+     "chrome_tab_restore_service_client.h",
++    "helium_session_tab_extra_data.h",
+     "session_common_utils.h",
+     "session_restore.h",
+     "session_restore_observer.h",
+@@ -107,6 +108,7 @@
+       "app_session_service_factory.cc",
+       "exit_type_service.cc",
+       "exit_type_service_factory.cc",
++      "helium_session_tab_extra_data.cc",
+       "session_data_deleter.cc",
+       "session_data_service.cc",
+       "session_data_service_factory.cc",
+Index: src/chrome/browser/sessions/helium_session_tab_extra_data.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/sessions/helium_session_tab_extra_data.cc
+@@ -0,0 +1,26 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/sessions/helium_session_tab_extra_data.h"
++
++#include "content/public/browser/web_contents.h"
++
++HeliumSessionTabExtraData::HeliumSessionTabExtraData(
++    content::WebContents* contents)
++    : content::WebContentsUserData<HeliumSessionTabExtraData>(*contents) {}
++
++HeliumSessionTabExtraData::~HeliumSessionTabExtraData() = default;
++
++// static
++void HeliumSessionTabExtraData::Set(content::WebContents* contents,
++                                    const std::string& key,
++                                    const std::string& value) {
++  if (!contents) {
++    return;
++  }
++  CreateForWebContents(contents);
++  FromWebContents(contents)->entries_[key] = value;
++}
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(HeliumSessionTabExtraData);
+Index: src/chrome/browser/sessions/helium_session_tab_extra_data.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/sessions/helium_session_tab_extra_data.h
+@@ -0,0 +1,56 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_SESSIONS_HELIUM_SESSION_TAB_EXTRA_DATA_H_
++#define CHROME_BROWSER_SESSIONS_HELIUM_SESSION_TAB_EXTRA_DATA_H_
++
++#include <map>
++#include <string>
++
++#include "content/public/browser/web_contents_user_data.h"
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++// helium-fork M6-r1: per-tab session extra_data that has to survive a rebuild
++// of the session file.
++//
++// SessionService::AddTabExtraData() only appends a command. Whenever the
++// service rebuilds the file from the live browsers (startup, a window
++// closing, RebuildCommandsIfRequired), SessionServiceBase::BuildCommandsForTab
++// re-emits navigation, pin state, group, app id -- and no extra_data at all,
++// so anything written through AddTabExtraData() is gone after the next
++// rebuild. Measured on the user's profile 2026-09-03: the newest Session_
++// file held 9 tabs and zero "helium.space" commands, which is how every
++// space's Today tabs landed in the last-used space after a restart.
++//
++// Writers park their key/value here as well; BuildCommandsForTab re-emits
++// everything in it. The map is the tab's, so it also follows a tab across
++// windows.
++class HeliumSessionTabExtraData
++    : public content::WebContentsUserData<HeliumSessionTabExtraData> {
++ public:
++  ~HeliumSessionTabExtraData() override;
++
++  // Creates the holder on first use.
++  static void Set(content::WebContents* contents,
++                  const std::string& key,
++                  const std::string& value);
++
++  const std::map<std::string, std::string>& entries() const {
++    return entries_;
++  }
++
++ private:
++  friend class content::WebContentsUserData<HeliumSessionTabExtraData>;
++
++  explicit HeliumSessionTabExtraData(content::WebContents* contents);
++
++  std::map<std::string, std::string> entries_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++#endif  // CHROME_BROWSER_SESSIONS_HELIUM_SESSION_TAB_EXTRA_DATA_H_
+Index: src/chrome/browser/sessions/session_service_base.cc
+===================================================================
+--- src.orig/chrome/browser/sessions/session_service_base.cc
++++ src/chrome/browser/sessions/session_service_base.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/sessions/session_service_base.h"
+ 
++#include "chrome/browser/sessions/helium_session_tab_extra_data.h"
++
+ #include <stddef.h>
+ 
+ #include <set>
+@@ -663,6 +665,18 @@
+         sessions::CreatePinnedStateCommand(session_id, true));
+   }
+ 
++  // helium-fork M6-r1: re-emit the tab's extra_data. A rebuild replaces the
++  // whole file with what is generated here, and upstream never re-emits
++  // extra_data, so a value written once through AddTabExtraData() would be
++  // lost at the next rebuild (helium_session_tab_extra_data.h).
++  if (const HeliumSessionTabExtraData* extra =
++          HeliumSessionTabExtraData::FromWebContents(tab)) {
++    for (const auto& [key, value] : extra->entries()) {
++      command_storage_manager()->AppendRebuildCommand(
++          sessions::CreateAddTabExtraDataCommand(session_id, key, value));
++    }
++  }
++
+   // Record the association between the sessionStorage namespace and the tab.
+   content::SessionStorageNamespace* session_storage_namespace =
+       tab->GetController().GetDefaultSessionStorageNamespace();
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -440,8 +440,12 @@
+     "helium_workspace/workspace_service.h",
+     "helium_workspace/workspace_service_factory.cc",
+     "helium_workspace/workspace_service_factory.h",
++    "helium_workspace/workspace_space.cc",
++    "helium_workspace/workspace_space.h",
+     "helium_workspace/workspace_tab_controller.cc",
+     "helium_workspace/workspace_tab_controller.h",
++    "helium_workspace/workspace_tab_restore_data.cc",
++    "helium_workspace/workspace_tab_restore_data.h",
+     "helium_workspace/workspace_url_drop.h",
+     "idle_bubble.h",
+     "managed_ui.cc",
+@@ -4078,6 +4082,14 @@
+       "views/tabs/vertical/helium_media_strip_view.h",
+       "views/tabs/vertical/helium_undo_bar_view.cc",
+       "views/tabs/vertical/helium_undo_bar_view.h",
++      "views/tabs/vertical/workspace_space_bar_view.cc",
++      "views/tabs/vertical/workspace_space_bar_view.h",
++      "views/frame/helium_sidebar_menu_data.cc",
++      "views/frame/helium_sidebar_menu_data.h",
++      "views/frame/helium_sidebar_menu_view.cc",
++      "views/frame/helium_sidebar_menu_view.h",
++      "views/frame/helium_sidebar_submenu_view.cc",
++      "views/frame/helium_sidebar_submenu_view.h",
+       "views/frame/web_contents_close_handler.cc",
+       "views/frame/web_contents_close_handler.h",
+       "views/frame/web_contents_close_handler_delegate.h",
+@@ -5854,6 +5866,8 @@
+     "helium/arc_media_strip_unittest.cc",
+     "helium/arc_minimal_field_state.h",
+     "helium/arc_minimal_field_state_unittest.cc",
++    "helium/arc_sidebar_menu.h",
++    "helium/arc_sidebar_menu_unittest.cc",
+     "helium/arc_sidebar_split.h",
+     "helium/arc_sidebar_split_unittest.cc",
+     "helium/arc_sidebar_surface.h",
+@@ -5881,6 +5895,9 @@
+     "helium_workspace/workspace_service.cc",
+     "helium_workspace/workspace_service.h",
+     "helium_workspace/workspace_service_unittest.cc",
++    "helium_workspace/workspace_space.cc",
++    "helium_workspace/workspace_space.h",
++    "helium_workspace/workspace_space_unittest.cc",
+     "helium_workspace/workspace_url_drop.h",
+     "helium_workspace/workspace_url_drop_unittest.cc",
+   ]
+Index: src/chrome/browser/ui/helium/arc_sidebar_menu.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_sidebar_menu.h
+@@ -0,0 +1,86 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_MENU_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_MENU_H_
++
++#include <algorithm>
++
++#include "base/time/time.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++
++// helium-fork M6: the sidebar's bottom "⌄" menu -- the panel Dia opens from
++// the chevron at the bottom of its sidebar. The user pointed at Dia for this
++// module (2026-09-02, screenshot `Screenshot 2026-09-02 at 06.47.25.png`,
++// 1156x2170 @2x, Dia sidebar 262pt wide), so the numbers are Dia's, measured
++// off that screenshot (2x px / 2):
++//
++//   panel width 333pt; corner radius ≈18pt (37px fitted); 1px hairline
++//   (L177 on a L236 panel); a soft ≈20pt shadow (255 -> 233 above the panel);
++//   rows 37pt apart, icon at x17 (14pt), text at x40.5 (≈13pt, cap 19px);
++//   the separator 1pt at ≈0.10 black; the panel's bottom 46pt above the
++//   window's bottom with the chevron's centre 23.5pt above it, 23pt in from
++//   the sidebar's right edge; the panel's left edge 8pt left of the chevron's
++//   centre, the panel running out over the page.
++//
++// Header-only and free of //ui/views on purpose, like every other arc_*.h:
++// the geometry below is asserted in helium_workspace_unittests.
++namespace helium {
++
++inline constexpr int kSidebarMenuWidth = 333;
++// M6-r3: was Dia's 18; the user's rule (2026-09-03) is one radius for
++// every rounded rect in the shell -- the capsules' 12
++// (LayoutConstant::kVerticalTabCornerRadius; this header stays free of
++// //ui/views, hence the literal).
++inline constexpr int kSidebarMenuRadius = 12;
++inline constexpr int kSidebarMenuRowHeight = 37;
++inline constexpr int kSidebarMenuIconX = 17;
++inline constexpr int kSidebarMenuIconSize = 14;
++inline constexpr int kSidebarMenuTextX = 42;  // our row column (M3.10), 40.5 in Dia
++inline constexpr int kSidebarMenuVerticalInset = 8;
++inline constexpr int kSidebarMenuSeparatorHeight = 1;
++inline constexpr float kSidebarMenuSeparatorAlpha = 0.10f;
++// Dia's 1px hairline: L177 on the L236 panel = black at ≈0.25.
++inline constexpr float kSidebarMenuBorderAlpha = 0.25f;
++// How far the panel's left edge sits left of the chevron's centre.
++inline constexpr int kSidebarMenuAnchorOverhang = 8;
++// The gap between the panel's bottom and the top of the chevron's 32pt slot
++// (Dia: panel bottom at 46, the slot's top at 41).
++inline constexpr int kSidebarMenuAnchorGap = 5;
++// The same 200ms the media panel and the undo bar open with.
++inline constexpr base::TimeDelta kSidebarMenuDuration = base::Milliseconds(200);
++
++// The panel's height for |rows| rows split into |groups| groups (a
++// separator between consecutive groups).
++inline constexpr int SidebarMenuHeight(int rows, int groups) {
++  const int separators = groups > 1 ? groups - 1 : 0;
++  return 2 * kSidebarMenuVerticalInset + rows * kSidebarMenuRowHeight +
++         separators * (kSidebarMenuSeparatorHeight + 2 * kSidebarMenuVerticalInset);
++}
++
++// Where the panel goes: |anchor| is the chevron's 32pt slot in the parent's
++// coordinates, |parent| the parent's size. The panel's left edge hangs
++// kSidebarMenuAnchorOverhang left of the anchor's centre and its bottom sits
++// kSidebarMenuAnchorGap above the anchor's top, both clamped so the panel
++// never leaves the parent. At |progress| < 1 the panel is that much shorter,
++// growing upward out of the anchor (the media panel's own rule).
++inline gfx::Rect SidebarMenuBounds(const gfx::Rect& anchor,
++                                   const gfx::Size& parent,
++                                   int expanded_height,
++                                   double progress) {
++  const double t = std::clamp(progress, 0.0, 1.0);
++  const int width = std::min(kSidebarMenuWidth, std::max(parent.width(), 0));
++  const int bottom = std::min(anchor.y() - kSidebarMenuAnchorGap, parent.height());
++  const int max_height = std::max(bottom, 0);
++  const int full = std::min(expanded_height, max_height);
++  const int height = static_cast<int>(full * t + 0.5);
++  int x = anchor.CenterPoint().x() - kSidebarMenuAnchorOverhang;
++  x = std::clamp(x, 0, std::max(parent.width() - width, 0));
++  return gfx::Rect(x, bottom - height, width, height);
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_SIDEBAR_MENU_H_
+Index: src/chrome/browser/ui/helium/arc_sidebar_menu_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_sidebar_menu_unittest.cc
+@@ -0,0 +1,55 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_sidebar_menu.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++// Four rows in two groups (New Space | Downloads / History / Bookmarks).
++TEST(ArcSidebarMenuTest, HeightCountsRowsAndOneSeparatorPerGroupBoundary) {
++  EXPECT_EQ(2 * kSidebarMenuVerticalInset + 4 * kSidebarMenuRowHeight +
++                kSidebarMenuSeparatorHeight + 2 * kSidebarMenuVerticalInset,
++            SidebarMenuHeight(4, 2));
++  EXPECT_EQ(2 * kSidebarMenuVerticalInset + 3 * kSidebarMenuRowHeight,
++            SidebarMenuHeight(3, 1));
++}
++
++// Dia: the panel hangs 8pt left of the chevron's centre, its bottom 5pt
++// above the chevron's slot, and it runs out over the page.
++TEST(ArcSidebarMenuTest, FullPanelSitsAboveTheAnchorAndOverhangsIt) {
++  const gfx::Rect anchor(230, 1000, 32, 32);
++  const gfx::Size parent(1200, 1050);
++  const gfx::Rect bounds = SidebarMenuBounds(anchor, parent, 200, 1.0);
++  EXPECT_EQ(anchor.CenterPoint().x() - kSidebarMenuAnchorOverhang, bounds.x());
++  EXPECT_EQ(kSidebarMenuWidth, bounds.width());
++  EXPECT_EQ(200, bounds.height());
++  EXPECT_EQ(anchor.y() - kSidebarMenuAnchorGap, bounds.bottom());
++}
++
++// The bottom edge is pinned while the panel grows: y + height is constant.
++TEST(ArcSidebarMenuTest, GrowsUpwardFromAPinnedBottom) {
++  const gfx::Rect anchor(230, 1000, 32, 32);
++  const gfx::Size parent(1200, 1050);
++  const gfx::Rect half = SidebarMenuBounds(anchor, parent, 200, 0.5);
++  const gfx::Rect full = SidebarMenuBounds(anchor, parent, 200, 1.0);
++  EXPECT_EQ(full.bottom(), half.bottom());
++  EXPECT_EQ(100, half.height());
++  EXPECT_EQ(0, SidebarMenuBounds(anchor, parent, 200, 0.0).height());
++}
++
++// A short window caps the height; a narrow one keeps the panel inside.
++TEST(ArcSidebarMenuTest, ClampsToTheParent) {
++  const gfx::Rect anchor(230, 120, 32, 32);
++  const gfx::Rect bounds = SidebarMenuBounds(anchor, gfx::Size(300, 160), 200, 1.0);
++  EXPECT_EQ(anchor.y() - kSidebarMenuAnchorGap, bounds.height());
++  EXPECT_EQ(0, bounds.y());
++  EXPECT_EQ(300 - kSidebarMenuWidth < 0 ? 0 : 300 - kSidebarMenuWidth, bounds.x());
++  EXPECT_LE(bounds.right(), 300);
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_sidebar_surface.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_sidebar_surface.h
++++ src/chrome/browser/ui/helium/arc_sidebar_surface.h
+@@ -181,6 +181,22 @@
+   return color_utils::AlphaBlend(SK_ColorWHITE, sidebar, kSelectedAlpha);
+ }
+ 
++// M6: the rounded square behind the current space's icon in the sidebar's
++// bottom bar -- a resting fill, not a hover.
++//
++// Arc measured 2026-09-02 (g1 f_00300, dark theme only -- the whole round-0
++// recording is dark): square RGB 93 on a sidebar of 80, i.e. white at
++// ≈0.074. The light theme could not be measured, so it is *derived* by the
++// equal-L* rule the user chose for the hover pair (r1, 2026-08-23): the dark
++// step is L 33.6 -> 39.0, +5.4; walking the light sidebar (L228 = L* 90.6)
++// the same distance the other way lands at L* 85.2 ≈ RGB 213, which is
++// black at ≈0.066 over 228. Acceptance-tunable.
++inline SkColor GetSidebarCurrentSpaceSurfaceColor(SkColor sidebar) {
++  return color_utils::IsDark(sidebar)
++             ? color_utils::AlphaBlend(SK_ColorWHITE, sidebar, 0.074f)
++             : color_utils::AlphaBlend(SK_ColorBLACK, sidebar, 0.066f);
++}
++
+ // The floating card -- the active tab row and the media strip, Dia's
+ // treatment of "the tab you are on" (user 2026-08-20).
+ //
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_archive_policy.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_policy.cc
+@@ -8,6 +8,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "components/tabs/public/tab_interface.h"
+@@ -57,6 +58,10 @@
+   state.is_active = (tab == active);
+   state.is_split = tab->IsSplit();
+   state.is_workspace_entry = service.IsWorkspaceTab(tab->GetHandle());
++  // M6: "" for a favorite's tab (every space) as well as for an untagged
++  // one; the plan reads both as belonging everywhere.
++  const std::string space = service.GetSpaceForTab(tab->GetHandle());
++  state.space_id = space == kGlobalSpaceId ? std::string() : space;
+ 
+   content::WebContents* contents = tab->GetContents();
+   if (!contents) {
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_ARCHIVE_POLICY_H_
+ 
+ #include <algorithm>
++#include <string>
+ #include <vector>
+ 
+ #include "base/containers/span.h"
+@@ -95,6 +96,13 @@
+   // Cmd+D makes a tab permanent.
+   bool is_workspace_entry = false;
+ 
++  // M6: WorkspaceService::GetSpaceForTab(), with the global (favorite)
++  // answer folded into "" -- empty means the tab belongs to every space.
++  // Only the explicit command reads it (Cmd+Shift+K clears the space the
++  // user is looking at); the unattended sweep archives across all spaces,
++  // as Arc does.
++  std::string space_id;
++
+   // IsCurrentlyAudible() && !IsAudioMuted(). A muted tab is not bothering
+   // anyone and gets no protection.
+   bool is_audible = false;
+@@ -137,6 +145,9 @@
+   kMediaActive,   // picture-in-picture, or being captured
+   kBeforeUnload,  // would put up a "Leave site?" dialog
+   kTooRecent,     // has not aged past the tier yet
++  kOtherSpace,    // M6: lives in a space the window is not looking at
++                  // (explicit command only). Last on purpose: the probe
++                  // counts reasons by value.
+ };
+ 
+ struct ArchivePlan {
+@@ -237,8 +248,24 @@
+ // The user asked for these tabs to go. A page holding unsaved work still
+ // gets to object -- Chromium puts up its own confirmation dialog on the way
+ // out, which is the right place to change your mind.
+-inline ArchiveSkipReason ClassifyForCloseUnpinned(const ArchiveTabState& tab) {
+-  return ClassifyProtections(tab);
++//
++// M6: |current_space_id| narrows the command to one space -- the one the
++// window is looking at -- because that is the Today list the user sees when
++// they ask for it to be cleared. Empty means "every space" (the pre-M6
++// behaviour, and what the tests without spaces still exercise). Checked
++// after the shared protections so kSidebarEntry keeps its precedence.
++inline ArchiveSkipReason ClassifyForCloseUnpinned(
++    const ArchiveTabState& tab,
++    const std::string& current_space_id = std::string()) {
++  const ArchiveSkipReason protection = ClassifyProtections(tab);
++  if (protection != ArchiveSkipReason::kNone) {
++    return protection;
++  }
++  if (!current_space_id.empty() && !tab.space_id.empty() &&
++      tab.space_id != current_space_id) {
++    return ArchiveSkipReason::kOtherSpace;
++  }
++  return ArchiveSkipReason::kNone;
+ }
+ 
+ // |window_tabs| must be *every* tab in the window, active one included, in
+@@ -267,12 +294,16 @@
+ }
+ 
+ // Same contract on |window_tabs| as above. Unlike the sweep, this one can
+-// come back covering the whole window.
++// come back covering the whole window. M6: the space filter is applied
++// here, never to |window_tabs| -- a pre-filtered sample would break the
++// contract the sweep's theorem rests on.
+ inline ArchivePlan PlanCloseUnpinned(
+-    base::span<const ArchiveTabState> window_tabs) {
++    base::span<const ArchiveTabState> window_tabs,
++    const std::string& current_space_id = std::string()) {
+   ArchivePlan plan;
+   for (const ArchiveTabState& tab : window_tabs) {
+-    if (ClassifyForCloseUnpinned(tab) == ArchiveSkipReason::kNone) {
++    if (ClassifyForCloseUnpinned(tab, current_space_id) ==
++        ArchiveSkipReason::kNone) {
+       plan.to_close.push_back(tab.handle);
+     }
+   }
+Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_archive_policy_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_archive_policy_unittest.cc
+@@ -390,5 +390,62 @@
+   EXPECT_FALSE(plan.empties_window);
+ }
+ 
++// ---- M6 spaces ------------------------------------------------------------
++
++// Cmd+Shift+K clears the Today the user is looking at. Tabs of other spaces
++// are alive in the same strip and must be left alone; a global (favorite)
++// tab and an untagged one belong everywhere and are still fair game -- but
++// kSidebarEntry keeps its precedence over kOtherSpace.
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedSparesOtherSpaces) {
++  std::vector<ArchiveTabState> tabs;
++  for (int i = 0; i < 5; ++i) {
++    tabs.push_back(Aged(base::Minutes(1)));
++  }
++  tabs[0].space_id = "home";
++  tabs[1].space_id = "work";
++  tabs[2].space_id = "";  // global / untagged
++  tabs[3].space_id = "work";
++  tabs[3].is_workspace_entry = true;
++  tabs[4].space_id = "home";
++  tabs[4].is_active = true;
++
++  EXPECT_EQ(ArchiveSkipReason::kOtherSpace,
++            ClassifyForCloseUnpinned(tabs[1], "home"));
++  EXPECT_EQ(ArchiveSkipReason::kSidebarEntry,
++            ClassifyForCloseUnpinned(tabs[3], "home"));
++  EXPECT_EQ(ArchiveSkipReason::kNone, ClassifyForCloseUnpinned(tabs[2], "home"));
++
++  const ArchivePlan plan = PlanCloseUnpinned(tabs, "home");
++  EXPECT_THAT(plan.to_close,
++              ElementsAre(tabs[0].handle, tabs[2].handle, tabs[4].handle));
++  EXPECT_FALSE(plan.empties_window);
++}
++
++// No current space named = the pre-M6 command: every space at once.
++TEST_F(WorkspaceArchivePolicyTest, CloseUnpinnedWithoutASpaceClearsAllSpaces) {
++  std::vector<ArchiveTabState> tabs = {Aged(base::Minutes(1)),
++                                       Aged(base::Minutes(1))};
++  tabs[0].space_id = "home";
++  tabs[1].space_id = "work";
++  const ArchivePlan plan = PlanCloseUnpinned(tabs);
++  EXPECT_THAT(plan.to_close, ElementsAre(tabs[0].handle, tabs[1].handle));
++  EXPECT_TRUE(plan.empties_window);
++}
++
++// Arc archives across every space (non-active spaces' tabs are alive and
++// age like any other), so the unattended sweep never looks at the space.
++TEST_F(WorkspaceArchivePolicyTest, AutoArchiveIgnoresSpaces) {
++  std::vector<ArchiveTabState> tabs = {Aged(base::Hours(48)),
++                                       Aged(base::Hours(48)),
++                                       Aged(base::Hours(48))};
++  tabs[0].space_id = "home";
++  tabs[1].space_id = "work";
++  tabs[2].space_id = "home";
++  tabs[2].is_active = true;
++  const ArchivePlan plan = PlanAutoArchive(tabs, now_, kArchive24Hours);
++  EXPECT_THAT(plan.to_close, ElementsAre(tabs[0].handle, tabs[1].handle));
++  EXPECT_FALSE(plan.empties_window);
++}
++
+ }  // namespace
+ }  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ 
++#include <string>
++
+ #include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
+ #include "components/pref_registry/pref_registry_syncable.h"
+ 
+@@ -12,7 +14,8 @@
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterListPref(kWorkspaceEntries);
+   registry->RegisterBooleanPref(kWorkspaceMigratedFromPinnedTabs, false);
+-  registry->RegisterBooleanPref(kWorkspaceSpaceCollapsed, false);
++  registry->RegisterListPref(kWorkspaceSpaces);
++  registry->RegisterStringPref(kWorkspaceCurrentSpaceId, std::string());
+   registry->RegisterIntegerPref(kWorkspaceTodayArchiveMinutes,
+                                 kArchiveDefaultMinutes);
+ }
+Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.h
++++ src/chrome/browser/ui/helium_workspace/workspace_prefs.h
+@@ -24,10 +24,20 @@
+ inline constexpr char kWorkspaceMigratedFromPinnedTabs[] =
+     "helium.workspace.migrated_from_pinned_tabs";
+ 
+-// Whether the space header row in the sidebar is collapsed, hiding the
+-// full-row pinned section below it. The header itself stays visible.
+-inline constexpr char kWorkspaceSpaceCollapsed[] =
+-    "helium.workspace.space_collapsed";
++// M6: list of dicts describing the spaces (see workspace_space.h). Entries
++// point into it through their space_id. Empty on a pre-M6 profile, in which
++// case WorkspaceService mints the one space every existing entry already
++// names. (The pre-M3.13 "helium.workspace.space_collapsed" bool that used
++// to sit here was dead since the single pseudo-space header retired; the
++// per-space collapsed bit lives in this list now.)
++inline constexpr char kWorkspaceSpaces[] = "helium.workspace.spaces";
++
++// M6: the space the user switched to last, in any window. Seeds the
++// current space of every new window (the current space itself is per
++// window and lives in WorkspaceTabController); a restored window then
++// corrects itself from its active tab's session tag.
++inline constexpr char kWorkspaceCurrentSpaceId[] =
++    "helium.workspace.current_space_id";
+ 
+ // How long an unpinned sidebar tab may sit untouched before it is closed
+ // (the way back is History or the reopen-closed-tab shortcut).
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
+@@ -5,9 +5,11 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ 
+ #include <algorithm>
++#include <cstddef>
+ #include <set>
+ #include <utility>
+ 
++#include "base/check.h"
+ #include "base/functional/bind.h"
+ #include "base/uuid.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+@@ -26,7 +28,13 @@
+ 
+ }  // namespace
+ 
+-WorkspaceService::WorkspaceService(PrefService* prefs) : prefs_(prefs) {
++WorkspaceService::RemovedSpace::RemovedSpace() = default;
++WorkspaceService::RemovedSpace::RemovedSpace(const RemovedSpace&) = default;
++WorkspaceService::RemovedSpace::~RemovedSpace() = default;
++
++WorkspaceService::WorkspaceService(PrefService* prefs,
++                                   std::u16string first_space_name)
++    : prefs_(prefs), first_space_name_(std::move(first_space_name)) {
+   LoadFromPrefs();
+ 
+   // One-shot migration off the old model, where every entry was backed by a
+@@ -67,7 +75,8 @@
+ 
+ std::string WorkspaceService::AddEntry(WorkspaceEntry::Section section,
+                                        const GURL& url,
+-                                       const std::u16string& title) {
++                                       const std::u16string& title,
++                                       const std::string& space_id) {
+   if (!url.is_valid()) {
+     return std::string();
+   }
+@@ -83,10 +92,11 @@
+ 
+   WorkspaceEntry entry;
+   entry.id = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  entry.space_id = ResolveSpaceId(space_id);
+   entry.section = section;
+   entry.url = url;
+   entry.title = title;
+-  entry.position = NextTopLevelPosition(section);
++  entry.position = NextTopLevelPosition(section, entry.space_id);
+   const std::string id = entry.id;
+   entries_.push_back(std::move(entry));
+   SortEntries();
+@@ -166,7 +176,8 @@
+ }
+ 
+ bool WorkspaceService::SetEntrySection(const std::string& id,
+-                                       WorkspaceEntry::Section section) {
++                                       WorkspaceEntry::Section section,
++                                       const std::string& space_id) {
+   for (WorkspaceEntry& entry : entries_) {
+     if (entry.id != id) {
+       continue;
+@@ -179,9 +190,20 @@
+       // The grid holds tiles, not folders (Arc rejects this too, 轮0).
+       return false;
+     }
++    // A demoted favorite lands in the space the user is looking at; without
++    // one it keeps whatever dormant space it carried into the grid.
++    const std::string target_space =
++        (section == WorkspaceEntry::Section::kPinned && FindSpaceById(space_id))
++            ? space_id
++            : ResolveSpaceId(entry.space_id);
++    // Counted before the entry joins the target scope, so it does not count
++    // itself (the old code did, and a demotion into an empty space landed
++    // at 1 instead of 0).
++    const int position = NextTopLevelPosition(section, target_space);
+     entry.section = section;
+     entry.folder_id.clear();  // leaving the pinned area leaves the folder
+-    entry.position = NextTopLevelPosition(section);
++    entry.space_id = target_space;
++    entry.position = position;
+     SortEntries();
+     PersistToPrefs();
+     NotifyChanged();
+@@ -192,7 +214,8 @@
+ 
+ bool WorkspaceService::MoveEntry(const std::string& id,
+                                  WorkspaceEntry::Section target_section,
+-                                 size_t target_index) {
++                                 size_t target_index,
++                                 const std::string& space_id) {
+   const auto source = std::ranges::find_if(
+       entries_, [&](const WorkspaceEntry& e) { return e.id == id; });
+   if (source == entries_.end()) {
+@@ -214,6 +237,14 @@
+   // that); a child moved this way leaves its folder. Into-folder moves are
+   // MoveEntryToFolder()'s business.
+   moved.folder_id.clear();
++  // M6: the pinned scope is one space. |space_id| retargets (round 3's
++  // "Move to"), otherwise the entry stays in its own; a stale id falls back
++  // to the first space rather than stranding the entry in no space at all.
++  if (FindSpaceById(space_id)) {
++    moved.space_id = space_id;
++  }
++  moved.space_id = ResolveSpaceId(moved.space_id);
++  const bool pinned_scope = target_section == WorkspaceEntry::Section::kPinned;
+ 
+   // |target_index| counts the target section's top-level entries with the
+   // moved one already removed. Open a gap at the clamped slot by renumbering
+@@ -221,7 +252,8 @@
+   // renumber every scope densely (the pref is rewritten in full anyway).
+   std::vector<WorkspaceEntry*> scope;
+   for (WorkspaceEntry& entry : entries_) {
+-    if (entry.section == target_section && entry.folder_id.empty()) {
++    if (entry.section == target_section && entry.folder_id.empty() &&
++        (!pinned_scope || entry.space_id == moved.space_id)) {
+       scope.push_back(&entry);
+     }
+   }
+@@ -249,13 +281,16 @@
+   });
+ }
+ 
+-std::string WorkspaceService::AddFolder(const std::u16string& title) {
++std::string WorkspaceService::AddFolder(const std::u16string& title,
++                                        const std::string& space_id) {
+   WorkspaceEntry entry;
+   entry.id = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  entry.space_id = ResolveSpaceId(space_id);
+   entry.section = WorkspaceEntry::Section::kPinned;
+   entry.kind = WorkspaceEntry::Kind::kFolder;
+   entry.title = title;
+-  entry.position = NextTopLevelPosition(WorkspaceEntry::Section::kPinned);
++  entry.position =
++      NextTopLevelPosition(WorkspaceEntry::Section::kPinned, entry.space_id);
+   const std::string id = entry.id;
+   entries_.push_back(std::move(entry));
+   SortEntries();
+@@ -347,11 +382,14 @@
+   if (!folder || !folder->is_folder()) {
+     return false;
+   }
++  // Read before the erase below shifts the vector out from under |folder|.
++  const std::string folder_space_id = folder->space_id;
+ 
+   WorkspaceEntry moved = std::move(*source);
+   entries_.erase(source);
+   moved.section = WorkspaceEntry::Section::kPinned;
+   moved.folder_id = folder_id;
++  moved.space_id = folder_space_id;  // a child's space is its folder's
+ 
+   // Same gap-at-slot technique as MoveEntry, over the folder's children.
+   std::vector<WorkspaceEntry*> scope;
+@@ -378,6 +416,255 @@
+   return true;
+ }
+ 
++const WorkspaceSpace* WorkspaceService::FindSpaceById(
++    const std::string& id) const {
++  for (const WorkspaceSpace& space : spaces_) {
++    if (space.id == id) {
++      return &space;
++    }
++  }
++  return nullptr;
++}
++
++const std::string& WorkspaceService::FirstSpaceId() const {
++  CHECK(!spaces_.empty());
++  return spaces_.front().id;
++}
++
++std::string WorkspaceService::AddSpace(const std::u16string& name,
++                                       const std::string& icon,
++                                       const std::string& insert_after_id) {
++  WorkspaceSpace space;
++  space.id = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  space.name = name;
++  space.icon = icon;
++  // Right of |insert_after_id|: give it that slot + 1 and push everything
++  // from there on by one; SortAndRenumberSpaces makes the order official.
++  size_t slot = spaces_.size();
++  for (size_t i = 0; i < spaces_.size(); ++i) {
++    if (spaces_[i].id == insert_after_id) {
++      slot = i + 1;
++      break;
++    }
++  }
++  for (size_t i = slot; i < spaces_.size(); ++i) {
++    ++spaces_[i].position;
++  }
++  space.position = static_cast<int>(slot);
++  const std::string id = space.id;
++  spaces_.push_back(std::move(space));
++  SortAndRenumberSpaces();
++  SortEntries();
++  PersistSpacesToPrefs();
++  NotifySpacesChanged();
++  NotifyChanged();
++  return id;
++}
++
++bool WorkspaceService::RenameSpace(const std::string& id,
++                                   const std::u16string& name) {
++  for (WorkspaceSpace& space : spaces_) {
++    if (space.id != id) {
++      continue;
++    }
++    if (space.name != name) {
++      space.name = name;
++      PersistSpacesToPrefs();
++      NotifySpacesChanged();
++      NotifyChanged();
++    }
++    return true;
++  }
++  return false;
++}
++
++bool WorkspaceService::SetSpaceIcon(const std::string& id,
++                                    const std::string& icon) {
++  for (WorkspaceSpace& space : spaces_) {
++    if (space.id != id) {
++      continue;
++    }
++    if (space.icon != icon) {
++      space.icon = icon;
++      PersistSpacesToPrefs();
++      NotifySpacesChanged();
++      NotifyChanged();
++    }
++    return true;
++  }
++  return false;
++}
++
++bool WorkspaceService::SetSpaceCollapsed(const std::string& id,
++                                         bool collapsed) {
++  for (WorkspaceSpace& space : spaces_) {
++    if (space.id != id) {
++      continue;
++    }
++    if (space.collapsed != collapsed) {
++      space.collapsed = collapsed;
++      PersistSpacesToPrefs();
++      NotifySpacesChanged();
++      NotifyChanged();
++    }
++    return true;
++  }
++  return false;
++}
++
++bool WorkspaceService::MoveSpace(const std::string& id, size_t target_index) {
++  const auto source = std::ranges::find_if(
++      spaces_, [&](const WorkspaceSpace& s) { return s.id == id; });
++  if (source == spaces_.end()) {
++    return false;
++  }
++  WorkspaceSpace moved = std::move(*source);
++  spaces_.erase(source);
++  const size_t slot = std::min(target_index, spaces_.size());
++  spaces_.insert(spaces_.begin() + static_cast<std::ptrdiff_t>(slot),
++                 std::move(moved));
++  for (size_t i = 0; i < spaces_.size(); ++i) {
++    spaces_[i].position = static_cast<int>(i);
++  }
++  SortEntries();
++  PersistSpacesToPrefs();
++  NotifySpacesChanged();
++  NotifyChanged();
++  return true;
++}
++
++std::optional<WorkspaceService::RemovedSpace> WorkspaceService::RemoveSpace(
++    const std::string& id) {
++  const auto source = std::ranges::find_if(
++      spaces_, [&](const WorkspaceSpace& s) { return s.id == id; });
++  if (source == spaces_.end() || spaces_.size() <= 1) {
++    return std::nullopt;  // unknown, or the last space stays
++  }
++  RemovedSpace removed;
++  removed.space = *source;
++  spaces_.erase(source);
++  // entries_ is in display order, so the snapshot already reads folder
++  // first, children after -- what RestoreEntries wants.
++  for (const WorkspaceEntry& entry : entries_) {
++    if (entry.section == WorkspaceEntry::Section::kPinned &&
++        entry.space_id == id) {
++      removed.entries.push_back(entry);
++    }
++  }
++  std::erase_if(entries_, [&](const WorkspaceEntry& e) {
++    return e.section == WorkspaceEntry::Section::kPinned && e.space_id == id;
++  });
++  for (const WorkspaceEntry& entry : removed.entries) {
++    std::erase_if(tab_to_entry_, [&](const auto& pair) {
++      return pair.second == entry.id;
++    });
++  }
++  // A tag naming a space that no longer exists would hide its tab in every
++  // space; untagged shows everywhere, which is the safe side until the
++  // controller re-homes or closes those tabs.
++  std::erase_if(tab_to_space_,
++                [&](const auto& pair) { return pair.second == id; });
++  // Favorites keep their dormant space_id; ResolveSpaceId covers a stale one
++  // the next time they are demoted.
++  SortAndRenumberSpaces();
++  SortEntries();
++  PersistSpacesToPrefs();
++  PersistToPrefs();
++  NotifyBindingsChanged();
++  NotifySpacesChanged();
++  NotifyChanged();
++  return removed;
++}
++
++bool WorkspaceService::RestoreSpace(const RemovedSpace& snapshot) {
++  if (snapshot.space.id.empty() || FindSpaceById(snapshot.space.id)) {
++    return false;
++  }
++  for (const WorkspaceEntry& entry : snapshot.entries) {
++    if (FindEntryById(entry.id)) {
++      return false;
++    }
++  }
++  const size_t slot =
++      std::min(static_cast<size_t>(std::max(snapshot.space.position, 0)),
++               spaces_.size());
++  spaces_.insert(spaces_.begin() + static_cast<std::ptrdiff_t>(slot),
++                 snapshot.space);
++  for (size_t i = 0; i < spaces_.size(); ++i) {
++    spaces_[i].position = static_cast<int>(i);
++  }
++  for (const WorkspaceEntry& entry : snapshot.entries) {
++    entries_.push_back(entry);
++  }
++  SortEntries();
++  PersistSpacesToPrefs();
++  PersistToPrefs();
++  NotifySpacesChanged();
++  NotifyChanged();
++  return true;
++}
++
++void WorkspaceService::SetTabSpace(tabs::TabHandle handle,
++                                   const std::string& space_id) {
++  if (!handle.Get() || space_id.empty()) {
++    return;
++  }
++  tab_to_space_[handle] = space_id;
++}
++
++void WorkspaceService::ForgetTab(tabs::TabHandle handle) {
++  tab_to_space_.erase(handle);
++  UnbindTab(handle);
++}
++
++bool WorkspaceService::HasTabSpaceTag(tabs::TabHandle handle) const {
++  return handle.Get() && tab_to_space_.contains(handle);
++}
++
++std::string WorkspaceService::GetSpaceForTab(tabs::TabHandle handle) const {
++  // Same dead-handle rule as FindEntryIdForTab: a handle whose tab is gone
++  // is non-Null but must answer "nothing", or its stale tag would keep a
++  // ghost in the filters.
++  if (!handle.Get()) {
++    return std::string();
++  }
++  if (const WorkspaceEntry* entry = FindEntryById(FindEntryIdForTab(handle))) {
++    return entry->section == WorkspaceEntry::Section::kFavorite
++               ? std::string(kGlobalSpaceId)
++               : entry->space_id;
++  }
++  const auto it = tab_to_space_.find(handle);
++  return it != tab_to_space_.end() ? it->second : std::string();
++}
++
++std::vector<tabs::TabHandle> WorkspaceService::FindTabsInSpace(
++    const std::string& space_id) const {
++  std::vector<tabs::TabHandle> tabs;
++  if (space_id.empty()) {
++    return tabs;
++  }
++  // Both maps: a tab bound to a pinned entry answers the entry's space and
++  // may carry a stale raw tag; a Today tab has only the raw tag.
++  for (const auto& [handle, entry_id] : tab_to_entry_) {
++    if (handle.Get() && GetSpaceForTab(handle) == space_id) {
++      tabs.push_back(handle);
++    }
++  }
++  for (const auto& [handle, tag] : tab_to_space_) {
++    if (handle.Get() && !tab_to_entry_.contains(handle) &&
++        GetSpaceForTab(handle) == space_id) {
++      tabs.push_back(handle);
++    }
++  }
++  return tabs;
++}
++
++bool WorkspaceService::IsTabInSpace(tabs::TabHandle handle,
++                                    const std::string& space_id) const {
++  const std::string space = GetSpaceForTab(handle);
++  return space.empty() || space == kGlobalSpaceId || space == space_id;
++}
++
+ void WorkspaceService::BindTab(tabs::TabHandle handle,
+                                const std::string& entry_id) {
+   const auto it = tab_to_entry_.find(handle);
+@@ -479,6 +766,28 @@
+ }
+ 
+ void WorkspaceService::LoadFromPrefs() {
++  // Spaces first: the entries' display order is keyed on the space order.
++  spaces_.clear();
++  for (const base::Value& value : prefs_->GetList(prefs::kWorkspaceSpaces)) {
++    if (!value.is_dict()) {
++      continue;
++    }
++    if (std::optional<WorkspaceSpace> space =
++            WorkspaceSpace::FromValue(value.GetDict())) {
++      spaces_.push_back(std::move(*space));
++    }
++  }
++  SortAndRenumberSpaces();
++  if (spaces_.empty()) {
++    // A pre-M6 profile (or a fresh one): one space, with the id every entry
++    // written so far already carries, so nothing needs migrating.
++    WorkspaceSpace space;
++    space.id = kDefaultSpaceId;
++    space.name = first_space_name_;
++    spaces_.push_back(std::move(space));
++    PersistSpacesToPrefs();
++  }
++
+   entries_.clear();
+   for (const base::Value& value :
+        prefs_->GetList(prefs::kWorkspaceEntries)) {
+@@ -503,9 +812,37 @@
+       entry.folder_id.clear();
+     }
+   }
++  // Same defense for spaces: an entry whose space didn't survive the load
++  // (rejected, or deleted by a build that then crashed before rewriting the
++  // entries) lands in the first space instead of nowhere; and a child always
++  // sits in its folder's space, whatever the pref says.
++  std::map<std::string, std::string> folder_space;
++  for (WorkspaceEntry& entry : entries_) {
++    if (!FindSpaceById(entry.space_id)) {
++      entry.space_id = FirstSpaceId();
++    }
++    if (entry.is_folder()) {
++      folder_space[entry.id] = entry.space_id;
++    }
++  }
++  for (WorkspaceEntry& entry : entries_) {
++    if (const auto it = folder_space.find(entry.folder_id);
++        it != folder_space.end()) {
++      entry.space_id = it->second;
++    }
++  }
+   SortEntries();
+ }
+ 
++void WorkspaceService::PersistSpacesToPrefs() {
++  ScopedListPrefUpdate update(prefs_, prefs::kWorkspaceSpaces);
++  base::ListValue& values = update.Get();
++  values.clear();
++  for (const WorkspaceSpace& space : spaces_) {
++    values.Append(space.ToValue());
++  }
++}
++
+ void WorkspaceService::PersistToPrefs() {
+   persist_timer_.Stop();
+   ScopedListPrefUpdate update(prefs_, prefs::kWorkspaceEntries);
+@@ -537,12 +874,24 @@
+   }
+ }
+ 
++void WorkspaceService::NotifySpacesChanged() {
++  for (Observer& observer : observers_) {
++    observer.OnWorkspaceSpacesChanged();
++  }
++}
++
+ void WorkspaceService::SortEntries() {
+-  // Favorites first (by position). Within pinned: top-level entries by
+-  // position; a folder's children sort by their folder's top position and
+-  // ride right behind it, ordered among themselves by their own position.
+-  // A child whose folder is gone sorts as if top level — LoadFromPrefs also
+-  // clears such links, this is just the same defense inside one sort.
++  // Favorites first (by position). Within pinned: space by space in bar
++  // order, then top-level entries by position; a folder's children sort by
++  // their folder's top position and ride right behind it, ordered among
++  // themselves by their own position. A child whose folder is gone sorts as
++  // if top level — LoadFromPrefs also clears such links, this is just the
++  // same defense inside one sort.
++  std::map<std::string, int> space_rank;
++  for (const WorkspaceSpace& space : spaces_) {
++    space_rank[space.id] = static_cast<int>(space_rank.size());
++  }
++  const int unknown_space_rank = static_cast<int>(space_rank.size());
+   std::map<std::string, int> folder_top_position;
+   for (const WorkspaceEntry& entry : entries_) {
+     if (entry.is_folder()) {
+@@ -551,12 +900,16 @@
+   }
+   auto sort_key = [&](const WorkspaceEntry& e) {
+     const bool pinned = e.section == WorkspaceEntry::Section::kPinned;
++    const auto rank = space_rank.find(e.space_id);
++    const int space =
++        pinned ? (rank != space_rank.end() ? rank->second : unknown_space_rank)
++               : 0;
+     const auto folder = folder_top_position.find(e.folder_id);
+     const bool child =
+         pinned && !e.folder_id.empty() && folder != folder_top_position.end();
+     const int top = child ? folder->second : e.position;
+     const int sub = child ? e.position : -1;
+-    return std::make_tuple(pinned, top, child, sub);
++    return std::make_tuple(pinned, space, top, child, sub);
+   };
+   std::stable_sort(entries_.begin(), entries_.end(),
+                    [&](const WorkspaceEntry& a, const WorkspaceEntry& b) {
+@@ -566,24 +919,41 @@
+ 
+ void WorkspaceService::RenumberScopes() {
+   int favorite_position = 0;
+-  int top_position = 0;
++  std::map<std::string, int> top_position;  // per space
+   std::map<std::string, int> child_position;
+   for (WorkspaceEntry& entry : entries_) {
+     if (entry.section == WorkspaceEntry::Section::kFavorite) {
+       entry.position = favorite_position++;
+     } else if (entry.folder_id.empty()) {
+-      entry.position = top_position++;
++      entry.position = top_position[entry.space_id]++;
+     } else {
+       entry.position = child_position[entry.folder_id]++;
+     }
+   }
+ }
+ 
+-int WorkspaceService::NextTopLevelPosition(
+-    WorkspaceEntry::Section section) const {
++void WorkspaceService::SortAndRenumberSpaces() {
++  std::stable_sort(spaces_.begin(), spaces_.end(),
++                   [](const WorkspaceSpace& a, const WorkspaceSpace& b) {
++                     return a.position < b.position;
++                   });
++  for (size_t i = 0; i < spaces_.size(); ++i) {
++    spaces_[i].position = static_cast<int>(i);
++  }
++}
++
++const std::string& WorkspaceService::ResolveSpaceId(
++    const std::string& space_id) const {
++  return FindSpaceById(space_id) ? space_id : FirstSpaceId();
++}
++
++int WorkspaceService::NextTopLevelPosition(WorkspaceEntry::Section section,
++                                           const std::string& space_id) const {
++  const bool pinned = section == WorkspaceEntry::Section::kPinned;
+   int max_position = -1;
+   for (const WorkspaceEntry& entry : entries_) {
+-    if (entry.section == section && entry.folder_id.empty()) {
++    if (entry.section == section && entry.folder_id.empty() &&
++        (!pinned || entry.space_id == space_id)) {
+       max_position = std::max(max_position, entry.position);
+     }
+   }
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.h
++++ src/chrome/browser/ui/helium_workspace/workspace_service.h
+@@ -15,6 +15,7 @@
+ #include "base/observer_list_types.h"
+ #include "base/timer/timer.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
+ #include "components/keyed_service/core/keyed_service.h"
+ #include "components/tabs/public/tab_interface.h"
+ 
+@@ -34,6 +35,12 @@
+ // -- at most one per window -- so lookups that care about a specific window
+ // must say so.
+ //
++// M6: entries in the pinned section belong to a space (WorkspaceEntry::
++// space_id -> WorkspaceSpace::id); favorites belong to every space. The
++// service owns the space list and, at runtime, a tab -> space tag map, but
++// has no notion of a *current* space -- that is per window and lives in
++// WorkspaceTabController.
++//
+ // Nothing here pins a tab. The pinned region of every TabStripModel is
+ // deliberately kept empty (WorkspaceTabController undoes any native pin),
+ // which is what keeps TabStripModel::empty() meaningful.
+@@ -55,6 +62,12 @@
+     // invalidate the layout, and title/favicon churn must not (r5,
+     // 2026-08-20).
+     virtual void OnWorkspaceBindingsChanged() {}
++
++    // Fired when the space list itself changes (add / rename / icon /
++    // collapse / reorder / remove). Every such change also fires
++    // OnWorkspaceEntriesChanged(), because the entries' display order is
++    // keyed on the space order.
++    virtual void OnWorkspaceSpacesChanged() {}
+   };
+ 
+   static constexpr size_t kMaxFavorites = 12;
+@@ -62,7 +75,9 @@
+   // Takes the PrefService rather than the Profile it came from: everything
+   // here is entry data plus a tab-handle map, and keeping the dependency this
+   // narrow is what lets helium_workspace_unittests exercise it directly.
+-  explicit WorkspaceService(PrefService* prefs);
++  // |first_space_name| names the space minted for a profile that has none
++  // yet; it is injected because this target cannot reach l10n_util.
++  WorkspaceService(PrefService* prefs, std::u16string first_space_name);
+   WorkspaceService(const WorkspaceService&) = delete;
+   WorkspaceService& operator=(const WorkspaceService&) = delete;
+   ~WorkspaceService() override;
+@@ -78,10 +93,13 @@
+       BrowserWindowInterface* window) const;
+ 
+   // Returns the new entry's id, or the empty string if rejected (favorites
+-  // cap reached).
++  // cap reached). |space_id| is the space the entry belongs to; empty or
++  // unknown resolves to the first space (production callers pass the
++  // window's current space, the tests mostly do not care).
+   std::string AddEntry(WorkspaceEntry::Section section,
+                        const GURL& url,
+-                       const std::u16string& title);
++                       const std::u16string& title,
++                       const std::string& space_id = std::string());
+   bool RemoveEntry(const std::string& id);
+   bool SetEntryUrl(const std::string& id, const GURL& url);
+   bool SetEntryTitle(const std::string& id, const std::u16string& title);
+@@ -89,23 +107,32 @@
+   // entries that have no tab.
+   bool SetEntryFavicon(const std::string& id, std::string png_bytes);
+   // Moves an entry between the Favorites and Pinned sections. Promoting to
+-  // Favorites fails (returns false) when the cap is reached.
+-  bool SetEntrySection(const std::string& id, WorkspaceEntry::Section section);
++  // Favorites fails (returns false) when the cap is reached. A demotion to
++  // Pinned lands in |space_id| when that names a space (the one the user is
++  // looking at), else in the entry's own dormant space.
++  bool SetEntrySection(const std::string& id,
++                       WorkspaceEntry::Section section,
++                       const std::string& space_id = std::string());
+   // The drag-drop commit: one call on mouse release, never during a drag.
+   // Moves an entry to |target_index| within |target_section|, where the
+   // index counts that section's entries with the moved one already removed
+   // (so a within-section move down is not off by one). Out-of-range indices
+   // clamp to the section's ends. Promoting to Favorites fails (returns
+   // false) when the cap is reached, and unknown ids return false.
++  // M6: the pinned scope is one space -- the entry's own, or |space_id| when
++  // given -- because the sidebar's drop index counts the rows it can see.
+   bool MoveEntry(const std::string& id,
+                  WorkspaceEntry::Section target_section,
+-                 size_t target_index);
++                 size_t target_index,
++                 const std::string& space_id = std::string());
+   size_t CountFavorites() const;
+ 
+   // ---- Folders (M3.13; one level deep, pinned top level only) ----
+-  // Creates an expanded, empty folder at the end of the pinned top level and
+-  // returns its id. Folders are entries with kind == kFolder and no URL.
+-  std::string AddFolder(const std::u16string& title);
++  // Creates an expanded, empty folder at the end of |space_id|'s pinned top
++  // level (empty/unknown -> the first space) and returns its id. Folders are
++  // entries with kind == kFolder and no URL.
++  std::string AddFolder(const std::u16string& title,
++                        const std::string& space_id = std::string());
+   // Folder-only. Persists synchronously (structural, rare).
+   bool SetFolderCollapsed(const std::string& id, bool collapsed);
+   // Deletes the folder AND its children (user ruling 2026-08-31 — closest
+@@ -123,11 +150,44 @@
+   // Moves a pinned site into |folder_id|'s children at |target_index|
+   // (same "counted with the moved one removed" contract as MoveEntry), or
+   // back to the pinned top level when |folder_id| is empty. Refuses folders
+-  // as the source (no nesting) and non-folder targets.
++  // as the source (no nesting) and non-folder targets. A child's space is
++  // always its folder's.
+   bool MoveEntryToFolder(const std::string& id,
+                          const std::string& folder_id,
+                          size_t target_index);
+ 
++  // ---- Spaces (M6) ----
++  // In bottom-bar order (dense positions). Never empty after construction:
++  // LoadFromPrefs mints kDefaultSpaceId when the profile has none.
++  const std::vector<WorkspaceSpace>& spaces() const { return spaces_; }
++  const WorkspaceSpace* FindSpaceById(const std::string& id) const;
++  const std::string& FirstSpaceId() const;
++  // Inserts the new space right after |insert_after_id| (Arc lands a new
++  // space beside the current one, not at the end -- 轮0 g2b/g2c), or at the
++  // end when that is empty/unknown. Returns the new id.
++  std::string AddSpace(const std::u16string& name,
++                       const std::string& icon,
++                       const std::string& insert_after_id);
++  bool RenameSpace(const std::string& id, const std::u16string& name);
++  bool SetSpaceIcon(const std::string& id, const std::string& icon);
++  bool SetSpaceCollapsed(const std::string& id, bool collapsed);
++  // |target_index| counts the spaces with the moved one already removed;
++  // out-of-range clamps.
++  bool MoveSpace(const std::string& id, size_t target_index);
++  // The model half of Delete Space: the space plus every pinned entry in it,
++  // in display order, as an undo snapshot. Refuses the last space.
++  struct RemovedSpace {
++    RemovedSpace();
++    RemovedSpace(const RemovedSpace&);
++    ~RemovedSpace();
++    WorkspaceSpace space;
++    std::vector<WorkspaceEntry> entries;
++  };
++  std::optional<RemovedSpace> RemoveSpace(const std::string& id);
++  // Puts a RemoveSpace() snapshot back at its old slot. Fails when the
++  // space or any of its entries already exists again.
++  bool RestoreSpace(const RemovedSpace& snapshot);
++
+   // ---- Runtime tab binding (never persisted) ----
+   void BindTab(tabs::TabHandle handle, const std::string& entry_id);
+   void UnbindTab(tabs::TabHandle handle);
+@@ -144,6 +204,29 @@
+   std::optional<WorkspaceEntry::Section> GetSectionForTab(
+       tabs::TabHandle handle) const;
+ 
++  // ---- Runtime tab -> space tags (M6; persisted by the controller into the
++  // session, never into prefs) ----
++  // Which space an ordinary (unbound) tab lives in. Set for every tab on
++  // arrival; kept through bind/unbind so a row that is unpinned again stays
++  // in its space.
++  void SetTabSpace(tabs::TabHandle handle, const std::string& space_id);
++  // Drops the binding and the tag together -- the tab is going away.
++  void ForgetTab(tabs::TabHandle handle);
++  // True when SetTabSpace has been called for |handle| (the raw tag, not the
++  // derived answer below).
++  bool HasTabSpaceTag(tabs::TabHandle handle) const;
++  // The space |handle| belongs to: a favorite-bound tab answers
++  // kGlobalSpaceId, an entry-bound tab its entry's space, anything else its
++  // raw tag. Empty for a dead handle or an untagged tab.
++  std::string GetSpaceForTab(tabs::TabHandle handle) const;
++  // Every live tab whose space (GetSpaceForTab) is |space_id|, in no
++  // particular order -- what DeleteSpace closes. Favorites' tabs answer the
++  // global space and are never in here.
++  std::vector<tabs::TabHandle> FindTabsInSpace(const std::string& space_id) const;
++  // Whether |handle| shows in |space_id|: its own space, the global space,
++  // and (defensively) an untagged tab all answer true.
++  bool IsTabInSpace(tabs::TabHandle handle, const std::string& space_id) const;
++
+   void AddObserver(Observer* observer);
+   void RemoveObserver(Observer* observer);
+ 
+@@ -153,26 +236,36 @@
+  private:
+   void LoadFromPrefs();
+   void PersistToPrefs();
++  void PersistSpacesToPrefs();
+   // Coalesces the writes that follow the active tab around: title and
+   // favicon change on every navigation, and PersistToPrefs() rewrites the
+   // whole list. Structural edits (add/remove/section) stay synchronous.
+   void SchedulePersist();
+   void NotifyChanged();
+   void NotifyBindingsChanged();
+-  // Display order: favorites by position, then the pinned top level by
+-  // position with each folder's children riding right behind their folder,
+-  // ordered by their own position.
++  void NotifySpacesChanged();
++  // Display order: favorites by position, then space by space in bar order,
++  // each space's pinned top level by position with each folder's children
++  // riding right behind their folder, ordered by their own position.
+   void SortEntries();
+-  // Dense per-scope renumber (favorites / pinned top level / each folder) in
+-  // display order; entries_ must already be sorted.
++  // Dense per-scope renumber (favorites / each space's pinned top level /
++  // each folder) in display order; entries_ must already be sorted.
+   void RenumberScopes();
+-  int NextTopLevelPosition(WorkspaceEntry::Section section) const;
++  // Bar order by position, then dense positions.
++  void SortAndRenumberSpaces();
++  // |space_id| if it names a space, else the first space.
++  const std::string& ResolveSpaceId(const std::string& space_id) const;
++  int NextTopLevelPosition(WorkspaceEntry::Section section,
++                           const std::string& space_id) const;
+   int NextChildPosition(const std::string& folder_id) const;
+ 
+   const raw_ptr<PrefService> prefs_;
++  const std::u16string first_space_name_;
+ 
++  std::vector<WorkspaceSpace> spaces_;
+   std::vector<WorkspaceEntry> entries_;
+   std::map<tabs::TabHandle, std::string> tab_to_entry_;
++  std::map<tabs::TabHandle, std::string> tab_to_space_;
+ 
+   base::OneShotTimer persist_timer_;
+   base::ObserverList<Observer> observers_;
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_factory.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service_factory.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service_factory.cc
+@@ -6,6 +6,8 @@
+ 
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/grit/generated_resources.h"
++#include "ui/base/l10n/l10n_util.h"
+ 
+ namespace helium_workspace {
+ 
+@@ -39,8 +41,11 @@
+ std::unique_ptr<KeyedService>
+ WorkspaceServiceFactory::BuildServiceInstanceForBrowserContext(
+     content::BrowserContext* context) const {
++  // The service cannot reach l10n_util itself (helium_workspace_unittests
++  // has no //ui/base), so the name of a profile's first space is handed in.
+   return std::make_unique<WorkspaceService>(
+-      Profile::FromBrowserContext(context)->GetPrefs());
++      Profile::FromBrowserContext(context)->GetPrefs(),
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_FIRST_NAME));
+ }
+ 
+ }  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+@@ -36,7 +36,7 @@
+     // compile error here rather than a silent behaviour change.
+     prefs::RegisterProfilePrefs(prefs_.registry());
+     prefs_.registry()->RegisterListPref(::prefs::kPinnedTabs);
+-    service_ = std::make_unique<WorkspaceService>(&prefs_);
++    service_ = std::make_unique<WorkspaceService>(&prefs_, u"Personal");
+   }
+ 
+   // A tab that reports |url| and claims to live in |window|. Destroying it
+@@ -205,7 +205,7 @@
+   prefs_.SetList(::prefs::kPinnedTabs, std::move(pinned));
+ 
+   // A second service on the same prefs must leave the list alone.
+-  WorkspaceService second(&prefs_);
++  WorkspaceService second(&prefs_, u"Personal");
+   EXPECT_EQ(1u, prefs_.GetList(::prefs::kPinnedTabs).size());
+ }
+ 
+@@ -218,7 +218,7 @@
+   ASSERT_TRUE(service_->SetEntryTitle(id, u"Renamed"));
+   service_->Shutdown();
+ 
+-  WorkspaceService reloaded(&prefs_);
++  WorkspaceService reloaded(&prefs_, u"Personal");
+   ASSERT_EQ(1u, reloaded.entries().size());
+   const WorkspaceEntry& entry = reloaded.entries().front();
+   EXPECT_EQ(GURL("https://example.com/"), entry.url);
+@@ -306,7 +306,7 @@
+               ElementsAre("https://p1.example/", "https://f.example/"));
+ 
+   service_->Shutdown();
+-  WorkspaceService reloaded(&prefs_);
++  WorkspaceService reloaded(&prefs_, u"Personal");
+   EXPECT_THAT(SectionUrls(reloaded, WorkspaceEntry::Section::kFavorite),
+               ElementsAre("https://p2.example/"));
+   EXPECT_THAT(SectionUrls(reloaded, WorkspaceEntry::Section::kPinned),
+@@ -589,7 +589,7 @@
+   ASSERT_TRUE(service_->SetFolderCollapsed(folder, true));
+   service_->Shutdown();
+ 
+-  WorkspaceService reloaded(&prefs_);
++  WorkspaceService reloaded(&prefs_, u"Personal");
+   const WorkspaceEntry* reloaded_folder = reloaded.FindEntryById(folder);
+   ASSERT_TRUE(reloaded_folder);
+   EXPECT_TRUE(reloaded_folder->is_folder());
+@@ -698,12 +698,304 @@
+     });
+   }
+ 
+-  WorkspaceService reloaded(&prefs_);
++  WorkspaceService reloaded(&prefs_, u"Personal");
+   const WorkspaceEntry* entry = reloaded.FindEntryById(a);
+   ASSERT_TRUE(entry);
+   EXPECT_TRUE(entry->folder_id.empty());
+   EXPECT_THAT(PinnedShape(reloaded), ElementsAre(a));
+ }
+ 
++// ---- M6 Spaces ----
++
++// Space ids in bar order.
++std::vector<std::string> SpaceShape(const WorkspaceService& service) {
++  std::vector<std::string> shape;
++  for (const WorkspaceSpace& space : service.spaces()) {
++    shape.push_back(space.id);
++  }
++  return shape;
++}
++
++// Pinned entry ids of one space, in display order.
++std::vector<std::string> PinnedShapeIn(const WorkspaceService& service,
++                                       const std::string& space_id) {
++  std::vector<std::string> shape;
++  for (const WorkspaceEntry& entry : service.entries()) {
++    if (entry.section == WorkspaceEntry::Section::kPinned &&
++        entry.space_id == space_id) {
++      shape.push_back(entry.folder_id.empty()
++                          ? entry.id
++                          : entry.folder_id + "/" + entry.id);
++    }
++  }
++  return shape;
++}
++
++// A pre-M6 profile has entries but no spaces list. Every one of those entries
++// carries space_id "default", so the minted space must have exactly that id
++// -- and it must be persisted, or the next start would mint it again.
++TEST_F(WorkspaceServiceTest, LoadCreatesADefaultSpaceWhenNoneExist) {
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(kDefaultSpaceId));
++  EXPECT_EQ(kDefaultSpaceId, service_->FirstSpaceId());
++  EXPECT_EQ(u"Personal", service_->spaces()[0].name);
++  EXPECT_TRUE(service_->spaces()[0].icon.empty());
++  EXPECT_EQ(1u, prefs_.GetList(prefs::kWorkspaceSpaces).size());
++
++  WorkspaceService reloaded(&prefs_, u"Other");
++  EXPECT_THAT(SpaceShape(reloaded), ElementsAre(kDefaultSpaceId));
++  EXPECT_EQ(u"Personal", reloaded.spaces()[0].name);
++}
++
++// Arc lands a new space right of the current one, not at the end (轮0
++// g2b/g2c: 📦🤩🎨🎬🍏 -> 📦🤩🎨😀🎬🍏).
++TEST_F(WorkspaceServiceTest, AddSpaceInsertsAfterTheGivenSpace) {
++  const std::string a = service_->AddSpace(u"A", "", kDefaultSpaceId);
++  const std::string b = service_->AddSpace(u"B", "🎨", kDefaultSpaceId);
++  const std::string c = service_->AddSpace(u"C", "", "no-such-space");
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(kDefaultSpaceId, b, a, c));
++  for (size_t i = 0; i < service_->spaces().size(); ++i) {
++    EXPECT_EQ(static_cast<int>(i), service_->spaces()[i].position);
++  }
++  ASSERT_TRUE(service_->FindSpaceById(b));
++  EXPECT_EQ("🎨", service_->FindSpaceById(b)->icon);
++
++  ASSERT_TRUE(service_->MoveSpace(c, 0));
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(c, kDefaultSpaceId, b, a));
++}
++
++TEST_F(WorkspaceServiceTest, SpacesRoundTripThroughPrefs) {
++  const std::string work = service_->AddSpace(u"Work", "🎨", kDefaultSpaceId);
++  ASSERT_TRUE(service_->RenameSpace(work, u"Job"));
++  ASSERT_TRUE(service_->SetSpaceCollapsed(work, true));
++  ASSERT_TRUE(service_->SetSpaceIcon(kDefaultSpaceId, "🏠"));
++  service_->Shutdown();
++
++  WorkspaceService reloaded(&prefs_, u"Personal");
++  EXPECT_THAT(SpaceShape(reloaded), ElementsAre(kDefaultSpaceId, work));
++  ASSERT_TRUE(reloaded.FindSpaceById(work));
++  EXPECT_EQ(u"Job", reloaded.FindSpaceById(work)->name);
++  EXPECT_EQ("🎨", reloaded.FindSpaceById(work)->icon);
++  EXPECT_TRUE(reloaded.FindSpaceById(work)->collapsed);
++  EXPECT_EQ("🏠", reloaded.FindSpaceById(kDefaultSpaceId)->icon);
++}
++
++// Display order is space by space in bar order, and positions are dense
++// within each space's pinned top level -- the sidebar's drop index counts
++// the rows of one space, so this is what MoveEntry's scope must match.
++TEST_F(WorkspaceServiceTest, PositionsAreUniqueWithinASpace) {
++  const std::string work = service_->AddSpace(u"Work", "", kDefaultSpaceId);
++  std::vector<std::string> home_ids;
++  std::vector<std::string> work_ids;
++  for (int i = 0; i < 3; ++i) {
++    home_ids.push_back(service_->AddEntry(
++        WorkspaceEntry::Section::kPinned,
++        GURL("https://home.example/" + base::NumberToString(i)), u"H",
++        kDefaultSpaceId));
++    work_ids.push_back(service_->AddEntry(
++        WorkspaceEntry::Section::kPinned,
++        GURL("https://work.example/" + base::NumberToString(i)), u"W",
++        work));
++  }
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(home_ids[0], home_ids[1], home_ids[2], work_ids[0],
++                          work_ids[1], work_ids[2]));
++  for (const std::string& id : {home_ids[1], work_ids[1]}) {
++    EXPECT_EQ(1, service_->FindEntryById(id)->position);
++  }
++  EXPECT_EQ(2, service_->FindEntryById(work_ids[2])->position);
++
++  // Bar order drives display order.
++  ASSERT_TRUE(service_->MoveSpace(work, 0));
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(work_ids[0], work_ids[1], work_ids[2], home_ids[0],
++                          home_ids[1], home_ids[2]));
++
++  // An unknown space resolves to the first space instead of nowhere.
++  const std::string stray = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://stray.example/"), u"S",
++      "no-such-space");
++  EXPECT_EQ(service_->FirstSpaceId(), service_->FindEntryById(stray)->space_id);
++}
++
++// The defect the per-space scope exists for: index 0 "among what I can see"
++// must never reorder another space's rows.
++TEST_F(WorkspaceServiceTest, MovingAnEntryInOneSpaceLeavesAnotherAlone) {
++  const std::string work = service_->AddSpace(u"Work", "", kDefaultSpaceId);
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A",
++                                           kDefaultSpaceId);
++  const std::string b = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://b.example/"), u"B",
++                                           kDefaultSpaceId);
++  const std::string c = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://c.example/"), u"C",
++                                           kDefaultSpaceId);
++  const std::string x = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://x.example/"), u"X",
++                                           work);
++  const std::string y = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://y.example/"), u"Y",
++                                           work);
++
++  ASSERT_TRUE(service_->MoveEntry(c, WorkspaceEntry::Section::kPinned, 0));
++  EXPECT_THAT(PinnedShapeIn(*service_, kDefaultSpaceId), ElementsAre(c, a, b));
++  EXPECT_THAT(PinnedShapeIn(*service_, work), ElementsAre(x, y));
++  EXPECT_EQ(0, service_->FindEntryById(x)->position);
++  EXPECT_EQ(1, service_->FindEntryById(y)->position);
++
++  // Retargeting the space (round 3's Move to) lands at the index there.
++  ASSERT_TRUE(service_->MoveEntry(a, WorkspaceEntry::Section::kPinned, 1, work));
++  EXPECT_THAT(PinnedShapeIn(*service_, kDefaultSpaceId), ElementsAre(c, b));
++  EXPECT_THAT(PinnedShapeIn(*service_, work), ElementsAre(x, a, y));
++  EXPECT_EQ(work, service_->FindEntryById(a)->space_id);
++}
++
++TEST_F(WorkspaceServiceTest, DanglingSpaceIdFallsBackToTheFirstSpace) {
++  const std::string work = service_->AddSpace(u"Work", "", kDefaultSpaceId);
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A",
++                                           work);
++  service_->Shutdown();
++
++  // The space vanishes from the raw pref (a newer build's format rejected,
++  // or a delete that never got to rewrite the entries).
++  {
++    ScopedListPrefUpdate update(&prefs_, prefs::kWorkspaceSpaces);
++    update->EraseIf([&](const base::Value& value) {
++      const std::string* id = value.GetDict().FindString("id");
++      return id && *id == work;
++    });
++  }
++
++  WorkspaceService reloaded(&prefs_, u"Personal");
++  EXPECT_THAT(SpaceShape(reloaded), ElementsAre(kDefaultSpaceId));
++  ASSERT_TRUE(reloaded.FindEntryById(a));
++  EXPECT_EQ(kDefaultSpaceId, reloaded.FindEntryById(a)->space_id);
++}
++
++// A folder child's space is its folder's: set on the way in, and repaired
++// on load if the pref disagrees.
++TEST_F(WorkspaceServiceTest, FolderChildInheritsItsFoldersSpace) {
++  const std::string work = service_->AddSpace(u"Work", "", kDefaultSpaceId);
++  const std::string folder = service_->AddFolder(u"F", work);
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A",
++                                           kDefaultSpaceId);
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++  EXPECT_EQ(work, service_->FindEntryById(a)->space_id);
++  EXPECT_THAT(PinnedShapeIn(*service_, work),
++              ElementsAre(folder, folder + "/" + a));
++  EXPECT_THAT(PinnedShapeIn(*service_, kDefaultSpaceId), ElementsAre());
++  service_->Shutdown();
++
++  {
++    ScopedListPrefUpdate update(&prefs_, prefs::kWorkspaceEntries);
++    for (base::Value& value : *update) {
++      const std::string* id = value.GetDict().FindString("id");
++      if (id && *id == a) {
++        value.GetDict().Set("space_id", kDefaultSpaceId);
++      }
++    }
++  }
++  WorkspaceService reloaded(&prefs_, u"Personal");
++  EXPECT_EQ(work, reloaded.FindEntryById(a)->space_id);
++}
++
++// Same rule as the entry bindings: a handle whose tab is gone is non-Null
++// but must answer "nothing", or its stale tag keeps a ghost in the filters.
++TEST_F(WorkspaceServiceTest, TabSpaceTagIgnoresDeadHandles) {
++  const std::string work = service_->AddSpace(u"Work", "", kDefaultSpaceId);
++  std::unique_ptr<tabs::MockTabInterface> tab =
++      MakeTab("https://a.example/", window_a());
++  const tabs::TabHandle handle = tab->GetHandle();
++
++  EXPECT_FALSE(service_->HasTabSpaceTag(handle));
++  EXPECT_TRUE(service_->GetSpaceForTab(handle).empty());
++  EXPECT_TRUE(service_->IsTabInSpace(handle, kDefaultSpaceId));
++
++  service_->SetTabSpace(handle, work);
++  EXPECT_TRUE(service_->HasTabSpaceTag(handle));
++  EXPECT_EQ(work, service_->GetSpaceForTab(handle));
++  EXPECT_TRUE(service_->IsTabInSpace(handle, work));
++  EXPECT_FALSE(service_->IsTabInSpace(handle, kDefaultSpaceId));
++
++  tab.reset();
++  EXPECT_FALSE(service_->HasTabSpaceTag(handle));
++  EXPECT_TRUE(service_->GetSpaceForTab(handle).empty());
++  EXPECT_TRUE(service_->IsTabInSpace(handle, kDefaultSpaceId));
++}
++
++// Arc g8c: a favorite's tab stays the active tab across a space switch, so
++// it belongs to every space. Demoting the favorite into a space makes the
++// tab that space's.
++TEST_F(WorkspaceServiceTest, FavoriteBoundTabReportsTheGlobalSpace) {
++  const std::string work = service_->AddSpace(u"Work", "", kDefaultSpaceId);
++  const std::string fav = service_->AddEntry(
++      WorkspaceEntry::Section::kFavorite, GURL("https://f.example/"), u"F",
++      kDefaultSpaceId);
++  std::unique_ptr<tabs::MockTabInterface> tab =
++      MakeTab("https://f.example/", window_a());
++  const tabs::TabHandle handle = tab->GetHandle();
++  service_->SetTabSpace(handle, kDefaultSpaceId);
++  service_->BindTab(handle, fav);
++
++  EXPECT_EQ(kGlobalSpaceId, service_->GetSpaceForTab(handle));
++  EXPECT_TRUE(service_->IsTabInSpace(handle, kDefaultSpaceId));
++  EXPECT_TRUE(service_->IsTabInSpace(handle, work));
++
++  // DemotedFavoriteLandsInTheGivenSpace: the space the user is looking at.
++  ASSERT_TRUE(service_->SetEntrySection(fav, WorkspaceEntry::Section::kPinned,
++                                        work));
++  EXPECT_EQ(work, service_->FindEntryById(fav)->space_id);
++  EXPECT_EQ(0, service_->FindEntryById(fav)->position);
++  EXPECT_EQ(work, service_->GetSpaceForTab(handle));
++  EXPECT_FALSE(service_->IsTabInSpace(handle, kDefaultSpaceId));
++
++  // Unpinning drops the binding but not the tab's own tag: the tab stays in
++  // the space it was opened in rather than showing up everywhere.
++  ASSERT_TRUE(service_->RemoveEntry(fav));
++  EXPECT_EQ(kDefaultSpaceId, service_->GetSpaceForTab(handle));
++}
++
++TEST_F(WorkspaceServiceTest, RemoveSpaceTakesItsEntriesAndRestorePutsThemBack) {
++  const std::string work = service_->AddSpace(u"Work", "", kDefaultSpaceId);
++  const std::string home = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://h.example/"), u"H",
++      kDefaultSpaceId);
++  const std::string folder = service_->AddFolder(u"F", work);
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A",
++                                           work);
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++  const std::string b = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://b.example/"), u"B",
++                                           work);
++  std::unique_ptr<tabs::MockTabInterface> tab =
++      MakeTab("https://b.example/", window_a());
++  service_->SetTabSpace(tab->GetHandle(), work);
++  service_->BindTab(tab->GetHandle(), b);
++
++  const std::optional<WorkspaceService::RemovedSpace> removed =
++      service_->RemoveSpace(work);
++  ASSERT_TRUE(removed.has_value());
++  EXPECT_EQ(work, removed->space.id);
++  EXPECT_EQ(1, removed->space.position);
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(kDefaultSpaceId));
++  EXPECT_THAT(PinnedShape(*service_), ElementsAre(home));
++  ASSERT_EQ(3u, removed->entries.size());
++  EXPECT_EQ(folder, removed->entries[0].id);
++  EXPECT_FALSE(service_->IsWorkspaceTab(tab->GetHandle()));
++  EXPECT_TRUE(service_->GetSpaceForTab(tab->GetHandle()).empty());
++
++  // The last space cannot go.
++  EXPECT_FALSE(service_->RemoveSpace(kDefaultSpaceId).has_value());
++
++  ASSERT_TRUE(service_->RestoreSpace(*removed));
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(kDefaultSpaceId, work));
++  EXPECT_THAT(PinnedShapeIn(*service_, work),
++              ElementsAre(folder, folder + "/" + a, b));
++  EXPECT_FALSE(service_->RestoreSpace(*removed));  // already back
++}
++
+ }  // namespace
+ }  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_space.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_space.cc
+@@ -0,0 +1,61 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
++
++#include "base/strings/utf_string_conversions.h"
++
++namespace helium_workspace {
++
++namespace {
++
++constexpr char kKeyId[] = "id";
++constexpr char kKeyName[] = "name";
++constexpr char kKeyIcon[] = "icon";
++constexpr char kKeyPosition[] = "position";
++constexpr char kKeyCollapsed[] = "collapsed";
++constexpr char kKeyVersion[] = "version";
++
++}  // namespace
++
++WorkspaceSpace::WorkspaceSpace() = default;
++WorkspaceSpace::WorkspaceSpace(const WorkspaceSpace&) = default;
++WorkspaceSpace& WorkspaceSpace::operator=(const WorkspaceSpace&) = default;
++WorkspaceSpace::~WorkspaceSpace() = default;
++
++base::DictValue WorkspaceSpace::ToValue() const {
++  base::DictValue dict;
++  dict.Set(kKeyId, id);
++  dict.Set(kKeyName, name);
++  dict.Set(kKeyIcon, icon);
++  dict.Set(kKeyPosition, position);
++  if (collapsed) {
++    dict.Set(kKeyCollapsed, true);
++  }
++  dict.Set(kKeyVersion, version);
++  return dict;
++}
++
++// static
++std::optional<WorkspaceSpace> WorkspaceSpace::FromValue(
++    const base::DictValue& dict) {
++  const std::string* id = dict.FindString(kKeyId);
++  if (!id || id->empty()) {
++    return std::nullopt;
++  }
++  WorkspaceSpace space;
++  space.id = *id;
++  if (const std::string* name = dict.FindString(kKeyName)) {
++    space.name = base::UTF8ToUTF16(*name);
++  }
++  if (const std::string* icon = dict.FindString(kKeyIcon)) {
++    space.icon = *icon;
++  }
++  space.position = dict.FindInt(kKeyPosition).value_or(0);
++  space.collapsed = dict.FindBool(kKeyCollapsed).value_or(false);
++  space.version = dict.FindInt(kKeyVersion).value_or(kCurrentVersion);
++  return space;
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_space.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_space.h
+@@ -0,0 +1,63 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SPACE_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SPACE_H_
++
++#include <optional>
++#include <string>
++
++#include "base/values.h"
++
++namespace helium_workspace {
++
++// The pseudo space of a tab bound to a favorite. Favorites are the same in
++// every space (Arc, M6 轮0 g1: six tiles pixel-identical across three
++// spaces), so such a tab belongs everywhere: it is never hidden by the
++// per-space filters and it stays the active tab across a switch (g8c).
++// Never a real id (those are UUIDs or kDefaultSpaceId), never persisted.
++inline constexpr char kGlobalSpaceId[] = "*";
++
++// The id LoadFromPrefs mints for the first space of a profile that has none
++// yet. Every entry written before M6 already carries space_id == "default"
++// (workspace_entry.h has shipped the field since v1), so this one literal is
++// what lands all of them in that space with no migration step -- and it is
++// what the m313/m311 probe fixtures write, so it must not change.
++inline constexpr char kDefaultSpaceId[] = "default";
++
++// One Arc-style space: a named, icon'd bucket of pinned rows and folders
++// (WorkspaceEntry::space_id points here) plus, at runtime, a subset of the
++// open tabs. Favorites are not per space. v2.0 carries no theme colour.
++struct WorkspaceSpace {
++  WorkspaceSpace();
++  WorkspaceSpace(const WorkspaceSpace&);
++  WorkspaceSpace& operator=(const WorkspaceSpace&);
++  ~WorkspaceSpace();
++
++  static constexpr int kCurrentVersion = 1;
++
++  base::DictValue ToValue() const;
++
++  // Rejects only a missing/empty id. Everything else defaults and unknown
++  // keys are ignored: a later build may write a theme key, and an older one
++  // must keep the space rather than drop it -- the same additive rule that
++  // keeps folders out of WorkspaceEntry::Section. Deliberately no enum with
++  // a range check for the same reason.
++  static std::optional<WorkspaceSpace> FromValue(const base::DictValue& dict);
++
++  std::string id;  // UUID (or kDefaultSpaceId), primary key.
++  std::u16string name;
++  // One emoji, UTF-8. Empty = no icon: the bottom bar and the head row draw
++  // an 8pt grey dot instead (Arc g1 f_00300).
++  std::string icon;
++  // Order in the bottom bar, dense from 0.
++  int position = 0;
++  // The head row's chevron: hides this space's whole pinned list.
++  bool collapsed = false;
++  int version = kCurrentVersion;
++};
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_SPACE_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_space_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_space_unittest.cc
+@@ -0,0 +1,72 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium_workspace {
++namespace {
++
++WorkspaceSpace MakeSpace() {
++  WorkspaceSpace space;
++  space.id = "5c1d7d2a-0e6b-4a0f-8d1e-2f3a4b5c6d7e";
++  space.name = u"Work 工作";
++  space.icon = "🎨";
++  space.position = 2;
++  space.collapsed = true;
++  return space;
++}
++
++TEST(WorkspaceSpaceTest, RoundTrip) {
++  const WorkspaceSpace original = MakeSpace();
++  const std::optional<WorkspaceSpace> decoded =
++      WorkspaceSpace::FromValue(original.ToValue());
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ(decoded->id, original.id);
++  EXPECT_EQ(decoded->name, original.name);
++  EXPECT_EQ(decoded->icon, original.icon);
++  EXPECT_EQ(decoded->position, original.position);
++  EXPECT_EQ(decoded->collapsed, original.collapsed);
++  EXPECT_EQ(decoded->version, WorkspaceSpace::kCurrentVersion);
++}
++
++TEST(WorkspaceSpaceTest, SpaceWithoutIdIsRejected) {
++  base::DictValue dict = MakeSpace().ToValue();
++  dict.Remove("id");
++  EXPECT_FALSE(WorkspaceSpace::FromValue(dict).has_value());
++  dict.Set("id", "");
++  EXPECT_FALSE(WorkspaceSpace::FromValue(dict).has_value());
++}
++
++// Everything but the id is optional: an old build must keep a space some
++// newer build wrote (say with a theme key) rather than drop it wholesale,
++// and a bare {"id"} is a valid, nameless, iconless space.
++TEST(WorkspaceSpaceTest, UnknownKeysAreIgnoredAndMissingKeysDefault) {
++  base::DictValue dict;
++  dict.Set("id", "s1");
++  dict.Set("theme", "blue");   // a round-2 key
++  dict.Set("position", 7);
++  const std::optional<WorkspaceSpace> decoded = WorkspaceSpace::FromValue(dict);
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ("s1", decoded->id);
++  EXPECT_TRUE(decoded->name.empty());
++  EXPECT_TRUE(decoded->icon.empty());
++  EXPECT_EQ(7, decoded->position);
++  EXPECT_FALSE(decoded->collapsed);
++  EXPECT_EQ(WorkspaceSpace::kCurrentVersion, decoded->version);
++}
++
++// The collapsed key is written only when set, so an expanded space's dict
++// is the same shape a build without the bit would have written.
++TEST(WorkspaceSpaceTest, CollapsedIsWrittenOnlyWhenSet) {
++  WorkspaceSpace space = MakeSpace();
++  space.collapsed = false;
++  EXPECT_FALSE(space.ToValue().contains("collapsed"));
++  space.collapsed = true;
++  EXPECT_TRUE(space.ToValue().contains("collapsed"));
++}
++
++}  // namespace
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -13,17 +13,28 @@
+ #include "base/containers/span.h"
+ #include "base/strings/string_view_util.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/tab_list/tab_removed_reason.h"
++#include "chrome/browser/sessions/helium_session_tab_extra_data.h"
++#include "chrome/browser/sessions/session_service.h"
++#include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/sessions/tab_restore_service_factory.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "chrome/browser/ui/browser_tabstrip.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
++#include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
++#include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ #include "chrome/grit/generated_resources.h"
+ #include "ui/base/l10n/l10n_util.h"
++#include "ui/base/models/dialog_model.h"
++#include "components/constrained_window/constrained_window_views.h"
+ #include "components/sessions/core/tab_restore_service.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+@@ -34,6 +45,8 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
++#include "components/prefs/pref_service.h"
++#include "components/sessions/content/session_tab_helper.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+@@ -100,6 +113,18 @@
+     // ORDER CONTRACT on OnChildrenAdded): the claim must precede the row.
+     model->Root()->AddObserver(this);
+   }
++  if (service_) {
++    service_->AddObserver(this);  // OnWorkspaceSpacesChanged (M6-r1)
++  }
++
++  // M6: a new window opens on the space the user used last, anywhere;
++  // AdoptTabsInWindow() then corrects a restored window from its active
++  // tab. A stale pref (the space was deleted) means the first space.
++  const std::string last_space = browser_window_->GetProfile()->GetPrefs()->GetString(
++      prefs::kWorkspaceCurrentSpaceId);
++  current_space_id_ = service_->FindSpaceById(last_space)
++                          ? last_space
++                          : service_->FirstSpaceId();
+ 
+   // Deferred: BrowserWindowFeatures::Init() runs before this window's
+   // startup or session-restore tabs have been inserted, so there would be
+@@ -110,6 +135,9 @@
+ }
+ 
+ WorkspaceTabController::~WorkspaceTabController() {
++  if (service_) {
++    service_->RemoveObserver(this);
++  }
+   if (TabStripModel* model = browser_window_->GetTabStripModel()) {
+     model->RemoveObserver(this);
+     model->Root()->RemoveObserver(this);
+@@ -158,7 +186,8 @@
+   content::WebContents* contents = tab->GetContents();
+   const std::string id =
+       service_->AddEntry(WorkspaceEntry::Section::kPinned, url,
+-                         contents ? contents->GetTitle() : std::u16string());
++                         contents ? contents->GetTitle() : std::u16string(),
++                         current_space_id_);
+   if (!id.empty()) {
+     BindTabToEntry(tab, id);
+   }
+@@ -190,13 +219,15 @@
+   if (const WorkspaceEntry* existing =
+           service_->FindEntryByUrlUnboundInWindow(url, browser_window_)) {
+     id = existing->id;
+-    if (!service_->SetEntrySection(id, WorkspaceEntry::Section::kFavorite)) {
++    if (!service_->SetEntrySection(id, WorkspaceEntry::Section::kFavorite,
++                                   current_space_id_)) {
+       return;  // Favorites cap.
+     }
+   } else {
+     content::WebContents* contents = tab->GetContents();
+     id = service_->AddEntry(WorkspaceEntry::Section::kFavorite, url,
+-                            contents ? contents->GetTitle() : std::u16string());
++                            contents ? contents->GetTitle() : std::u16string(),
++                            current_space_id_);
+     if (id.empty()) {
+       return;  // Favorites cap.
+     }
+@@ -273,9 +304,10 @@
+     return;
+   }
+   // SampleWindow() reads the whole strip, entry tabs included -- the plan
+-  // functions need every tab to reason about emptying the window.
+-  const ArchivePlan plan =
+-      PlanCloseUnpinned(SampleWindow(browser_window_, *service));
++  // functions need every tab to reason about emptying the window. The
++  // space filter is the plan's, never the sample's, for the same reason.
++  const ArchivePlan plan = PlanCloseUnpinned(
++      SampleWindow(browser_window_, *service), current_space_id_);
+   if (plan.to_close.empty()) {
+     // A window holding nothing but sidebar entries. Do nothing at all: no
+     // toast, no stray new tab.
+@@ -336,9 +368,11 @@
+     return;
+   }
+   // Arc's defaults, all three (轮0 2026-08-31): named "Untitled", landed at
+-  // the end, and straight into inline rename.
++  // the end, and straight into inline rename. M6: the end of the *current
++  // space's* pinned list.
+   const std::string id = service_->AddFolder(
+-      l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DEFAULT_NAME));
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DEFAULT_NAME),
++      current_space_id_);
+   if (id.empty()) {
+     return;
+   }
+@@ -354,6 +388,313 @@
+   }
+ }
+ 
++// ---- Spaces (M6) ----
++
++void WorkspaceTabController::SwitchToSpace(const std::string& space_id) {
++  SwitchToSpaceInternal(space_id, kDirectionFromOrder);
++}
++
++void WorkspaceTabController::SwitchToSpaceInternal(const std::string& space_id,
++                                                   int direction) {
++  if (!service_ || space_id == current_space_id_ ||
++      !service_->FindSpaceById(space_id)) {
++    return;
++  }
++  const std::string previous = current_space_id_;
++  base::AutoReset<bool> guard(&switching_space_, true);
++  // Views first, tab second: activating first would make the sidebar's
++  // SyncBindings run against the old space's rows and then throw them away
++  // -- one wasted pass and a frame of the old space wearing the new card.
++  SetCurrentSpace(space_id, direction);
++  ActivateSpaceTab(space_id);
++  CloseAbandonedBlankTab(previous);
++}
++
++void WorkspaceTabController::SwitchToSpaceIndex(size_t index) {
++  if (!service_ || index >= service_->spaces().size()) {
++    return;
++  }
++  SwitchToSpace(service_->spaces()[index].id);
++}
++
++void WorkspaceTabController::NextSpace() {
++  if (!service_) {
++    return;
++  }
++  const std::vector<WorkspaceSpace>& spaces = service_->spaces();
++  for (size_t i = 0; i < spaces.size(); ++i) {
++    if (spaces[i].id == current_space_id_) {
++      // "Next" slides the same way even when it wraps to the first space.
++      SwitchToSpaceInternal(spaces[(i + 1) % spaces.size()].id, +1);
++      return;
++    }
++  }
++}
++
++void WorkspaceTabController::PrevSpace() {
++  if (!service_) {
++    return;
++  }
++  const std::vector<WorkspaceSpace>& spaces = service_->spaces();
++  for (size_t i = 0; i < spaces.size(); ++i) {
++    if (spaces[i].id == current_space_id_) {
++      SwitchToSpaceInternal(spaces[(i + spaces.size() - 1) % spaces.size()].id,
++                            -1);
++      return;
++    }
++  }
++}
++
++void WorkspaceTabController::NewSpaceFromMenu() {
++  if (!service_) {
++    return;
++  }
++  const std::string id = service_->AddSpace(
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_NEW_SPACE_DEFAULT_NAME),
++      /*icon=*/std::string(), /*insert_after_id=*/current_space_id_);
++  if (id.empty()) {
++    return;
++  }
++  SwitchToSpace(id);
++  if (BrowserView* const browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_window_)) {
++    if (VerticalTabStripRegionView* const region =
++            browser_view->vertical_tab_strip_region_view()) {
++      if (WorkspaceSidebarView* const sidebar =
++              region->WorkspaceDragSidebar()) {
++        sidebar->StartSpaceRename(id);
++      }
++    }
++  }
++}
++
++void WorkspaceTabController::AddObserver(Observer* observer) {
++  observers_.AddObserver(observer);
++}
++
++void WorkspaceTabController::RemoveObserver(Observer* observer) {
++  observers_.RemoveObserver(observer);
++}
++
++void WorkspaceTabController::SetCurrentSpace(const std::string& space_id,
++                                             int direction) {
++  if (space_id == current_space_id_) {
++    return;
++  }
++  if (direction == kDirectionFromOrder) {
++    // Bar order decides: a space further right slides in from the right.
++    const auto index_of = [&](const std::string& id) {
++      const std::vector<WorkspaceSpace>& spaces = service_->spaces();
++      for (size_t i = 0; i < spaces.size(); ++i) {
++        if (spaces[i].id == id) {
++          return static_cast<int>(i);
++        }
++      }
++      return -1;
++    };
++    const int from = index_of(current_space_id_);
++    const int to = index_of(space_id);
++    direction = (from < 0 || to < 0 || from == to) ? 0 : (to > from ? +1 : -1);
++  }
++  for (Observer& observer : observers_) {
++    observer.OnCurrentSpaceWillChange(direction);
++  }
++  last_switch_direction_ = direction;
++  current_space_id_ = space_id;
++  browser_window_->GetProfile()->GetPrefs()->SetString(
++      prefs::kWorkspaceCurrentSpaceId, space_id);
++  for (Observer& observer : observers_) {
++    observer.OnCurrentSpaceChanged();
++  }
++}
++
++void WorkspaceTabController::ActivateSpaceTab(const std::string& space_id) {
++  TabStripModel* const model = browser_window_->GetTabStripModel();
++  if (!model || model->empty()) {
++    return;
++  }
++  // A favorite's tab belongs to every space, so it simply stays active
++  // (Arc g8c: letterboxd kept the focus across a switch).
++  if (const tabs::TabInterface* active = model->GetActiveTab();
++      active && service_->GetSpaceForTab(active->GetHandle()) == kGlobalSpaceId) {
++    return;
++  }
++
++  const auto activate = [&](tabs::TabInterface* tab) {
++    const int index = model->GetIndexOfTab(tab);
++    if (index < 0) {
++      return false;
++    }
++    model->ActivateTabAt(
++        index, TabStripUserGestureDetails(
++                   TabStripUserGestureDetails::GestureType::kOther));
++    last_active_by_space_[space_id] = tab->GetHandle();
++    return true;
++  };
++
++  // 1. What the space was looking at when the window last left it.
++  if (const auto it = last_active_by_space_.find(space_id);
++      it != last_active_by_space_.end()) {
++    tabs::TabInterface* const tab = it->second.Get();
++    if (tab && tab->GetBrowserWindowInterface() == browser_window_ &&
++        service_->GetSpaceForTab(it->second) == space_id && activate(tab)) {
++      return;
++    }
++  }
++  // 2. Its first tab in strip order -- a tab of its own, not a global or an
++  //    untagged one.
++  for (int i = 0; i < model->count(); ++i) {
++    tabs::TabInterface* const tab = model->GetTabAtIndex(i);
++    if (tab && service_->GetSpaceForTab(tab->GetHandle()) == space_id &&
++        activate(tab)) {
++      return;
++    }
++  }
++  // 3. Nothing open here: a fresh new tab page, tagged to the space through
++  //    the kInserted handler (the same call DeleteFolder uses to keep a
++  //    window from emptying).
++  pending_space_tag_ = space_id;
++  chrome::AddTabAt(browser_window_, GURL(), /*index=*/-1, /*foreground=*/true);
++  pending_space_tag_.clear();
++  if (tabs::TabInterface* const active = model->GetActiveTab()) {
++    last_active_by_space_[space_id] = active->GetHandle();
++  }
++}
++
++void WorkspaceTabController::CloseAbandonedBlankTab(
++    const std::string& space_id) {
++  TabStripModel* const model = browser_window_->GetTabStripModel();
++  if (!model || model->count() <= 1) {
++    return;
++  }
++  tabs::TabInterface* lone = nullptr;
++  for (int i = 0; i < model->count(); ++i) {
++    tabs::TabInterface* const tab = model->GetTabAtIndex(i);
++    if (!tab || service_->GetSpaceForTab(tab->GetHandle()) != space_id) {
++      continue;
++    }
++    if (lone) {
++      return;  // two or more: the space is in use
++    }
++    lone = tab;
++  }
++  content::WebContents* const contents = lone ? lone->GetContents() : nullptr;
++  if (!contents || lone == model->GetActiveTab() ||
++      !IsBlankNewTabState(contents->GetVisibleURL(),
++                          contents->GetController().GetEntryCount())) {
++    return;
++  }
++  const int index = model->GetIndexOfTab(lone);
++  if (index >= 0) {
++    model->CloseWebContentsAt(index, TabCloseTypes::CLOSE_NONE);
++  }
++}
++
++void WorkspaceTabController::HandleActiveTabChange(
++    const TabStripModelChange& change,
++    const TabStripSelectionChange& selection) {
++  if (switching_space_ || !selection.active_tab_changed() ||
++      !selection.new_tab) {
++    return;
++  }
++  const tabs::TabHandle handle = selection.new_tab->GetHandle();
++  const std::string space = service_->GetSpaceForTab(handle);
++  // Compare spaces, not tabs: active_tab_changed() is also true across a
++  // discard, and a global (favorite) tab must not overwrite any space's
++  // memory of what it was looking at (Arc g8c).
++  if (space.empty() || space == kGlobalSpaceId) {
++    return;
++  }
++  if (space == current_space_id_) {
++    last_active_by_space_[space] = handle;
++    return;
++  }
++  if (change.type() == TabStripModelChange::kRemoved) {
++    // The strip picked a neighbour after a close. Stay here; put one of
++    // this space's own tabs (or a fresh page) in front instead. Posted --
++    // the strip forbids mutation from inside an observer callback.
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(
++            [](base::WeakPtr<WorkspaceTabController> self,
++               const std::string& expected_space) {
++              if (self && self->current_space_id_ == expected_space) {
++                base::AutoReset<bool> guard(&self->switching_space_, true);
++                self->ActivateSpaceTab(expected_space);
++              }
++            },
++            weak_factory_.GetWeakPtr(), current_space_id_));
++    return;
++  }
++  if (service_->FindSpaceById(space)) {
++    SetCurrentSpace(space);  // the tab is already active: state only
++    last_active_by_space_[space] = handle;
++  }
++}
++
++void WorkspaceTabController::TagInsertedTab(tabs::TabInterface* tab) {
++  if (!tab) {
++    return;
++  }
++  const tabs::TabHandle handle = tab->GetHandle();
++  if (service_->HasTabSpaceTag(handle)) {
++    return;  // dragged in from another window: keeps its space
++  }
++  content::WebContents* const contents = tab->GetContents();
++  std::string space;
++  if (contents) {
++    if (const WorkspaceTabRestoreData* restored =
++            WorkspaceTabRestoreData::FromWebContents(contents)) {
++      if (service_->FindSpaceById(restored->space_id())) {
++        space = restored->space_id();
++      }
++      contents->RemoveUserData(WorkspaceTabRestoreData::UserDataKey());
++    }
++  }
++  if (space.empty()) {
++    if (const WorkspaceEntry* entry =
++            service_->FindEntryById(service_->FindEntryIdForTab(handle))) {
++      space = entry->section == WorkspaceEntry::Section::kFavorite
++                  ? current_space_id_
++                  : entry->space_id;
++    }
++  }
++  if (space.empty()) {
++    space = pending_space_tag_.empty() ? current_space_id_ : pending_space_tag_;
++  }
++  service_->SetTabSpace(handle, space);
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&WorkspaceTabController::PersistTabSpace,
++                                weak_factory_.GetWeakPtr(), handle, space));
++}
++
++void WorkspaceTabController::PersistTabSpace(tabs::TabHandle handle,
++                                             const std::string& space_id) {
++  tabs::TabInterface* const tab = handle.Get();
++  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
++  if (!contents) {
++    return;
++  }
++  // The rebuild-proof copy first (M6-r1): the command appended below dies
++  // with the next rebuild of the session file, this one is what
++  // BuildCommandsForTab re-emits then.
++  HeliumSessionTabExtraData::Set(contents, kSpaceExtraDataKey, space_id);
++  // Same incantation as send_tab_to_self's tracker; the service is null for
++  // profiles that keep no session (incognito, guest).
++  SessionService* const session_service =
++      SessionServiceFactory::GetForProfile(browser_window_->GetProfile());
++  if (!session_service) {
++    return;
++  }
++  const SessionID window_id =
++      sessions::SessionTabHelper::IdForWindowContainingTab(contents);
++  const SessionID tab_id = sessions::SessionTabHelper::IdForTab(contents);
++  if (window_id.is_valid() && tab_id.is_valid()) {
++    session_service->AddTabExtraData(window_id, tab_id, kSpaceExtraDataKey,
++                                     space_id);
++  }
++}
++
+ void WorkspaceTabController::DeleteFolder(const std::string& folder_id) {
+   if (!service_) {
+     return;
+@@ -451,6 +792,175 @@
+   RewindTabRestoreTo(watermark);
+ }
+ 
++void WorkspaceTabController::RequestDeleteSpace(const std::string& space_id) {
++  if (!service_ || service_->spaces().size() <= 1) {
++    return;  // the last space stays (WorkspaceService::RemoveSpace agrees)
++  }
++  const WorkspaceSpace* space = service_->FindSpaceById(space_id);
++  if (!space) {
++    return;
++  }
++  auto run_delete = base::BindOnce(&WorkspaceTabController::DeleteSpace,
++                                   weak_factory_.GetWeakPtr(), space_id);
++  bool has_entries = false;
++  for (const WorkspaceEntry& entry : service_->entries()) {
++    if (entry.section == WorkspaceEntry::Section::kPinned &&
++        entry.space_id == space_id) {
++      has_entries = true;
++      break;
++    }
++  }
++  if (!has_entries && service_->FindTabsInSpace(space_id).empty()) {
++    // Nothing to lose: no dialog (the folder rule, M3.13).
++    std::move(run_delete).Run();
++    return;
++  }
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(browser_window_);
++  if (!browser_view) {
++    return;
++  }
++  // Arc 轮0 g10c: a centred dialog, Cancel [ESC] / Delete [⏎]; the copy is
++  // ours (we close tabs, Arc archives them).
++  ui::DialogModel::Builder builder;
++  builder
++      .SetTitle(l10n_util::GetStringFUTF16(IDS_HELIUM_WS_DELETE_SPACE_TITLE,
++                                           space->name))
++      .AddParagraph(ui::DialogModelLabel(
++          l10n_util::GetStringUTF16(IDS_HELIUM_WS_DELETE_SPACE_BODY)))
++      .AddOkButton(std::move(run_delete),
++                   ui::DialogModel::Button::Params()
++                       .SetLabel(l10n_util::GetStringUTF16(
++                           IDS_HELIUM_WS_DELETE_SPACE_CONFIRM))
++                       .SetStyle(ui::ButtonStyle::kProminent))
++      .AddCancelButton(base::DoNothing());
++  constrained_window::ShowBrowserModal(builder.Build(),
++                                       browser_view->GetNativeWindow());
++}
++
++void WorkspaceTabController::DeleteSpace(const std::string& space_id) {
++  if (!service_ || !service_->FindSpaceById(space_id) ||
++      service_->spaces().size() <= 1) {
++    return;
++  }
++  // 1. Every window looking at this space moves to its neighbour first --
++  //    Arc lands on the adjacent space (g10c); the one to the left, or the
++  //    right when it was first. Done before the model changes so no window
++  //    ever names a space that is gone.
++  const std::vector<WorkspaceSpace>& spaces = service_->spaces();
++  std::string neighbour;
++  for (size_t i = 0; i < spaces.size(); ++i) {
++    if (spaces[i].id == space_id) {
++      neighbour = i > 0 ? spaces[i - 1].id : spaces[i + 1].id;
++      break;
++    }
++  }
++  for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
++    if (browser->GetProfile() != browser_window_->GetProfile()) {
++      continue;
++    }
++    if (WorkspaceTabController* controller = From(browser)) {
++      if (controller->current_space_id_ == space_id) {
++        controller->SwitchToSpaceInternal(neighbour, -1);
++      }
++    }
++  }
++
++  // 2. The space's tabs, collected while the tags are intact -- the close
++  //    writes each tab's space into its TabRestoreService entry
++  //    (PopulateWorkspaceExtraData), which is how Undo puts them back into
++  //    the restored space rather than the current one.
++  space_undo_watermark_ = RestoreWatermark(
++      TabRestoreServiceFactory::GetForProfile(browser_window_->GetProfile()));
++  std::map<BrowserWindowInterface*, std::vector<tabs::TabHandle>> by_window;
++  for (tabs::TabHandle handle : service_->FindTabsInSpace(space_id)) {
++    tabs::TabInterface* const tab = handle.Get();
++    if (!tab) {
++      continue;
++    }
++    if (BrowserWindowInterface* const window =
++            tab->GetBrowserWindowInterface()) {
++      by_window[window].push_back(handle);
++    }
++  }
++  for (auto& [window, handles] : by_window) {
++    if (window->IsDeleteScheduled()) {
++      continue;
++    }
++    TabStripModel* const model = window->GetTabStripModel();
++    if (!model) {
++      continue;
++    }
++    // The window keeps one tab (⛔ M4: a second close of a blank tab takes
++    // the window down). That window is already on the neighbour space, so
++    // the tab ActivateSpaceTab minted for it counts; if every tab is
++    // leaving, add one.
++    if (static_cast<int>(handles.size()) >= model->count()) {
++      chrome::AddTabAt(window, GURL(), /*index=*/-1, /*foreground=*/true);
++    }
++    for (auto it = handles.rbegin(); it != handles.rend(); ++it) {
++      tabs::TabInterface* const tab = it->Get();
++      if (!tab) {
++        continue;
++      }
++      const int index = model->GetIndexOfTab(tab);
++      if (index < 0) {
++        continue;
++      }
++      model->CloseWebContentsAt(
++          index, TabCloseTypes::CLOSE_USER_GESTURE |
++                     TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++    }
++  }
++
++  // 3. The model: the space and its entries, snapshotted for the undo.
++  space_undo_snapshot_ = service_->RemoveSpace(space_id);
++  if (!space_undo_snapshot_) {
++    return;
++  }
++
++  if (BrowserView* const browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_window_)) {
++    if (VerticalTabStripRegionView* const region =
++            browser_view->vertical_tab_strip_region_view()) {
++      region->ShowUndoBarForAction(
++          l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_DELETED_BODY),
++          base::BindOnce(&WorkspaceTabController::UndoLastDeleteSpace,
++                         weak_factory_.GetWeakPtr()));
++    }
++  }
++}
++
++void WorkspaceTabController::UndoLastDeleteSpace() {
++  if (!service_ || !space_undo_snapshot_) {
++    return;
++  }
++  const std::string space_id = space_undo_snapshot_->space.id;
++  const bool restored = service_->RestoreSpace(*space_undo_snapshot_);
++  space_undo_snapshot_.reset();
++  const SessionID watermark = space_undo_watermark_;
++  space_undo_watermark_ = SessionID::InvalidValue();
++  if (!restored) {
++    return;
++  }
++  // The space exists again, so the reopened tabs' "helium.space" carrier
++  // lands them in it (TagInsertedTab); the entries re-claim their tabs as
++  // the loads commit (认领不是一次性的, M3.11-r1).
++  RewindTabRestoreTo(watermark);
++  SwitchToSpaceInternal(space_id, kDirectionFromOrder);
++}
++
++void WorkspaceTabController::OnWorkspaceSpacesChanged() {
++  // Deleted from another window (or a pref reload): never point at a space
++  // that is gone. The first space is the fallback, unanimated.
++  if (!service_ || current_space_id_.empty() ||
++      service_->FindSpaceById(current_space_id_) ||
++      service_->spaces().empty()) {
++    return;
++  }
++  SwitchToSpaceInternal(service_->FirstSpaceId(), 0);
++}
++
+ void WorkspaceTabController::ResetEntryTab(const std::string& entry_id) {
+   TabStripModel* model = browser_window_->GetTabStripModel();
+   const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
+@@ -517,6 +1027,19 @@
+       }
+     }
+   }
++
++  // M6: a restored window lands on the space its active tab was in. The
++  // follow rule never fires for a tab that was already active when this
++  // controller started listening, so this is where multi-window restore
++  // gets its space right. No activation: the tab is already in front.
++  if (tabs::TabInterface* const active = model->GetActiveTab()) {
++    const std::string space = service_->GetSpaceForTab(active->GetHandle());
++    if (!space.empty() && space != kGlobalSpaceId &&
++        service_->FindSpaceById(space)) {
++      SetCurrentSpace(space, /*direction=*/0);  // a landing, not a switch
++      last_active_by_space_[space] = active->GetHandle();
++    }
++  }
+ }
+ 
+ bool WorkspaceTabController::ClaimTabForMatchingEntry(
+@@ -656,30 +1179,39 @@
+         BindTabToEntry(inserted.tab, pending_bind_entry_id_);
+       }
+       pending_bind_entry_id_.clear();
+-      return;
++    } else {
++      // helium-fork M3.11-r1: a tab that arrives carrying a page it has
++      // already been on -- Cmd+Shift+T, session restore, one dragged in
++      // from another window -- gets the same claim the window-opening sweep
++      // does. Without it, reopening a closed pinned page built a *new*
++      // Today tab beside the row it came from (user 2026-08-24) and the row
++      // stayed dark with its own page open one line below it.
++      //
++      // ArrivedWithHistory() is what keeps this off ordinary new tabs: one
++      // being opened right now carries no navigation of its own, only a
++      // pending URL, and claiming it on where it is *headed* would quietly
++      // swallow a plain Cmd+click on a pinned site's link into that site's
++      // row. Startup tabs have that same shape, and they are
++      // AdoptTabsInWindow()'s job.
++      for (const TabStripModelChange::ContentsWithIndex& inserted :
++           change.GetInsert()->contents) {
++        if (ArrivedWithHistory(inserted.tab)) {
++          ClaimTabForMatchingEntry(inserted.tab);
++        }
++      }
+     }
+-    // helium-fork M3.11-r1: a tab that arrives carrying a page it has
+-    // already been on -- Cmd+Shift+T, session restore, one dragged in from
+-    // another window -- gets the same claim the window-opening sweep does.
+-    // Without it, reopening a closed pinned page built a *new* Today tab
+-    // beside the row it came from (user 2026-08-24) and the row stayed dark
+-    // with its own page open one line below it.
+-    //
+-    // ArrivedWithHistory() is what keeps this off ordinary new tabs: one
+-    // being opened right now carries no navigation of its own, only a
+-    // pending URL, and claiming it on where it is *headed* would quietly
+-    // swallow a plain Cmd+click on a pinned site's link into that site's
+-    // row. Startup tabs have that same shape, and they are
+-    // AdoptTabsInWindow()'s job.
++    // M6: the space tag, after the claim so a bound tab takes its entry's
++    // space, and before the selection is looked at so a restored active
++    // tab already answers for its space.
+     for (const TabStripModelChange::ContentsWithIndex& inserted :
+          change.GetInsert()->contents) {
+-      if (ArrivedWithHistory(inserted.tab)) {
+-        ClaimTabForMatchingEntry(inserted.tab);
+-      }
++      TagInsertedTab(inserted.tab);
+     }
++    HandleActiveTabChange(change, selection);
+     return;
+   }
+ 
++  HandleActiveTabChange(change, selection);
+   if (change.type() != TabStripModelChange::kRemoved) {
+     return;
+   }
+@@ -697,7 +1229,7 @@
+     // is nothing to capture anyway: the icon a closing tab is showing is the
+     // one its last OnTabChangedAt already persisted.
+     last_favicon_.erase(handle);
+-    service_->UnbindTab(handle);
++    service_->ForgetTab(handle);  // binding and space tag alike
+   }
+ }
+ 
+@@ -762,7 +1294,8 @@
+         content::WebContents* contents = tab->GetContents();
+         const std::string id = service_->AddEntry(
+             WorkspaceEntry::Section::kPinned, url,
+-            contents ? contents->GetTitle() : std::u16string());
++            contents ? contents->GetTitle() : std::u16string(),
++            current_space_id_);
+         if (!id.empty()) {
+           BindTabToEntry(tab, id);
+         }
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -6,12 +6,16 @@
+ #define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_CONTROLLER_H_
+ 
+ #include <map>
++#include <optional>
+ #include <string>
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
++#include "base/observer_list.h"
++#include "base/observer_list_types.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+ #include "components/tabs/public/tab_collection.h"
+ #include "components/tabs/public/tab_collection_observer.h"
+@@ -24,8 +28,6 @@
+ 
+ namespace helium_workspace {
+ 
+-class WorkspaceService;
+-
+ // Per-window half of the workspace sidebar. Entries themselves are profile
+ // data owned by WorkspaceService; this class is what turns them into tabs in
+ // one particular window, and what keeps that window's tab strip in the shape
+@@ -42,11 +44,32 @@
+ //     as an entry instead. The pinned region must stay empty: it is what
+ //     makes TabStripModel::empty() -- and therefore "closing the last tab
+ //     closes the window" -- correct.
++//   - M6: the window's *current space*. Every tab of every space stays in
++//     this window's TabStripModel (architecture A, user 2026-09-02); the
++//     sidebar and the Today list filter by the current space, and this
++//     class owns the switch: which space is current, which tab each space
++//     was last looking at, and which space a newly arrived tab belongs to.
+ class WorkspaceTabController : public TabStripModelObserver,
+-                               public tabs::TabCollectionObserver {
++                               public tabs::TabCollectionObserver,
++                               public WorkspaceService::Observer {
+  public:
+   DECLARE_USER_DATA(WorkspaceTabController);
+ 
++  class Observer : public base::CheckedObserver {
++   public:
++    // This window's current space changed -- a switch, the active tab
++    // pulling the window into its own space, or a restored window landing
++    // on the space its active tab was in. Fired before any tab is
++    // activated for the new space, so the views re-filter first.
++    virtual void OnCurrentSpaceChanged() {}
++    // helium-fork M6-r3: about to switch; |direction| as SetCurrentSpace
++    // resolved it (+1 / -1 in bar order, 0 = a landing). The views still
++    // show the outgoing space, which is the moment to snapshot it for the
++    // carousel (Arc 2026-09-03 recording: the old list slides out as the
++    // new one slides in).
++    virtual void OnCurrentSpaceWillChange(int direction) {}
++  };
++
+   WorkspaceTabController(BrowserWindowInterface* browser_window,
+                          WorkspaceService* service);
+   WorkspaceTabController(const WorkspaceTabController&) = delete;
+@@ -87,7 +110,8 @@
+   // that would ask "Leave site?" (that page still gets to object, through
+   // Chromium's own dialog on the way out).
+   //
+-  // Other windows are untouched (user 2026-08-25).
++  // Other windows are untouched (user 2026-08-25). M6: other spaces too --
++  // only the current space's Today is cleared.
+   void CloseUnpinnedTabs();
+ 
+   // Undo for the last CloseUnpinnedTabs() in this window. Reopens tabs until
+@@ -109,8 +133,9 @@
+ 
+   // ---- Folders (M3.13) ----
+ 
+-  // IDC_HELIUM_WS_NEW_FOLDER: an empty folder at the end of the pinned top
+-  // level, its name dropped straight into inline edit like Arc's.
++  // IDC_HELIUM_WS_NEW_FOLDER: an empty folder at the end of the current
++  // space's pinned top level, its name dropped straight into inline edit
++  // like Arc's.
+   void NewFolderFromMenu();
+ 
+   // Deletes |folder_id| with everything in it (user ruling 2026-08-31): the
+@@ -124,6 +149,55 @@
+   // closed tabs come back too.
+   void UndoLastDeleteFolder();
+ 
++  // ---- Spaces (M6) ----
++
++  // The space this window is looking at. Always names an existing space.
++  const std::string& current_space_id() const { return current_space_id_; }
++
++  // Makes |space_id| current: the views re-filter, then the space's
++  // last-active tab is activated -- or its first tab in strip order, or a
++  // fresh new tab page tagged to it (Arc shows an empty content area for a
++  // space with no tabs; Chromium has no such state, so a blank tab stands in
++  // and is closed again on the way out if it was never touched). A tab bound
++  // to a favorite stays active across the switch (Arc g8c). Unknown or
++  // already-current ids are no-ops.
++  void SwitchToSpace(const std::string& space_id);
++  // Ctrl+1..8: the space at |index| in bar order; out of range does nothing.
++  void SwitchToSpaceIndex(size_t index);
++  // Cmd+Option+Right / Left, wrapping at the ends.
++  void NextSpace();
++  void PrevSpace();
++
++  // IDC_HELIUM_WS_NEW_SPACE and the sidebar menu's row: a space with the
++  // default name, inserted right of the current one, switched to, and its
++  // head row dropped into inline rename (Arc 轮0 g2b/g2c minus the form,
++  // which is round 2).
++  void NewSpaceFromMenu();
++
++  // M6-r1 "Delete Space" (Arc 轮0 g10c): asks first -- a centred dialog,
++  // Cancel on Escape, the destructive button as the default -- unless the
++  // space holds nothing (no entries, no tabs), then just deletes.
++  void RequestDeleteSpace(const std::string& space_id);
++  // The delete itself: every window on that space moves to a neighbour,
++  // the space's tabs close (CLOSE_CREATE_HISTORICAL_TAB, in every window),
++  // the space and its entries leave the model, and the sidebar's undo bar
++  // offers one Undo (⌘Z too) for a few seconds. The last space cannot be
++  // deleted. Arc archives the tabs instead; we close-and-undo like folders.
++  void DeleteSpace(const std::string& space_id);
++  // The undo: the space and its entries go back to their slots, the closed
++  // tabs come back through TabRestoreService carrying their space tag, and
++  // the window switches to the restored space.
++  void UndoLastDeleteSpace();
++
++  // M6-r1: which way the last switch went, for the sidebar's slide (+1 =
++  // to a space further right in bar order / "next", -1 = left / "previous",
++  // 0 = not a switch to animate -- startup, a restore landing on its
++  // space). Valid during and after OnCurrentSpaceChanged().
++  int last_switch_direction() const { return last_switch_direction_; }
++
++  void AddObserver(Observer* observer);
++  void RemoveObserver(Observer* observer);
++
+  private:
+   // Binds tabs already open in this window to entries with the same URL, so
+   // a restored session does not show the same page twice.
+@@ -147,6 +221,45 @@
+   // call at any time; a tab with no icon yet leaves the entry untouched.
+   void CaptureFavicon(tabs::TabInterface* tab, const std::string& entry_id);
+ 
++  // ---- Spaces (M6) ----
++  // Gives a tab that just arrived its space: the tag it already carries
++  // (dragged in from another window), else the session carrier it was
++  // restored with, else its entry's space, else the space being opened
++  // into (pending_space_tag_), else the current space. Every arrival gets a
++  // raw tag, bound or not, so a row that is later unpinned stays put.
++  void TagInsertedTab(tabs::TabInterface* tab);
++  // Writes |space_id| into the session as |handle|'s extra_data. Posted:
++  // the session's own tab-inserted bookkeeping and this observer run in no
++  // promised order, and the window id is only set once it has run.
++  void PersistTabSpace(tabs::TabHandle handle, const std::string& space_id);
++  // The state half of a switch: the id, the pref, the observers. No tab is
++  // touched. |direction| is what last_switch_direction() reports to the
++  // observers (see there); kDirectionFromOrder derives it from bar order.
++  static constexpr int kDirectionFromOrder = 2;
++  void SetCurrentSpace(const std::string& space_id,
++                       int direction = kDirectionFromOrder);
++  // SwitchToSpace with an explicit slide direction (Next/Prev wrapping
++  // around the ends still slide their own way).
++  void SwitchToSpaceInternal(const std::string& space_id, int direction);
++  // The tab half: activates the space's tab as described on SwitchToSpace.
++  void ActivateSpaceTab(const std::string& space_id);
++  // A space left holding nothing but the untouched new tab page that
++  // ActivateSpaceTab minted for it loses that tab again, so switching around
++  // does not litter every space with a blank page.
++  void CloseAbandonedBlankTab(const std::string& space_id);
++  // The follow rule (Vivaldi's): when the active tab becomes one of another
++  // space -- Cmd+1..9, an extension, tab search -- the window follows it
++  // there, so the sidebar and the content never disagree. A close is the
++  // exception: the strip's choice of neighbour must not drag the window
++  // into another space, so the current space re-activates one of its own
++  // instead (posted -- an observer may not mutate the strip).
++  void HandleActiveTabChange(const TabStripModelChange& change,
++                             const TabStripSelectionChange& selection);
++
++  // WorkspaceService::Observer: a space this window was on may have been
++  // deleted from another window; the current space must always exist.
++  void OnWorkspaceSpacesChanged() override;
++
+   // TabStripModelObserver:
+   void OnTabStripModelChanged(
+       TabStripModel* tab_strip_model,
+@@ -202,6 +315,26 @@
+   // -- RestoreEntries() refuses ids that exist again.
+   std::vector<WorkspaceEntry> folder_undo_snapshot_;
+   SessionID folder_undo_watermark_ = SessionID::InvalidValue();
++  // The last DeleteSpace()'s snapshot and watermark, same lifecycle.
++  std::optional<WorkspaceService::RemovedSpace> space_undo_snapshot_;
++  SessionID space_undo_watermark_ = SessionID::InvalidValue();
++  int last_switch_direction_ = 0;
++
++  // ---- Spaces (M6) ----
++  std::string current_space_id_;
++  // The tab each space was looking at when the window last left it, or the
++  // one it activated most recently while current. Dead handles are simply
++  // skipped; a tab that moved to another space is re-checked on use.
++  std::map<std::string, tabs::TabHandle> last_active_by_space_;
++  // Twin of pending_bind_entry_id_: set around the chrome::AddTabAt() that
++  // ActivateSpaceTab() uses to give an empty space a page, so the kInserted
++  // tag lands in that space rather than the (already switched) current one
++  // -- the two are the same today, but the contract is what matters.
++  std::string pending_space_tag_;
++  // True while SwitchToSpace() is activating a tab, so the follow rule does
++  // not react to the activation it caused.
++  bool switching_space_ = false;
++  base::ObserverList<Observer> observers_;
+ 
+   ui::ScopedUnownedUserData<WorkspaceTabController> scoped_unowned_user_data_;
+   base::WeakPtrFactory<WorkspaceTabController> weak_factory_{this};
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_restore_data.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_restore_data.cc
+@@ -0,0 +1,65 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h"
++
++#include <utility>
++
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++
++namespace helium_workspace {
++
++WorkspaceTabRestoreData::WorkspaceTabRestoreData(content::WebContents* contents,
++                                                 std::string space_id)
++    : content::WebContentsUserData<WorkspaceTabRestoreData>(*contents),
++      space_id_(std::move(space_id)) {}
++
++WorkspaceTabRestoreData::~WorkspaceTabRestoreData() = default;
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(WorkspaceTabRestoreData);
++
++void PopulateWorkspaceExtraData(
++    tabs::TabInterface* tab,
++    std::map<std::string, std::string>* extra_data) {
++  if (!tab || !extra_data) {
++    return;
++  }
++  BrowserWindowInterface* const window = tab->GetBrowserWindowInterface();
++  if (!window) {
++    return;
++  }
++  WorkspaceService* const service =
++      WorkspaceServiceFactory::GetForProfile(window->GetProfile());
++  if (!service) {
++    return;  // off-the-record: no sidebar, no spaces
++  }
++  const std::string space = service->GetSpaceForTab(tab->GetHandle());
++  if (space.empty() || space == kGlobalSpaceId) {
++    return;
++  }
++  (*extra_data)[kSpaceExtraDataKey] = space;
++}
++
++void RestoreWorkspaceSpaceFromExtraData(
++    content::WebContents* contents,
++    const std::map<std::string, std::string>& extra_data) {
++  if (!contents) {
++    return;
++  }
++  const auto it = extra_data.find(kSpaceExtraDataKey);
++  if (it == extra_data.end() || it->second.empty()) {
++    return;
++  }
++  // Whether the space still exists is the controller's question -- it has
++  // the service and a current space to fall back to.
++  WorkspaceTabRestoreData::CreateForWebContents(contents, it->second);
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h
+@@ -0,0 +1,63 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_RESTORE_DATA_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_RESTORE_DATA_H_
++
++#include <map>
++#include <string>
++
++#include "content/public/browser/web_contents_user_data.h"
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++namespace tabs {
++class TabInterface;
++}  // namespace tabs
++
++namespace helium_workspace {
++
++// The session extra_data key under which a tab's space travels across a
++// restart (SessionService::AddTabExtraData) and across Cmd+Shift+T
++// (BrowserLiveTabContext::GetExtraDataForTab). Namespaced like glic's.
++inline constexpr char kSpaceExtraDataKey[] = "helium.space";
++
++// M6: carries a restored tab's space from the raw WebContents (where
++// browser_tabrestore.cc hands the extra_data back, before the tab exists
++// in any model) to WorkspaceTabController's kInserted handler, which tags
++// the tab and drops this. Same shape as glic::GlicTabRestoreData.
++class WorkspaceTabRestoreData
++    : public content::WebContentsUserData<WorkspaceTabRestoreData> {
++ public:
++  ~WorkspaceTabRestoreData() override;
++
++  const std::string& space_id() const { return space_id_; }
++
++ private:
++  friend class content::WebContentsUserData<WorkspaceTabRestoreData>;
++
++  WorkspaceTabRestoreData(content::WebContents* contents, std::string space_id);
++
++  const std::string space_id_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++// Writes |tab|'s space into |extra_data| (the Cmd+Shift+T half; the restart
++// half is the controller's AddTabExtraData). Nothing is written for a tab
++// with no space of its own -- a favorite's tab is re-claimed by URL anyway.
++void PopulateWorkspaceExtraData(tabs::TabInterface* tab,
++                                std::map<std::string, std::string>* extra_data);
++
++// Parks the space found in |extra_data|, if any, on |contents| as a
++// WorkspaceTabRestoreData for the controller to consume on insert.
++void RestoreWorkspaceSpaceFromExtraData(
++    content::WebContents* contents,
++    const std::map<std::string, std::string>& extra_data);
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_TAB_RESTORE_DATA_H_

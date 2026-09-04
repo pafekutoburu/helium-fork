@@ -1,0 +1,405 @@
+Index: src/chrome/app/chrome_command_ids.h
+===================================================================
+--- src.orig/chrome/app/chrome_command_ids.h
++++ src/chrome/app/chrome_command_ids.h
+@@ -117,6 +117,11 @@
+ #define IDC_BROWSER_LAYOUT_VERTICAL     34084
+ #define IDC_BROWSER_LAYOUT_VERTICAL_RIGHT 34085
+ #define IDC_BROWSER_LAYOUT_DYNAMIC      34086
++// helium-fork M6: the sidebar's spaces. Next/previous wrap (Arc's ⌘⌥←→);
++// New Space lands right of the current one and switches to it.
++#define IDC_HELIUM_WS_NEXT_SPACE        34087
++#define IDC_HELIUM_WS_PREV_SPACE        34088
++#define IDC_HELIUM_WS_NEW_SPACE         34089
+ 
+ #define IDC_CTRL_S_SHORTCUT             34090
+ #define IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN 34091
+@@ -130,6 +135,18 @@
+ // helium-fork M3.13: a new sidebar folder, from the window menu.
+ #define IDC_HELIUM_WS_NEW_FOLDER        34097
+ 
++// helium-fork M6: Ctrl+1..8 jump to the Nth space (Arc). Eight ids so the
++// decode is a subtraction, exactly like IDC_SELECT_TAB_0..7. A second fork
++// block, well past the tab-group ids upstream still grows below.
++#define IDC_HELIUM_WS_SPACE_1           34900
++#define IDC_HELIUM_WS_SPACE_2           34901
++#define IDC_HELIUM_WS_SPACE_3           34902
++#define IDC_HELIUM_WS_SPACE_4           34903
++#define IDC_HELIUM_WS_SPACE_5           34904
++#define IDC_HELIUM_WS_SPACE_6           34905
++#define IDC_HELIUM_WS_SPACE_7           34906
++#define IDC_HELIUM_WS_SPACE_8           34907
++
+ // Tab group Commands
+ #define IDC_ADD_NEW_TAB_TO_GROUP      34100
+ #define IDC_CREATE_NEW_TAB_GROUP      34101
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -2005,6 +2005,18 @@
+       <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_FOLDER" desc="Command name shown on the Settings shortcuts page for creating a new folder among the pinned entries of the sidebar.">
+         New sidebar folder
+       </message>
++      <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_NEXT_SPACE" desc="Command name shown on the Settings shortcuts page for switching the sidebar to the next space.">
++        Next space
++      </message>
++      <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_PREV_SPACE" desc="Command name shown on the Settings shortcuts page for switching the sidebar to the previous space.">
++        Previous space
++      </message>
++      <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_SPACE" desc="Command name shown on the Settings shortcuts page for creating a new sidebar space.">
++        New sidebar space
++      </message>
++      <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_SWITCH_TO_SPACE" desc="Command name shown on the Settings shortcuts page for switching the sidebar to the space at a given position, counted from 1.">
++        Switch to space <ph name="INDEX">$1<ex>3</ex></ph>
++      </message>
+       <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
+         Toggle developer tools
+       </message>
+@@ -12185,6 +12197,63 @@
+         <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
+           Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
+         </message>
++        <message name="IDS_HELIUM_WS_SPACE_FIRST_NAME" desc="Name given to the one sidebar space a profile starts with (or is migrated into); the user can rename it.">
++          Personal
++        </message>
++        <message name="IDS_HELIUM_WS_NEW_SPACE_DEFAULT_NAME" desc="Name a newly created sidebar space gets before the user types one; it is selected for renaming right away.">
++          New Space
++        </message>
++        <message name="IDS_HELIUM_WS_NEW_SPACE" desc="The label of the window menu item and of the sidebar bottom menu row that create a new sidebar space.">
++          New Space
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MENU_RENAME" desc="The label of the menu item on a sidebar space's header row that starts renaming the space in place.">
++          Rename Space…
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MENU_BUTTON" desc="Accessible name of the '···' button on a sidebar space's header row that opens the space's menu.">
++          Space options
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_TOOLTIP" desc="Tooltip on a space's icon in the sidebar's bottom bar: the space's name followed by its Control+number shortcut.">
++          <ph name="SPACE_NAME">$1<ex>Work</ex></ph>  ⌃<ph name="INDEX">$2<ex>2</ex></ph>
++        </message>
++        <message name="IDS_HELIUM_WS_SIDEBAR_MENU_BUTTON" desc="Accessible name of the chevron button at the bottom right of the sidebar that opens the sidebar menu (new space, downloads, history, bookmarks).">
++          Sidebar menu
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_DOWNLOADS" desc="The label of the sidebar bottom menu row that shows the downloads bubble.">
++          Downloads
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_HISTORY" desc="The label of the sidebar bottom menu row that opens the history page.">
++          History
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_BOOKMARKS" desc="The label of the sidebar bottom menu row that opens the bookmarks page.">
++          Bookmarks
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MENU_DELETE" desc="The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that deletes the space after a confirmation.">
++          Delete Space
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_SPACE_TITLE" desc="Title of the confirmation dialog shown before deleting a sidebar space.">
++          Delete your “<ph name="SPACE_NAME">$1<ex>Work</ex></ph>” space?
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_SPACE_BODY" desc="Body of the confirmation dialog shown before deleting a sidebar space: its tabs are closed, its pinned entries and folders removed, with a brief Undo offered afterwards.">
++          This closes all the tabs and removes the folders inside it. You can undo for a few seconds afterwards.
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_SPACE_CONFIRM" desc="The confirming button of the delete-space dialog.">
++          Delete
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_DELETED_BODY" desc="Text in the sidebar's bottom undo bar right after a space was deleted, next to an Undo button.">
++          Space deleted
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_SHOW_ALL_HISTORY" desc="The last row of the sidebar menu's History submenu; opens the full history page.">
++          Show All History
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_SHOW_ALL_DOWNLOADS" desc="The last row of the sidebar menu's Downloads submenu; opens the full downloads page.">
++          Show All Downloads
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_MANAGE_BOOKMARKS" desc="The first row of the sidebar menu's Bookmarks submenu; opens the bookmark manager page.">
++          Manage Bookmarks
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_EMPTY" desc="Placeholder row shown in a sidebar menu submenu that has nothing to list (an empty bookmark folder, no history, no downloads).">
++          Empty
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
+         </message>
+@@ -12361,6 +12430,63 @@
+         <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="In Title Case: Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
+           Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
+         </message>
++        <message name="IDS_HELIUM_WS_SPACE_FIRST_NAME" desc="In Title Case: Name given to the one sidebar space a profile starts with (or is migrated into); the user can rename it.">
++          Personal
++        </message>
++        <message name="IDS_HELIUM_WS_NEW_SPACE_DEFAULT_NAME" desc="In Title Case: Name a newly created sidebar space gets before the user types one; it is selected for renaming right away.">
++          New Space
++        </message>
++        <message name="IDS_HELIUM_WS_NEW_SPACE" desc="In Title Case: The label of the window menu item and of the sidebar bottom menu row that create a new sidebar space.">
++          New Space
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MENU_RENAME" desc="In Title Case: The label of the menu item on a sidebar space's header row that starts renaming the space in place.">
++          Rename Space…
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MENU_BUTTON" desc="In Title Case: Accessible name of the '···' button on a sidebar space's header row that opens the space's menu.">
++          Space Options
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_TOOLTIP" desc="In Title Case: Tooltip on a space's icon in the sidebar's bottom bar: the space's name followed by its Control+number shortcut.">
++          <ph name="SPACE_NAME">$1<ex>Work</ex></ph>  ⌃<ph name="INDEX">$2<ex>2</ex></ph>
++        </message>
++        <message name="IDS_HELIUM_WS_SIDEBAR_MENU_BUTTON" desc="In Title Case: Accessible name of the chevron button at the bottom right of the sidebar that opens the sidebar menu (new space, downloads, history, bookmarks).">
++          Sidebar Menu
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_DOWNLOADS" desc="In Title Case: The label of the sidebar bottom menu row that shows the downloads bubble.">
++          Downloads
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_HISTORY" desc="In Title Case: The label of the sidebar bottom menu row that opens the history page.">
++          History
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_BOOKMARKS" desc="In Title Case: The label of the sidebar bottom menu row that opens the bookmarks page.">
++          Bookmarks
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MENU_DELETE" desc="In Title Case: The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that deletes the space after a confirmation.">
++          Delete Space
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_SPACE_TITLE" desc="In Title Case: Title of the confirmation dialog shown before deleting a sidebar space.">
++          Delete Your “<ph name="SPACE_NAME">$1<ex>Work</ex></ph>” Space?
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_SPACE_BODY" desc="In Title Case: Body of the confirmation dialog shown before deleting a sidebar space: its tabs are closed, its pinned entries and folders removed, with a brief Undo offered afterwards.">
++          This closes all the tabs and removes the folders inside it. You can undo for a few seconds afterwards.
++        </message>
++        <message name="IDS_HELIUM_WS_DELETE_SPACE_CONFIRM" desc="In Title Case: The confirming button of the delete-space dialog.">
++          Delete
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_DELETED_BODY" desc="In Title Case: Text in the sidebar's bottom undo bar right after a space was deleted, next to an Undo button.">
++          Space deleted
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_SHOW_ALL_HISTORY" desc="In Title Case: The last row of the sidebar menu's History submenu; opens the full history page.">
++          Show All History
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_SHOW_ALL_DOWNLOADS" desc="In Title Case: The last row of the sidebar menu's Downloads submenu; opens the full downloads page.">
++          Show All Downloads
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_MANAGE_BOOKMARKS" desc="In Title Case: The first row of the sidebar menu's Bookmarks submenu; opens the bookmark manager page.">
++          Manage Bookmarks
++        </message>
++        <message name="IDS_HELIUM_WS_MENU_EMPTY" desc="In Title Case: Placeholder row shown in a sidebar menu submenu that has nothing to list (an empty bookmark folder, no history, no downloads).">
++          Empty
++        </message>
+         <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="In Title Case: The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Mute Site} other {Mute Sites}}
+         </message>
+Index: src/chrome/browser/global_keyboard_shortcuts_mac.mm
+===================================================================
+--- src.orig/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ src/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -118,8 +118,25 @@
+       {true,  true,  false, false, kVK_ANSI_LeftBracket,  IDC_SELECT_PREVIOUS_TAB},
+       {false, false, true,  false, kVK_PageDown,          IDC_SELECT_NEXT_TAB},
+       {false, false, true,  false, kVK_PageUp,            IDC_SELECT_PREVIOUS_TAB},
+-      {true,  false, false, true,  kVK_RightArrow,        IDC_SELECT_NEXT_TAB},
+-      {true,  false, false, true,  kVK_LeftArrow,         IDC_SELECT_PREVIOUS_TAB},
++      // helium-fork M6: Cmd+Option+Right/Left are Arc's next/previous
++      // *space*; upstream's next/previous tab on these two keys makes way
++      // (user ruling 2026-09-02). Tabs still cycle on Ctrl+Tab,
++      // Cmd+Shift+]/[ and Ctrl+PageDown/PageUp above.
++      {true,  false, false, true,  kVK_RightArrow,        IDC_HELIUM_WS_NEXT_SPACE},
++      {true,  false, false, true,  kVK_LeftArrow,         IDC_HELIUM_WS_PREV_SPACE},
++      // helium-fork M6: Ctrl+1..8 jump to the Nth space (Arc; Ctrl+digit is
++      // unbound on mac upstream). ⚠ Matched on the typed character, unlike
++      // Cmd+digit: nsmenuitem_additions.mm's layout-independent digit rule
++      // is Command-only, so a layout whose digits need a modifier will not
++      // fire these. Recorded, not fixed (an upstream ui/base change).
++      {false, false, true,  false, kVK_ANSI_1,            IDC_HELIUM_WS_SPACE_1},
++      {false, false, true,  false, kVK_ANSI_2,            IDC_HELIUM_WS_SPACE_2},
++      {false, false, true,  false, kVK_ANSI_3,            IDC_HELIUM_WS_SPACE_3},
++      {false, false, true,  false, kVK_ANSI_4,            IDC_HELIUM_WS_SPACE_4},
++      {false, false, true,  false, kVK_ANSI_5,            IDC_HELIUM_WS_SPACE_5},
++      {false, false, true,  false, kVK_ANSI_6,            IDC_HELIUM_WS_SPACE_6},
++      {false, false, true,  false, kVK_ANSI_7,            IDC_HELIUM_WS_SPACE_7},
++      {false, false, true,  false, kVK_ANSI_8,            IDC_HELIUM_WS_SPACE_8},
+       {false, true,  true,  false, kVK_PageDown,          IDC_MOVE_TAB_NEXT},
+       {false, true,  true,  false, kVK_PageUp,            IDC_MOVE_TAB_PREVIOUS},
+ 
+Index: src/chrome/browser/ui/browser_command_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_command_controller.cc
++++ src/chrome/browser/ui/browser_command_controller.cc
+@@ -523,7 +523,13 @@
+          command_id == IDC_CYCLE_TO_NEXT_TAB ||
+          command_id == IDC_CYCLE_TO_PREV_TAB || command_id == IDC_EXIT ||
+          command_id == IDC_COPY_OR_INSPECT_SHORTCUT || command_id == IDC_DEV_TOOLS ||
+-         command_id == IDC_DEV_TOOLS_TOGGLE || command_id == IDC_TAB_SEARCH;
++         command_id == IDC_DEV_TOOLS_TOGGLE || command_id == IDC_TAB_SEARCH ||
++         // helium-fork M6: space navigation is sidebar chrome, like tab
++         // navigation above -- a page must not be able to swallow it.
++         command_id == IDC_HELIUM_WS_NEXT_SPACE ||
++         command_id == IDC_HELIUM_WS_PREV_SPACE ||
++         (command_id >= IDC_HELIUM_WS_SPACE_1 &&
++          command_id <= IDC_HELIUM_WS_SPACE_8);
+ }
+ 
+ void BrowserCommandController::TabStateChanged() {
+@@ -1549,6 +1555,43 @@
+       }
+       break;
+     }
++    // helium-fork M6: spaces.
++    case IDC_HELIUM_WS_NEXT_SPACE: {
++      if (auto* workspace_controller =
++              helium_workspace::WorkspaceTabController::From(browser_)) {
++        workspace_controller->NextSpace();
++      }
++      break;
++    }
++    case IDC_HELIUM_WS_PREV_SPACE: {
++      if (auto* workspace_controller =
++              helium_workspace::WorkspaceTabController::From(browser_)) {
++        workspace_controller->PrevSpace();
++      }
++      break;
++    }
++    case IDC_HELIUM_WS_NEW_SPACE: {
++      if (auto* workspace_controller =
++              helium_workspace::WorkspaceTabController::From(browser_)) {
++        workspace_controller->NewSpaceFromMenu();
++      }
++      break;
++    }
++    case IDC_HELIUM_WS_SPACE_1:
++    case IDC_HELIUM_WS_SPACE_2:
++    case IDC_HELIUM_WS_SPACE_3:
++    case IDC_HELIUM_WS_SPACE_4:
++    case IDC_HELIUM_WS_SPACE_5:
++    case IDC_HELIUM_WS_SPACE_6:
++    case IDC_HELIUM_WS_SPACE_7:
++    case IDC_HELIUM_WS_SPACE_8: {
++      if (auto* workspace_controller =
++              helium_workspace::WorkspaceTabController::From(browser_)) {
++        workspace_controller->SwitchToSpaceIndex(
++            static_cast<size_t>(id - IDC_HELIUM_WS_SPACE_1));
++      }
++      break;
++    }
+     // Hosted App commands
+     case IDC_COPY_URL:
+       CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
+@@ -2112,6 +2155,16 @@
+                                          normal_window);
+   command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_NEW_FOLDER,
+                                          normal_window);
++  // helium-fork M6: spaces.
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_NEXT_SPACE,
++                                         normal_window);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_PREV_SPACE,
++                                         normal_window);
++  command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_NEW_SPACE,
++                                         normal_window);
++  for (int id = IDC_HELIUM_WS_SPACE_1; id <= IDC_HELIUM_WS_SPACE_8; ++id) {
++    command_updater_->UpdateCommandEnabled(id, normal_window);
++  }
+   command_updater_->UpdateCommandEnabled(IDC_SET_BROWSER_AS_DEFAULT, true);
+ 
+   // Safety Hub commands.
+Index: src/chrome/browser/ui/browser_live_tab_context.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_live_tab_context.cc
++++ src/chrome/browser/ui/browser_live_tab_context.cc
+@@ -28,6 +28,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h"
+ #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+ #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+@@ -156,6 +157,10 @@
+ 
+   glic::PopulateGlicExtraData(tab_strip_model_->GetTabAtIndex(index),
+                               &extra_data);
++  // helium-fork M6: the tab's space, so Cmd+Shift+T puts it back in the
++  // space it was closed from.
++  helium_workspace::PopulateWorkspaceExtraData(
++      tab_strip_model_->GetTabAtIndex(index), &extra_data);
+ 
+   return extra_data;
+ }
+Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
++++ src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
+@@ -10,6 +10,7 @@
+ #include <vector>
+ 
+ #include "base/check.h"
++#include "base/strings/string_number_conversions.h"
+ #include "build/build_config.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
+@@ -258,6 +259,25 @@
+       return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_CLOSE_UNPINNED_TABS);
+     case IDC_HELIUM_WS_NEW_FOLDER:
+       return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_FOLDER);
++    // helium-fork M6: spaces. All labelled -- the user chose command ids over
++    // a raw key hook precisely so these show on the shortcuts page and can
++    // be rebound.
++    case IDC_HELIUM_WS_NEXT_SPACE:
++      return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_NEXT_SPACE);
++    case IDC_HELIUM_WS_PREV_SPACE:
++      return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_PREV_SPACE);
++    case IDC_HELIUM_WS_NEW_SPACE:
++      return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_SPACE);
++    case IDC_HELIUM_WS_SPACE_1:
++    case IDC_HELIUM_WS_SPACE_2:
++    case IDC_HELIUM_WS_SPACE_3:
++    case IDC_HELIUM_WS_SPACE_4:
++    case IDC_HELIUM_WS_SPACE_5:
++    case IDC_HELIUM_WS_SPACE_6:
++    case IDC_HELIUM_WS_SPACE_7:
++    case IDC_HELIUM_WS_SPACE_8:
++      return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_SWITCH_TO_SPACE,
++                   base::NumberToString16(command_id - IDC_HELIUM_WS_SPACE_1 + 1));
+     case IDC_CARET_BROWSING_TOGGLE:
+       return Label(IDS_SETTINGS_ENABLE_CARET_BROWSING_TITLE);
+     case IDC_CLEAR_BROWSING_DATA:
+@@ -363,6 +383,8 @@
+   // helium-fork M3.13: same story -- New Folder ships unbound, and being
+   // listed here is what makes it bindable on the shortcuts page at all.
+   commands.push_back(IDC_HELIUM_WS_NEW_FOLDER);
++  // helium-fork M6: and New Space.
++  commands.push_back(IDC_HELIUM_WS_NEW_SPACE);
+   return commands;
+ }
+ 
+Index: src/chrome/browser/ui/browser_tabrestore.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_tabrestore.cc
++++ src/chrome/browser/ui/browser_tabrestore.cc
+@@ -19,6 +19,7 @@
+ #include "chrome/browser/tab_contents/tab_util.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_window.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h"
+ #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_activation_tracker.h"
+ #include "chrome/browser/ui/tab_ui_helper.h"
+ #include "chrome/browser/ui/tabs/public/tab_features.h"
+@@ -88,6 +89,10 @@
+   glic::RestoreGlicStateFromExtraData(web_contents.get(), extra_data);
+   send_tab_to_self::SendTabToSelfActivationTracker::RestoreFromExtraData(
+       web_contents.get(), extra_data);
++  // helium-fork M6: the tab's space rides along the same way; the
++  // WorkspaceTabController of the receiving window consumes it on insert.
++  helium_workspace::RestoreWorkspaceSpaceFromExtraData(web_contents.get(),
++                                                       extra_data);
+ 
+   std::vector<std::unique_ptr<NavigationEntry>> entries =
+       ContentSerializedNavigationBuilder::ToNavigationEntries(
+Index: src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/system_menu_model_builder.cc
++++ src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
+@@ -195,6 +195,9 @@
+     // its New Folder, one menu item instead of a second menu.
+     model->AddItemWithStringId(IDC_HELIUM_WS_NEW_FOLDER,
+                                IDS_HELIUM_WS_NEW_FOLDER);
++    // helium-fork M6: and a new space, for the same reason (it is also a
++    // row of the sidebar's "⌄" menu).
++    model->AddItemWithStringId(IDC_HELIUM_WS_NEW_SPACE, IDS_HELIUM_WS_NEW_SPACE);
+ 
+     model->AddItemWithStringId(IDC_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL,
+                                IDS_SHOW_CUSTOMIZE_CHROME_SIDE_PANEL);
