@@ -421,3 +421,6 @@ helium-fork/workspace/spaces-m6-commands.patch
 helium-fork/layout/downloads-in-sidebar-menu.patch
 helium-fork/layout/unified-corner-radius.patch
 helium-fork/workspace/spaces-m6-r5.patch
+helium-fork/workspace/spaces-m6-2a.patch
+helium-fork/workspace/spaces-m6-session-restore.patch
+helium-fork/layout/band-tint-r3-r6-fixes.patch

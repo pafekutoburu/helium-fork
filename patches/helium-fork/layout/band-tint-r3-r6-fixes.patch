@@ -1,0 +1,2126 @@
+Index: src/chrome/browser/prefs/browser_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/prefs/browser_prefs.cc
++++ src/chrome/browser/prefs/browser_prefs.cc
+@@ -90,6 +90,7 @@
+ #include "chrome/browser/tracing/chrome_tracing_delegate.h"
+ #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_prefs.h"
+ #include "chrome/browser/ui/browser_ui_prefs.h"
++#include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/browser/ui/network_profile_bubble.h"
+ #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
+@@ -1831,6 +1832,9 @@
+   regional_capabilities::prefs::RegisterProfilePrefs(registry);
+   browser_shortcuts::prefs::RegisterProfilePrefs(registry);
+   helium_workspace::prefs::RegisterProfilePrefs(registry);
++  // helium-fork T044: the origins whose declared background colour has been
++  // caught disagreeing with what they render (see arc_band_tint_store.h).
++  helium::band_prefs::RegisterProfilePrefs(registry);
+   RegisterBrowserUserPrefs(registry);
+   registry->RegisterBooleanPref(prefs::kRestrictYouTubeCookiesDeletion, false);
+   RegisterGeminiSettingsPrefs(registry);
+Index: src/chrome/browser/ui/helium/arc_band_colors.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_band_colors.h
++++ src/chrome/browser/ui/helium/arc_band_colors.h
+@@ -5,8 +5,10 @@
+ #ifndef CHROME_BROWSER_UI_HELIUM_ARC_BAND_COLORS_H_
+ #define CHROME_BROWSER_UI_HELIUM_ARC_BAND_COLORS_H_
+ 
++#include <algorithm>
+ #include <optional>
+ 
++#include "base/containers/span.h"
+ #include "third_party/skia/include/core/SkColor.h"
+ #include "ui/gfx/color_utils.h"
+ 
+@@ -61,16 +63,31 @@
+ //    that whole window. Reading them early turned the band black several
+ //    hundred milliseconds before the dark page it belonged to appeared. The
+ //    band is the page's color, so it may only change when the page does.
++//  * `declared_usable` is how the two declared rungs are switched off for the
++//    handful of navigations where they are known to lie (T044 / H+): a reload
++//    or a same-URL navigation, where the colour the band is already showing is
++//    this very page's, and any origin this profile has caught declaring one
++//    colour while rendering another (films.dance and every other full-bleed
++//    dark header on a light document). ⛔ It is checked *below* the sampled
++//    rung, never above it: the pixels are 8-25 ms away and holding the previous
++//    colour past them would be the lag this shell has spent three rounds
++//    removing. When there is no previous colour either -- a tab that has never
++//    rendered -- holding means the band keeps the default toolbar look it is
++//    already wearing, which is not a third colour to anyone watching.
+ inline std::optional<SkColor> ResolveBandTint(
+     std::optional<SkColor> declared_theme_color,
+     std::optional<SkColor> sampled_top_color,
+     std::optional<SkColor> declared_background,
+     std::optional<SkColor> previous,
+-    bool page_painted) {
++    bool page_painted,
++    bool declared_usable = true) {
+   if (!page_painted) {
+     return previous;
+   }
+   std::optional<SkColor> page_color = sampled_top_color;
++  if (!page_color && !declared_usable) {
++    return previous;
++  }
+   if (!page_color) {
+     page_color = declared_background;
+   }
+@@ -145,6 +162,192 @@
+                                  hovered ? kFieldAlphaHovered : kFieldAlpha);
+ }
+ 
++// helium-fork T044: has this origin been caught declaring a colour it does not
++// render?
++//
++// `declared` is the colour the declared rungs above produced for a document's
++// first frame, `sampled` the first pixels that document actually put on screen.
++// Two ways to fail, both from the same complaint: the band flashing a colour
++// that is neither the page it came from nor the page it is going to.
++//
++//  * across the light/dark divide -- a white band over a black page is the
++//    shape the user filmed on films.dance -- with a small absolute difference
++//    required as well, so a mid-grey site that happens to straddle
++//    color_utils' luminance midpoint by one level is not recorded as a liar;
++//  * or simply visibly different, at the same threshold the frame-level ruler
++//    calls "a different colour" (T031 LEAVE_TOL = 20).
++inline constexpr int kDeclaredLieMinDistance = 4;
++inline constexpr int kDeclaredLieDistance = 20;
++
++inline int MaxChannelDistance(SkColor a, SkColor b);
++
++inline bool DeclaredLooksUntrustworthy(SkColor sampled, SkColor declared) {
++  const int distance = MaxChannelDistance(sampled, declared);
++  if (distance > kDeclaredLieDistance) {
++    return true;
++  }
++  return color_utils::IsDark(sampled) != color_utils::IsDark(declared) &&
++         distance > kDeclaredLieMinDistance;
++}
++
++// helium-fork T044: reading the page's top strip again while it stays at the
++// top of the document.
++//
++// The band's colour is the page's colour, and a page can repaint its top strip
++// without touching any of the colours it *declares* -- bilibili with the
++// BewlyBewly extension fades a full-bleed layer in 0.7-2.4 s after first paint
++// and the document background never changes, so nothing in content/public ever
++// tells the browser about it. The only way to see it is to read the pixels
++// again, on a timer, and the whole question is how to do that without the band
++// following scrolling (⛔ 带子取色三条 ②) or chasing a header video.
++//
++// The readback is 16 columns of the same 4 px strip rather than one averaged
++// pixel, because "did the whole strip change" is exactly what separates a page
++// that repainted itself from a nav item's hover background, a text selection or
++// a spinner in one corner. The mean of the columns is the colour; the columns
++// themselves are only ever used to answer that question.
++inline constexpr size_t kTopSampleColumns = 16;
++// Per-channel distance that counts as "a different colour" (entering) ...
++inline constexpr int kTopSampleChangeTolerance = 2;
++// ... and the tighter one that counts as "it has stopped moving" (confirming).
++// A 350 ms fade of 8 levels moves ~2.3 per 100 ms, so a confirmation pair taken
++// across it can never agree: the first pair that does is the fade's end, which
++// is what "渐变结束后再采一次" means without guessing the fade's length.
++inline constexpr int kTopSampleConfirmTolerance = 1;
++inline constexpr size_t kTopSampleMinMovedColumns = 12;
++// After this many unconfirmed samples in a row the strip is animating (a header
++// video), and the caller slows the confirmation down instead of reading back at
++// the fast cadence forever.
++inline constexpr int kTopSampleMaxUnconfirmed = 5;
++
++inline int MaxChannelDistance(SkColor a, SkColor b) {
++  const auto channel = [](int lhs, int rhs) { return lhs > rhs ? lhs - rhs : rhs - lhs; };
++  return std::max({channel(SkColorGetR(a), SkColorGetR(b)),
++                   channel(SkColorGetG(a), SkColorGetG(b)),
++                   channel(SkColorGetB(a), SkColorGetB(b))});
++}
++
++inline SkColor AverageOfColumns(base::span<const SkColor> columns) {
++  if (columns.empty()) {
++    return SK_ColorTRANSPARENT;
++  }
++  int r = 0, g = 0, b = 0;
++  for (SkColor c : columns) {
++    r += SkColorGetR(c);
++    g += SkColorGetG(c);
++    b += SkColorGetB(c);
++  }
++  const int n = static_cast<int>(columns.size());
++  return SkColorSetRGB((r + n / 2) / n, (g + n / 2) / n, (b + n / 2) / n);
++}
++
++inline size_t CountMovedColumns(base::span<const SkColor> before,
++                                base::span<const SkColor> after,
++                                int tolerance) {
++  if (before.size() != after.size()) {
++    return 0;
++  }
++  size_t moved = 0;
++  for (size_t i = 0; i < after.size(); ++i) {
++    if (MaxChannelDistance(before[i], after[i]) > tolerance) {
++      ++moved;
++    }
++  }
++  return moved;
++}
++
++// What survives between two readbacks. Parked on the tab, like every other
++// thing this fork has learned about a page.
++struct TopSampleState {
++  std::optional<SkColor> candidate;
++  int unconfirmed = 0;
++  bool animating = false;
++};
++
++enum class TopSampleVerdict {
++  kIgnore,   // nothing to do; the band keeps the colour it has
++  kConfirm,  // maybe a new colour -- read again shortly and see if it agrees
++  kAccept,   // this is the page's colour now
++};
++
++struct TopSampleDecision {
++  TopSampleVerdict verdict = TopSampleVerdict::kIgnore;
++  // The colour the columns average to, so the caller does not recompute it.
++  SkColor color = SK_ColorTRANSPARENT;
++  // True when the change could just as well be the page scrolling underneath a
++  // scroller the browser cannot see (html/body overflow:hidden with an inner
++  // div). The caller uses this to suppress polling for a while; ⛔ it must not
++  // be treated as "the page changed".
++  bool scroll_correlated = false;
++};
++
++// `accepted` is the colour the band currently shows from pixels (nullopt when
++// this document has never produced one), `accepted_columns` the strip as it
++// looked when that colour was taken, `previous_columns` the strip as the last
++// readback saw it (updated every readback -- it is the signature of the *last
++// sample*, not of the last accepted colour, which is what keeps a rejected
++// change from freezing every later one), `columns` what just came back.
++inline TopSampleDecision ClassifyTopSample(
++    std::optional<SkColor> accepted,
++    base::span<const SkColor> accepted_columns,
++    base::span<const SkColor> previous_columns,
++    base::span<const SkColor> columns,
++    bool scroll_input_since_previous,
++    TopSampleState& state) {
++  TopSampleDecision decision;
++  if (columns.empty()) {
++    return decision;  // a short readback; the caller drops it and re-arms.
++  }
++  decision.color = AverageOfColumns(columns);
++  if (!accepted) {
++    // Nothing to compare against: this is the document's first colour, and the
++    // page is entitled to it immediately (a band with no colour is the one
++    // thing worse than a late one).
++    state = TopSampleState();
++    decision.verdict = TopSampleVerdict::kAccept;
++    return decision;
++  }
++  if (MaxChannelDistance(decision.color, *accepted) <=
++      kTopSampleChangeTolerance) {
++    state = TopSampleState();
++    return decision;
++  }
++  // Whole strip, or one corner of it? Either baseline may answer yes: the last
++  // readback catches a step change, the accepted one catches a fade too slow to
++  // move a column between two readbacks.
++  const bool whole_strip =
++      CountMovedColumns(previous_columns, columns, kTopSampleChangeTolerance) >=
++          kTopSampleMinMovedColumns ||
++      CountMovedColumns(accepted_columns, columns, kTopSampleChangeTolerance) >=
++          kTopSampleMinMovedColumns;
++  if (!whole_strip) {
++    state.candidate.reset();
++    state.unconfirmed = 0;
++    return decision;
++  }
++  if (scroll_input_since_previous) {
++    // The user scrolled between the two readbacks and the root never left the
++    // top: either an inner scroller moved, or the page was rubber-banded. Both
++    // are "where the page is", not "what colour the page is".
++    state.candidate.reset();
++    state.unconfirmed = 0;
++    decision.scroll_correlated = true;
++    return decision;
++  }
++  if (state.candidate && MaxChannelDistance(decision.color, *state.candidate) <=
++                             kTopSampleConfirmTolerance) {
++    state = TopSampleState();
++    decision.verdict = TopSampleVerdict::kAccept;
++    return decision;
++  }
++  state.candidate = decision.color;
++  if (++state.unconfirmed >= kTopSampleMaxUnconfirmed) {
++    state.animating = true;
++  }
++  decision.verdict = TopSampleVerdict::kConfirm;
++  return decision;
++}
++
+ }  // namespace helium
+ 
+ #endif  // CHROME_BROWSER_UI_HELIUM_ARC_BAND_COLORS_H_
+Index: src/chrome/browser/ui/helium/arc_band_colors_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_band_colors_unittest.cc
++++ src/chrome/browser/ui/helium/arc_band_colors_unittest.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/helium/arc_band_colors.h"
+ 
++#include <vector>
++
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+ namespace helium {
+@@ -194,5 +196,134 @@
+   EXPECT_EQ(SkColorSetRGB(0x20, 0x30, 0x40), *tint);
+ }
+ 
++// ---------------------------------------------------------------------------
++// T044: reading the page's top strip again while the page stays at the top.
++//
++// Every one of these is a shape the band has actually been broken by, or that
++// the design review said would break it: a full-bleed overlay fading in
++// (bilibili), one nav item's hover background (a local change that must not
++// move the band), a header video (never settles), and a scroller the browser
++// cannot see (the band must not follow it).
++
++std::vector<SkColor> Strip(SkColor c, size_t n = kTopSampleColumns) {
++  return std::vector<SkColor>(n, c);
++}
++
++TEST(TopSampleTest, FirstColourOfADocumentIsTakenImmediately) {
++  TopSampleState state;
++  const std::vector<SkColor> columns = Strip(kWhitePage);
++  const TopSampleDecision d =
++      ClassifyTopSample(std::nullopt, {}, {}, columns,
++                        /*scroll_input_since_previous=*/false, state);
++  EXPECT_EQ(TopSampleVerdict::kAccept, d.verdict);
++  EXPECT_EQ(kWhitePage, d.color);
++}
++
++TEST(TopSampleTest, TheSameColourAgainIsIgnored) {
++  TopSampleState state;
++  const std::vector<SkColor> columns = Strip(SkColorSetRGB(0xFE, 0xFF, 0xFF));
++  const TopSampleDecision d = ClassifyTopSample(
++      kWhitePage, Strip(kWhitePage), Strip(kWhitePage), columns, false, state);
++  EXPECT_EQ(TopSampleVerdict::kIgnore, d.verdict);
++  EXPECT_FALSE(state.candidate.has_value());
++}
++
++// The bilibili shape: a full-bleed layer fades from white to (247,247,250) in
++// 350 ms. Mid-fade readbacks disagree with each other, so nothing is accepted
++// until the fade stops -- which is how the band lands on the final colour in
++// one step instead of stepping through the fade.
++TEST(TopSampleTest, AFullBleedChangeIsAcceptedOnlyOnceItStopsMoving) {
++  constexpr SkColor kMid = SkColorSetRGB(0xFB, 0xFB, 0xFC);
++  constexpr SkColor kFinal = SkColorSetRGB(0xF7, 0xF7, 0xFA);
++  TopSampleState state;
++  std::vector<SkColor> previous = Strip(kWhitePage);
++  TopSampleDecision d = ClassifyTopSample(kWhitePage, Strip(kWhitePage),
++                                          previous, Strip(kMid), false, state);
++  EXPECT_EQ(TopSampleVerdict::kConfirm, d.verdict);
++  previous = Strip(kMid);
++  d = ClassifyTopSample(kWhitePage, Strip(kWhitePage), previous, Strip(kFinal),
++                        false, state);
++  EXPECT_EQ(TopSampleVerdict::kConfirm, d.verdict);  // still moving
++  previous = Strip(kFinal);
++  d = ClassifyTopSample(kWhitePage, Strip(kWhitePage), previous, Strip(kFinal),
++                        false, state);
++  EXPECT_EQ(TopSampleVerdict::kAccept, d.verdict);
++  EXPECT_EQ(kFinal, d.color);
++}
++
++// A hover background on one nav item, a selection in the corner, a spinner:
++// the mean moves, the strip does not.
++TEST(TopSampleTest, ALocalChangeNeverMovesTheBand) {
++  std::vector<SkColor> columns = Strip(kWhitePage);
++  columns[0] = kBlackPage;
++  columns[1] = kBlackPage;
++  columns[2] = kBlackPage;
++  TopSampleState state;
++  const TopSampleDecision d = ClassifyTopSample(
++      kWhitePage, Strip(kWhitePage), Strip(kWhitePage), columns, false, state);
++  EXPECT_EQ(TopSampleVerdict::kIgnore, d.verdict);
++  EXPECT_GT(MaxChannelDistance(d.color, kWhitePage), kTopSampleChangeTolerance)
++      << "the mean really did move; it is the columns that must veto it";
++}
++
++// A fade slow enough that no single pair of readbacks moves a column still has
++// to be caught, or the band sits on a colour the page left behind.
++TEST(TopSampleTest, AFadeTooSlowToMoveAColumnPerReadbackIsStillCaught) {
++  constexpr SkColor kCrept = SkColorSetRGB(0xF8, 0xF8, 0xFB);
++  const std::vector<SkColor> previous = Strip(SkColorSetRGB(0xF9, 0xF9, 0xFC));
++  TopSampleState state;
++  TopSampleDecision d = ClassifyTopSample(kWhitePage, Strip(kWhitePage),
++                                          previous, Strip(kCrept), false, state);
++  EXPECT_EQ(TopSampleVerdict::kConfirm, d.verdict);
++  d = ClassifyTopSample(kWhitePage, Strip(kWhitePage), Strip(kCrept),
++                        Strip(kCrept), false, state);
++  EXPECT_EQ(TopSampleVerdict::kAccept, d.verdict);
++}
++
++// html/body overflow:hidden with an inner scroller: the root never leaves the
++// top, so is_scroll_offset_at_top cannot help. The only evidence is that the
++// user scrolled between the two readbacks.
++TEST(TopSampleTest, AChangeThatFollowsScrollInputIsRefusedAndReported) {
++  TopSampleState state;
++  const TopSampleDecision d =
++      ClassifyTopSample(kWhitePage, Strip(kWhitePage), Strip(kWhitePage),
++                        Strip(kBlackPage),
++                        /*scroll_input_since_previous=*/true, state);
++  EXPECT_EQ(TopSampleVerdict::kIgnore, d.verdict);
++  EXPECT_TRUE(d.scroll_correlated);
++  EXPECT_FALSE(state.candidate.has_value());
++}
++
++// A header video: consecutive readbacks never agree, so the band stays put and
++// the caller is told to stop confirming at the fast cadence.
++TEST(TopSampleTest, AStripThatNeverSettlesTurnsIntoTheAnimatingState) {
++  TopSampleState state;
++  std::vector<SkColor> previous = Strip(kWhitePage);
++  for (int i = 0; i < kTopSampleMaxUnconfirmed; ++i) {
++    const SkColor moving = SkColorSetRGB(0x10 + 0x20 * i, 0x40, 0x80);
++    const TopSampleDecision d = ClassifyTopSample(
++        kWhitePage, Strip(kWhitePage), previous, Strip(moving), false, state);
++    EXPECT_EQ(TopSampleVerdict::kConfirm, d.verdict);
++    previous = Strip(moving);
++  }
++  EXPECT_TRUE(state.animating);
++}
++
++TEST(TopSampleTest, AShortReadbackIsDroppedRatherThanCrashing) {
++  TopSampleState state;
++  const TopSampleDecision d = ClassifyTopSample(kWhitePage, Strip(kWhitePage),
++                                                Strip(kWhitePage), {}, false,
++                                                state);
++  EXPECT_EQ(TopSampleVerdict::kIgnore, d.verdict);
++}
++
++TEST(TopSampleTest, TheColourIsTheMeanOfTheColumns) {
++  std::vector<SkColor> columns = Strip(kWhitePage, 16);
++  for (size_t i = 0; i < 8; ++i) {
++    columns[i] = kBlackPage;
++  }
++  EXPECT_EQ(SkColorSetRGB(0x80, 0x80, 0x80), AverageOfColumns(columns));
++}
++
+ }  // namespace
+ }  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_band_tint_store.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_band_tint_store.cc
++++ src/chrome/browser/ui/helium/arc_band_tint_store.cc
+@@ -4,10 +4,23 @@
+ 
+ #include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ 
++#include <algorithm>
++#include <utility>
++
+ #include <memory>
++#include <string>
++#include <vector>
+ 
+ #include "base/supports_user_data.h"
++#include "base/time/time.h"
++#include "base/values.h"
++#include "chrome/browser/profiles/profile.h"
++#include "components/pref_registry/pref_registry_syncable.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/scoped_user_pref_update.h"
++#include "content/public/browser/browser_context.h"
+ #include "content/public/browser/web_contents.h"
++#include "url/origin.h"
+ 
+ namespace helium {
+ namespace {
+@@ -49,4 +62,85 @@
+   return stored ? stored->tint : std::nullopt;
+ }
+ 
++namespace band_prefs {
++namespace {
++
++PrefService* PrefsFor(content::BrowserContext* context) {
++  Profile* const profile = Profile::FromBrowserContext(context);
++  return profile ? profile->GetPrefs() : nullptr;
++}
++
++// Opaque origins ("null") would all share one entry, so a sandboxed document
++// could put every other one of them on the list.
++bool IsKeyable(const url::Origin& origin) {
++  return !origin.opaque();
++}
++
++}  // namespace
++
++void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
++  // Not synced: it is an observation about how this profile's browser rendered
++  // a page, not a setting the user made.
++  registry->RegisterDictionaryPref(kDeclaredUntrusted);
++}
++
++bool IsDeclaredUntrusted(content::BrowserContext* context,
++                         const url::Origin& origin) {
++  if (!context || !IsKeyable(origin)) {
++    return false;
++  }
++  PrefService* const prefs = PrefsFor(context);
++  if (!prefs) {
++    return false;
++  }
++  return prefs->GetDict(kDeclaredUntrusted).Find(origin.Serialize()) != nullptr;
++}
++
++void NoteDeclaredObservation(content::BrowserContext* context,
++                             const url::Origin& origin,
++                             bool untrusted) {
++  if (!context || !IsKeyable(origin)) {
++    return;
++  }
++  PrefService* const prefs = PrefsFor(context);
++  if (!prefs) {
++    return;
++  }
++  const std::string key = origin.Serialize();
++  if (!untrusted) {
++    // ⛔ An honest document does NOT clear the origin.
++    //
++    // The table is keyed by origin, and an origin serves many documents: a site
++    // whose front page hides a white document behind a full-bleed dark header
++    // (films.dance) usually has other pages where the declared colour is right.
++    // With "honest clears it" the flag flickered off on every such page and the
++    // flash came back -- measured, not reasoned: 7 of 10 entries still flashed
++    // in the after-fix batch because the probe's own previous page is served
++    // from the same origin (tasks/evidence/T044/a2_fx_bw_enter_*.log). The
++    // promise the user chose is "once per site per profile", so once is what it
++    // costs; the price of a wrong entry is the band being 1-3 frames later on
++    // that origin, which is the same price every held navigation pays.
++    return;
++  }
++  ScopedDictPrefUpdate update(prefs, kDeclaredUntrusted);
++  update->Set(key, base::Time::Now().InMillisecondsFSinceUnixEpoch());
++  if (update->size() <= kMaxDeclaredUntrustedOrigins) {
++    return;
++  }
++  // Full: drop the oldest observations until it fits. The timestamps exist for
++  // exactly this.
++  std::vector<std::pair<double, std::string>> by_age;
++  for (const auto entry : *update) {
++    by_age.emplace_back(entry.second.GetIfDouble().value_or(0.0), entry.first);
++  }
++  std::sort(by_age.begin(), by_age.end());
++  for (size_t i = 0;
++       i + kMaxDeclaredUntrustedOrigins < by_age.size() && i < by_age.size();
++       ++i) {
++    update->Remove(by_age[i].second);
++  }
++}
++
++}  // namespace band_prefs
++
+ }  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_band_tint_store.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_band_tint_store.h
++++ src/chrome/browser/ui/helium/arc_band_tint_store.h
+@@ -10,9 +10,18 @@
+ #include "third_party/skia/include/core/SkColor.h"
+ 
+ namespace content {
++class BrowserContext;
+ class WebContents;
+ }
+ 
++namespace url {
++class Origin;
++}
++
++namespace user_prefs {
++class PrefRegistrySyncable;
++}
++
+ // helium-fork: the published address bar band tint, parked on the tab it
+ // belongs to.
+ //
+@@ -36,6 +45,63 @@
+ 
+ std::optional<SkColor> GetPublishedBandTint(content::WebContents* contents);
+ 
++// helium-fork T044 (H+): which origins have been caught declaring one colour
++// and rendering another.
++//
++// The band takes the page's own pixels, but they do not exist until the page
++// has been drawn, so the colour a navigation publishes *with* the first frame
++// can only be one the page declared. On most sites that is the right colour and
++// it is why the band lands in the same frame the page does. On the ones where
++// it is not -- a full-bleed dark header over a light document -- it is a white
++// flash between two black pages, which is what the user filmed.
++//
++// So the flash is paid once: the first visit to such an origin publishes the
++// declared colour, notices the pixels disagree, and writes the origin down;
++// every later navigation there holds the colour already on screen until the
++// real pixels arrive. Kept as a profile pref rather than in memory because "per
++// profile, once" is the promise; ⛔ nothing about it reaches the page.
++//
++// Once means once for the life of the profile (user, 2026-09-12): the table
++// outlives quitting the app, restarting it, and "clear browsing data" alike,
++// and the only visit allowed to flash is a site's genuine first one. ⛔ That is
++// why it is deliberately NOT wired into the browsing-data remover: what an
++// entry holds is not where this profile has been but how this browser rendered
++// a site -- "this origin declares a colour it does not render" -- and the user,
++// who had that read out, chose never to pay the flash a second time. Nothing in
++// it is exposed to anything; it only decides which colour the band holds for a
++// frame or two.
++namespace band_prefs {
++
++inline constexpr char kDeclaredUntrusted[] =
++    "helium.browser.band_declared_untrusted";
++// Bounded, because it grows with browsing -- but generously, because an evicted
++// entry charges the user the flash again on a site that already paid for it,
++// and an entry only gets in by being caught lying, which is rare. The value
++// stored per origin is when the lie was last confirmed, and it is used for
++// nothing except deciding which entry to drop when the table is full.
++inline constexpr size_t kMaxDeclaredUntrustedOrigins = 4096;
++
++void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
++
++// True when `origin` is in the table. Opaque origins are never in it: they all
++// serialize to "null" and would share one entry.
++bool IsDeclaredUntrusted(content::BrowserContext* context,
++                         const url::Origin& origin);
++
++// Records what a document's first pixels said about the colour it declared.
++//
++// ⛔ An honest document does not clear an origin that is already listed: the
++// table is keyed by origin and an origin serves many documents, so a site whose
++// front page hides a light document behind a full-bleed dark header usually has
++// other pages where the declared colour is right. Clearing on those put the
++// flash back on 7 of 10 measured entries (tasks/evidence/T044/a2_fx_bw_enter_*).
++// What the user chose is "once per site per profile", so once is what it costs.
++void NoteDeclaredObservation(content::BrowserContext* context,
++                             const url::Origin& origin,
++                             bool untrusted);
++
++}  // namespace band_prefs
++
+ }  // namespace helium
+ 
+ #endif  // CHROME_BROWSER_UI_HELIUM_ARC_BAND_TINT_STORE_H_
+Index: src/chrome/browser/ui/views/frame/contents_web_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/contents_web_view.h
++++ src/chrome/browser/ui/views/frame/contents_web_view.h
+@@ -79,8 +79,16 @@
+   void CloneWebContentsLayer() override;
+   void DestroyClonedLayer() override;
+ 
+- private:
++  // helium-fork T036: the card's other half reads the published band tint
++  // (see the .cc) and writes it into its solid-color layer. The band's
++  // publisher calls this directly so both halves of the card land in the same
++  // browser frame; it used to arrive only through the whole-window
++  // Widget::ThemeChanged() that BrowserView::UpdateAddressBarBandTint() fired,
++  // and SchedulePaint() cannot stand in for it -- the colour lives on the
++  // layer, not in the paint.
+   void UpdateBackgroundColor();
++
++ private:
+   std::unique_ptr<StatusBubbleViews> status_bubble_;
+   std::unique_ptr<WebContentsCloseHandler> web_contents_close_handler_;
+ 
+Index: src/chrome/browser/ui/views/frame/top_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/top_container_view.cc
++++ src/chrome/browser/ui/views/frame/top_container_view.cc
+@@ -8,7 +8,11 @@
+ #include "base/location.h"
+ #include "base/task/single_thread_task_runner.h"
+ #include "base/time/time.h"
++#include "base/trace_event/trace_event.h"
++#include "cc/trees/render_frame_metadata.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
++#include "chrome/browser/ui/helium/arc_band_colors.h"
++#include "chrome/browser/ui/helium/arc_band_tint_store.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view.h"
+@@ -21,9 +25,13 @@
+ // and binding a callback over it needs the complete type.
+ #include "components/viz/common/frame_sinks/copy_output_result.h"
+ #include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/reload_type.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/weak_document_ptr.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "third_party/blink/public/common/input/web_input_event.h"
+ #include "third_party/blink/public/common/widget/constants.h"
+ #include "third_party/skia/include/core/SkBitmap.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+@@ -65,8 +73,174 @@
+   // Readback is asynchronous; a sample requested before a navigation must not
+   // be allowed to paint the new page with the old page's color.
+   int sample_generation = 0;
++
++  // helium-fork T044: everything the page-top poll has to remember, parked on
++  // the tab for the same reason the colour is -- a scroll in one tab must not
++  // freeze sampling in another, and a tab dragged into another window takes
++  // what it has learned with it.
++  //
++  // Whether this document has ever produced a sample, as opposed to whether it
++  // has one right now: a sample dropped because the page declared a new
++  // background while scrolled must not re-open the "first sample of a document
++  // may be taken anywhere" exemption.
++  bool sampled_once = false;
++  // The strip as it looked when the current colour was accepted, and as the
++  // last readback saw it. The second one is what a change is measured against
++  // (⛔ 读法 B: it is the signature of the *last sample*, not of the last
++  // accepted colour -- measuring against the accepted one lets a single refused
++  // change freeze every later one).
++  std::vector<SkColor> accepted_columns;
++  std::vector<SkColor> last_columns;
++  // Did the user scroll between the last readback and this one? The only
++  // evidence available when the root scroller never moves (an inner scroller,
++  // or a rubber band at the top of the document).
++  bool scroll_input_since_columns = false;
++  helium::TopSampleState sample_state;
++  // From the renderer's frame metadata; see MaySamplePageTopNow().
++  bool at_top = true;
++  bool page_scale_is_one = true;
++  base::TimeTicks last_scroll_input;
++  base::TimeTicks last_scroll_metadata;
++  base::TimeTicks inner_scroll_frozen_until;
++  base::TimeTicks load_completed_at;
++  // Following a page that keeps changing its own top strip (a carousel) is
++  // indistinguishable from following a page that changed once, so the number of
++  // poll-driven changes per document is capped rather than judged.
++  int poll_accepts = 0;
++  base::TimeTicks poll_accepts_since;
++  bool poll_capped = false;
++
++  // helium-fork T044 (H+): does this document have to wait for its own pixels
++  // before the band may take a colour from what it declares?
++  bool hold_until_pixels = false;
++  // Whether the origin -- rather than this one navigation -- is the reason.
++  // That also decides whether a declared change while the page is scrolled may
++  // take the band over: on an origin already known to declare colours it does
++  // not render, it may not.
++  bool origin_untrusted = false;
++  // What the declared rungs would have produced for this document's first
++  // frame: the document background if it has one, otherwise the theme colour.
++  // ⛔ The colour, not the optional: a page whose document background is
++  // transparent (bilibili) declares only a theme colour, and comparing pixels
++  // against nullopt would leave that whole family unjudged.
++  std::optional<SkColor> declared_at_gate;
++  // A held band cannot wait forever for a readback that may never come (a
++  // dropped copy request, a tab with no surface). Kept here, with its timer, so
++  // switching away and back cannot strand a document in "holding".
++  base::TimeTicks hold_deadline;
++  base::OneShotTimer hold_timer;
++  // helium-fork T044 (build 6, review r3 I-1): when the publisher last asked for
++  // "one more look". That request is not the poll -- it does not go through the
++  // cadence, the acceptance cap or the confirmation pair -- so on a page whose
++  // top strip moves more than a level between two readbacks it feeds itself:
++  // publish -> resample -> different colour -> publish. Measured at 111 readbacks
++  // a second on a four-times-faster version of the animation fixture
++  // (tasks/evidence/T044/a5_rate_topanim_x4.log); ⛔ that is the "never read back
++  // every frame" line.
++  base::TimeTicks last_publish_resample;
++  // helium-fork T044 (build 6, review r3 I-3): which document this tab was
++  // showing the last time this view looked at it. A background tab can navigate
++  // itself (meta refresh, a timer, a redirect) while nothing is observing it,
++  // and everything below is per *document*.
++  //
++  // ⛔ The document itself, not its navigation entry (build 7, review r4 I-4):
++  // a same-document navigation -- pushState, replaceState, a plain #fragment --
++  // clones the entry and the clone gets a *new* unique id (`CloneAndReplace()`
++  // does not copy it), so an entry-id comparison reads "a different document"
++  // for something that is the same document scrolled somewhere else. Forgetting
++  // the document there re-opens the first-sample exemption, which then takes a
++  // readback of whatever the middle of the page looks like (background mixed
++  // with body text -- the exact reading 「不跟随滚动」 exists to prevent) and,
++  // worse, compares that mixture with the declared colour and writes an honest
++  // origin into the "declares a colour it does not render" table for good.
++  content::WeakDocumentPtr last_seen_document;
+ };
+ 
++// helium-fork T044 (build 6): everything above that describes one document, and
++// nothing that describes the tab. Called from the navigation this view watched,
++// and from the tab switch that discovers a navigation it did not.
++void ForgetDocument(PageTint& tint) {
++  tint.sampled_top = std::nullopt;
++  tint.sampled_once = false;
++  tint.accepted_columns.clear();
++  tint.last_columns.clear();
++  tint.sample_state = helium::TopSampleState();
++  tint.scroll_input_since_columns = false;
++  tint.last_scroll_input = base::TimeTicks();
++  tint.last_scroll_metadata = base::TimeTicks();
++  tint.inner_scroll_frozen_until = base::TimeTicks();
++  tint.load_completed_at = base::TimeTicks();
++  tint.poll_accepts = 0;
++  tint.poll_accepts_since = base::TimeTicks();
++  tint.poll_capped = false;
++  tint.declared_at_gate.reset();
++  tint.hold_deadline = base::TimeTicks();
++  tint.last_publish_resample = base::TimeTicks();
++  tint.hold_timer.Stop();
++}
++
++// The declared colour this document would publish right now: the document's
++// background if it has one, otherwise its theme colour -- the same two rungs
++// helium::ResolveBandTint() would use, which is what the record of "did this
++// origin tell the truth" has to be compared against.
++std::optional<SkColor> DeclaredNow(content::WebContents* contents) {
++  std::optional<SkColor> declared = contents->GetBackgroundColor();
++  if (!declared) {
++    declared = contents->GetThemeColor();
++  }
++  return declared ? std::optional<SkColor>(SkColorSetA(*declared, SK_AlphaOPAQUE))
++                  : std::nullopt;
++}
++
++// helium-fork T044: the cadence.
++//
++// Fast until five seconds after the document finished loading, because that is
++// where the changes this exists for happen: bilibili's extension repaints its
++// header 0.7-2.4 s after first paint (T041), and a page that never got a first
++// sample at all (a readback dropped because the new document had no surface
++// yet) has to be picked up in that window too. Slow afterwards, so an idle tab
++// at the top of a document costs one readback a second and no more.
++constexpr base::TimeDelta kTopPollFast = base::Milliseconds(250);
++constexpr base::TimeDelta kTopPollSlow = base::Seconds(1);
++constexpr base::TimeDelta kTopPollFastWindow = base::Seconds(5);
++// A change is never believed on one readback; the second one has to agree.
++constexpr base::TimeDelta kTopPollConfirm = base::Milliseconds(100);
++// No readback within this long after a scroll input. Long enough to sit out
++// macOS's rubber band, during which the top of the viewport shows the document
++// background rather than the page (on films.dance, white over a black page).
++constexpr base::TimeDelta kScrollQuiet = base::Milliseconds(750);
++// How long a change that tracked the user's scrolling suppresses the poll. ⛔
++// Not permanent: a page that cannot scroll at all still gets one flick of the
++// wheel, and permanently freezing it there is how the fix for bilibili would
++// have silently stopped working.
++constexpr base::TimeDelta kInnerScrollFreeze = base::Seconds(3);
++constexpr base::TimeDelta kPollAcceptWindow = base::Seconds(30);
++constexpr int kMaxPollAccepts = 2;
++// How long a held band waits for pixels before it gives up and takes what the
++// page declares. Six times the slowest readback measured on the release build
++// (T041: 8.3-25.0 ms): long enough that it never fires on a working readback,
++// short enough that a broken one costs a sixth of a second rather than the life
++// of the document.
++constexpr base::TimeDelta kHoldForPixelsDeadline = base::Milliseconds(150);
++
++// Same URL apart from the fragment: "#section" does not make it another page.
++GURL WithoutRef(const GURL& url) {
++  GURL::Replacements strip;
++  strip.ClearRef();
++  return url.ReplaceComponents(strip);
++}
++
++const char* SampleReasonName(int reason) {
++  switch (reason) {
++    case 0:
++      return "color-event";
++    case 1:
++      return "poll";
++    default:
++      return "confirm";
++  }
++}
++
+ constexpr char kPageTintUserDataKey[] = "helium-fork-arc-page-tint";
+ 
+ PageTint* FindPageTint(content::WebContents* contents) {
+@@ -218,22 +392,55 @@
+                       ui::NativeTheme::PreferredColorScheme::kDark;
+ }
+ 
++void TopContainerView::RequestResampleOnNextFrame() {
++  // helium-fork: posted, not called. Re-reading the colour publishes a tint,
++  // and the publisher can already be inside a theme propagation (this is what
++  // OnThemeChanged() below does) -- starting a second one while views is still
++  // walking the tree for the first trips View::PropagateThemeChanged()'s own
++  // bookkeeping and takes the browser down with
++  // `DCHECK failed: on_theme_changed_called_` the instant macOS switches to
++  // dark mode. Nothing here needs to happen inside the propagation.
++  // helium-fork T044 (build 6, review r3 I-1): once a document has a colour of
++  // its own, this extra look is a courtesy, not a rescue -- and it is the one
++  // path with no throttle on it, so on a page that repaints its top strip every
++  // frame it turns into a readback loop. Hold it to the slow cadence; the poll
++  // is already watching the page and is the thing that is allowed to chase it.
++  // ⛔ A document with no sample yet is exempt: that is T036's rescue for a
++  // first readback dropped because the new document had no surface, and the
++  // band has no colour at all until it lands.
++  if (PageTint* const tint = FindPageTint(web_contents());
++      tint && tint->sampled_once) {
++    const base::TimeTicks now = base::TimeTicks::Now();
++    if (!tint->last_publish_resample.is_null() &&
++        now - tint->last_publish_resample < kTopPollSlow) {
++      return;
++    }
++    tint->last_publish_resample = now;
++  }
++  resample_on_next_frame_ = true;
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&TopContainerView::OnPageColorMaybeChanged,
++                                weak_factory_.GetWeakPtr()));
++}
++
+ void TopContainerView::OnThemeChanged() {
+   views::View::OnThemeChanged();
++  // helium-fork T044: the strip the poll is comparing against was drawn in the
++  // appearance that just went away. Comparing a light-mode signature with a
++  // dark-mode readback satisfies "most of the strip moved" instantly, which is
++  // an accepted colour nobody asked for.
++  if (PageTint* const tint = FindPageTint(web_contents())) {
++    tint->sample_state = helium::TopSampleState();
++    tint->accepted_columns.clear();
++    tint->last_columns.clear();
++    // An appearance change really is "read it again now", so it is not what the
++    // publish throttle above is meant to hold back.
++    tint->last_publish_resample = base::TimeTicks();
++  }
+   // helium-fork: the appearance just changed under every tab. The active one is
+   // re-read here; the rest retire their own samples through the scheme recorded
+   // on them (see PageTint::sampled_in_dark).
+-  //
+-  // Posted, not called. Re-reading the colour publishes a tint, and publishing
+-  // ends in Widget::ThemeChanged() -- starting a second theme propagation while
+-  // views is still walking the tree for this one. That trips
+-  // View::PropagateThemeChanged()'s own bookkeeping and takes the browser down
+-  // with `DCHECK failed: on_theme_changed_called_` the instant macOS switches
+-  // to dark mode. Nothing here needs to happen inside the propagation.
+-  resample_on_next_frame_ = true;
+-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+-      FROM_HERE, base::BindOnce(&TopContainerView::OnPageColorMaybeChanged,
+-                                weak_factory_.GetWeakPtr()));
++  RequestResampleOnNextFrame();
+ }
+ 
+ void TopContainerView::WatchPageColors(content::WebContents* contents) {
+@@ -250,12 +457,72 @@
+   page_paint_timer_.Stop();
+   page_painted_ = !contents || contents->CompletedFirstVisuallyNonEmptyPaint();
+   awaiting_first_frame_ = !page_painted_;
++  // Same source as the gate above: a tab being switched to has its own pixels
++  // on screen exactly when it has painted before.
++  renderer_frame_seen_ = page_painted_;
+   SyncFrameMetadataObservation();
++  // helium-fork T044 (build 6, review r3 I-3): the tab may have navigated itself
++  // while nobody was watching -- a meta refresh, a timer, a redirect in a
++  // background tab. Everything this view knows is about one *document*, and
++  // DidFinishNavigation() only ever runs for the active tab, so a switch has to
++  // notice the change on its own. ⛔ Without this the band publishes the previous
++  // document's pixels and then cannot heal: the new document may be sitting off
++  // the top (a #fragment, a restored position), where the re-sample gate refuses
++  // to read and the poll does not re-arm.
++  if (contents) {
++    PageTint& tint = EnsurePageTint(contents);
++    content::RenderFrameHost* const document = contents->GetPrimaryMainFrame();
++    content::RenderFrameHost* const seen =
++        tint.last_seen_document.AsRenderFrameHostIfValid();
++    if (seen != document) {
++      // Only when this view has seen *some* document on this tab before: the
++      // first look is not a change, it is the first look.
++      if (seen || tint.sampled_once) {
++        ForgetDocument(tint);
++      }
++      tint.last_seen_document =
++          document ? document->GetWeakDocumentPtr() : content::WeakDocumentPtr();
++    }
++    // helium-fork T044 (build 6, review r3 I-2): a tab that finished loading in
++    // the background never closed the paint gate here, so ReleasePagePaintGate()
++    // -- the only place that records what the document declared -- never ran for
++    // it. Record it now, or an origin only ever visited that way never reaches
++    // the "declares a colour it does not render" table and H+'s "once per
++    // profile" never starts counting for it.
++    // ⛔ Only once the document has painted (review r4 Minor 1): before that the
++    // colours it reports are the ones it is still deciding on, and recording
++    // them as "what it declared at the gate" would judge the origin on a value
++    // the band never published.
++    if (page_painted_ && !tint.sampled_once && !tint.declared_at_gate) {
++      tint.declared_at_gate = DeclaredNow(contents);
++    }
++  }
++  // helium-fork T044 (H+ 口径⑥, build 5): a tab opened straight onto a URL
++  // (cmd-click, PUT /json/new) commits its first navigation *before* this view
++  // starts observing it, so DidFinishNavigation() never ran for that document
++  // and nothing decided whether its origin may be trusted. Decide it here, for
++  // a document that has not produced a colour of its own yet -- otherwise every
++  // new tab onto a known liar flashes the declared colour again, which is
++  // exactly the "once per profile" promise this was bought with.
++  if (contents && !contents->GetLastCommittedURL().is_empty()) {
++    PageTint& tint = EnsurePageTint(contents);
++    if (!tint.sampled_once && !tint.hold_until_pixels) {
++      content::RenderFrameHost* const frame = contents->GetPrimaryMainFrame();
++      if (frame) {
++        tint.origin_untrusted = helium::band_prefs::IsDeclaredUntrusted(
++            contents->GetBrowserContext(), frame->GetLastCommittedOrigin());
++        tint.hold_until_pixels = tint.origin_untrusted;
++      }
++    }
++  }
+   // The tint the new tab already resolved is cached on the tab itself, so this
+   // publishes it in the same layout pass that swaps the contents in -- no
+   // readback round trip, and nothing of the previous tab's color survives the
+   // switch.
+   OnPageColorMaybeChanged();
++  // helium-fork T044: the poll belongs to whichever tab is showing.
++  top_poll_timer_.Stop();
++  SchedulePageTopPoll(PageTopPollDelay());
+ }
+ 
+ void TopContainerView::DidChangeThemeColor() {
+@@ -263,6 +530,29 @@
+ }
+ 
+ void TopContainerView::OnBackgroundColorChanged() {
++  // helium-fork T044: the document repainted itself in a new background colour
++  // (a site's own dark switch). Off the top of the document the pixels cannot
++  // be re-read -- that is the whole of 「不跟随滚动」 -- so the sample being
++  // held describes a rendering that no longer exists, and keeping it at the
++  // head of the ladder would leave the band on the old colour until the user
++  // scrolled back up. Dropping it hands the band to what the page now declares.
++  //
++  // ⛔ Only here, and ⛔ only off the top. At the top the readback scheduled
++  // below lands in a frame or two, so there is nothing to gain by flashing the
++  // declared colour first. And ⛔ not in DidChangeThemeColor(): pages that
++  // rewrite <meta theme-color> as you scroll are common, and dropping the
++  // sample for those would make the band change colour all the way down the
++  // page -- the exact thing 「不跟随滚动」 forbids.
++  //
++  // ⛔ And not on an origin whose declared colours have already been caught
++  // disagreeing with its pixels (H+): there, falling through to declared is the
++  // flash this ticket removes, so such a page keeps the colour on screen until
++  // the user is back at the top and the pixels can be read.
++  if (PageTint* const tint = FindPageTint(web_contents());
++      tint && tint->sampled_once && !tint->at_top && !tint->origin_untrusted) {
++    tint->sampled_top = std::nullopt;
++    tint->sample_state = helium::TopSampleState();
++  }
+   OnPageColorMaybeChanged();
+ }
+ 
+@@ -304,7 +594,11 @@
+   // so the sample taken at switch time was dropped. This is the retry.
+   if (visibility == content::Visibility::VISIBLE) {
+     SyncFrameMetadataObservation();
+-    SamplePageTopColor();
++    SamplePageTopColor(SampleReason::kColorEvent);
++    SchedulePageTopPoll(PageTopPollDelay());
++  } else {
++    // helium-fork T044: ⛔ a hidden tab is never read back (T028 反例 ③).
++    top_poll_timer_.Stop();
+   }
+ }
+ 
+@@ -320,6 +614,60 @@
+   // closed, and awaiting_first_frame_ keeps it to the first frame after a
+   // commit. Re-sampling on every frame would also make the band follow
+   // scrolling, which this shell has already ruled out.
++  //
++  // The renderer has a frame for this document.
++  //
++  // Guarded, and the guard is not an optimization: this callback runs for
++  // every frame the renderer submits, and re-resolving the color from here
++  // unguarded would relayout the band on every one of them.
++  //
++  // The relayout inside the guard is the other half. When the paint gate was
++  // opened by something that is not a frame -- load completion, the
++  // paint-holding backstop -- page_painted_ is already true by the time the
++  // first frame arrives, so the awaiting_first_frame_ branch below returns
++  // early and nothing re-resolves. The band would sit in the waiting color it
++  // picked while the page had nothing on screen, over a page that now does:
++  // the mirror image of the band this file's history is about. Publishing here
++  // is what makes the fallback in
++  // BrowserViewTabbedLayoutImpl::ConfigureTopContainerBackground() actually
++  // reachable rather than depending on some later color event to arrive.
++  // helium-fork T044: the scroll state the poll is gated on. ⛔ Assignments
++  // only -- this runs for every frame whose metadata changed.
++  if (content::WebContents* const contents = web_contents()) {
++    PageTint& tint = EnsurePageTint(contents);
++    const bool was_at_top = tint.at_top;
++    tint.at_top = metadata.is_scroll_offset_at_top;
++    tint.page_scale_is_one = std::abs(metadata.page_scale_factor - 1.f) < 0.01f;
++    if (was_at_top != tint.at_top ||
++        metadata.new_vertical_scroll_direction !=
++            viz::VerticalScrollDirection::kNull) {
++      // Smooth scrolling and the Home key move the document without producing a
++      // single wheel event, so the quiet window has to hear about scrolling
++      // from the renderer as well as from the input path.
++      tint.last_scroll_metadata = base::TimeTicks::Now();
++    }
++    if (was_at_top != tint.at_top) {
++      if (tint.at_top) {
++        // Back at the top. Whatever the inner-scroller heuristic concluded
++        // while the user was down the page is moot: the root scroller is the
++        // one that moved, and "滚回页顶只采一次真页顶色" is this sample.
++        tint.inner_scroll_frozen_until = base::TimeTicks();
++        tint.scroll_input_since_columns = false;
++        tint.sample_state = helium::TopSampleState();
++        tint.poll_accepts = 0;
++        tint.poll_capped = false;
++        SchedulePageTopPoll(kScrollQuiet);
++      } else {
++        top_poll_timer_.Stop();
++      }
++    }
++  }
++  if (!renderer_frame_seen_) {
++    renderer_frame_seen_ = true;
++    if (page_painted_) {
++      OnPageColorMaybeChanged();
++    }
++  }
+   if (resample_on_next_frame_) {
+     // helium-fork: the appearance changed, and this is the first frame the
+     // renderer has produced since. Now -- and not a guessed number of
+@@ -335,7 +683,17 @@
+ }
+ 
+ void TopContainerView::OnRenderFrameMetadataChangedAfterActivation(
+-    base::TimeTicks activation_time) {}
++    base::TimeTicks activation_time) {
++  // helium-fork T044: the readback fired when the gate opened can be dropped
++  // because the new document's widget has no surface to copy from yet -- which
++  // is T031's attribution for a band that stayed on the previous page's colour
++  // with nothing to retry it. This is the first moment the surface certainly
++  // exists, and a document that still has no colour of its own asks again.
++  if (const PageTint* const tint = FindPageTint(web_contents());
++      tint && !tint->sampled_once) {
++    SamplePageTopColor(SampleReason::kColorEvent);
++  }
++}
+ 
+ void TopContainerView::OnRenderFrameSubmission() {}
+ 
+@@ -365,7 +723,17 @@
+   }
+   observed_widget_ = widget;
+   widget->AddObserver(this);
++  widget->AddInputEventObserver(this);
+   provider->AddObserver(this);
++  // helium-fork T044: a tab being switched to has a scroll position already;
++  // the metadata only arrives again when something changes, so seed from what
++  // the provider last saw rather than assuming the top of the document.
++  if (content::WebContents* const contents = web_contents()) {
++    const cc::RenderFrameMetadata& metadata = provider->LastRenderFrameMetadata();
++    PageTint& tint = EnsurePageTint(contents);
++    tint.at_top = metadata.is_scroll_offset_at_top;
++    tint.page_scale_is_one = std::abs(metadata.page_scale_factor - 1.f) < 0.01f;
++  }
+ }
+ 
+ void TopContainerView::StopObservingFrameMetadata() {
+@@ -376,6 +744,7 @@
+           observed_widget_->GetRenderFrameMetadataProvider()) {
+     provider->RemoveObserver(this);
+   }
++  observed_widget_->RemoveInputEventObserver(this);
+   observed_widget_->RemoveObserver(this);
+   observed_widget_ = nullptr;
+ }
+@@ -387,6 +756,14 @@
+   // that case; for a document with content it lands at or after the first
+   // paint, so it changes nothing there.
+   ReleasePagePaintGate();
++  // helium-fork T044: the poll's fast window is measured from here rather than
++  // from the first sample -- on a slow connection, or with an extension that
++  // rewrites the page after load, the change this is looking for lands long
++  // after the first pixels do.
++  if (content::WebContents* const contents = web_contents()) {
++    EnsurePageTint(contents).load_completed_at = base::TimeTicks::Now();
++  }
++  SchedulePageTopPoll(kTopPollFast);
+ }
+ 
+ void TopContainerView::DidFinishNavigation(
+@@ -404,6 +781,8 @@
+     // A new document owns the band's color only once it is the one on screen.
+     page_painted_ = false;
+     awaiting_first_frame_ = true;
++    // A new document has nothing on screen until its renderer submits for it.
++    renderer_frame_seen_ = false;
+     // The sample belongs to the document that was just replaced. The
+     // generation counter stops an *in-flight* readback from landing on the new
+     // page, but the value already stored is just as wrong, and it now sits at
+@@ -413,8 +792,53 @@
+     // document's own declared colors instead. (This does not flash the band
+     // back to the toolbar look: the page_painted_ gate above holds the previous
+     // tint until the new page is actually on screen.)
+-    EnsurePageTint(navigation_handle->GetWebContents()).sampled_top =
+-        std::nullopt;
++    PageTint& tint = EnsurePageTint(navigation_handle->GetWebContents());
++    // helium-fork T044: everything the poll learned belonged to the document
++    // that just went away -- including the scroll quiet window. ⛔ Especially
++    // that one: "flick the wheel, then click a link" is the ordinary way to
++    // leave a page, and a quiet window carried across the navigation would hold
++    // the *new* document's first readback for up to 750 ms, which is the
++    // "地址栏从纯白过一两秒" symptom this ticket exists to remove. The quiet
++    // window is about re-sampling one document, never about the next one.
++    ForgetDocument(tint);
++    content::RenderFrameHost* const committed_document =
++        navigation_handle->GetRenderFrameHost();
++    tint.last_seen_document = committed_document
++                                  ? committed_document->GetWeakDocumentPtr()
++                                  : content::WeakDocumentPtr();
++    top_poll_timer_.Stop();
++    // helium-fork T044 (H+): decide once, here, whether this navigation may
++    // publish a declared colour with the first frame.
++    //
++    // A reload or a same-URL navigation may not: the colour the band is showing
++    // is this page's own, measured from its pixels, and it is a far better
++    // guess at what the new frame will look like than anything the document
++    // says about itself -- on films.dance it is the difference between black ->
++    // black and black -> white -> black, which is the flash the user filmed.
++    // An origin that has already been caught at it may not either (see
++    // helium::band_prefs). Everything else keeps the first-frame declared
++    // colour, because that is what makes the band land in the same frame the
++    // page does.
++    content::WebContents* const navigated = navigation_handle->GetWebContents();
++    const bool same_url =
++        WithoutRef(navigation_handle->GetURL()) ==
++        WithoutRef(navigation_handle->GetPreviousPrimaryMainFrameURL());
++    // ⛔ The same accessor the record is written with (review r3 Minor 1):
++    // url::Origin::Create(GetURL()) hands back a tuple origin for a document
++    // that a sandbox or a CSP has made opaque, so a lookup built on it can hit a
++    // key the write could never have created.
++    content::RenderFrameHost* const committed_frame =
++        navigation_handle->GetRenderFrameHost();
++    tint.origin_untrusted =
++        committed_frame && helium::band_prefs::IsDeclaredUntrusted(
++                               navigated->GetBrowserContext(),
++                               committed_frame->GetLastCommittedOrigin());
++    tint.hold_until_pixels =
++        navigation_handle->GetReloadType() != content::ReloadType::NONE ||
++        same_url || tint.origin_untrusted;
++    tint.declared_at_gate.reset();
++    tint.hold_deadline = base::TimeTicks();
++    tint.hold_timer.Stop();
+     SyncFrameMetadataObservation();
+     // Backstop, in case neither signal arrives. It is blink's own paint-holding
+     // deadline on purpose: that is exactly how long the previous page's pixels
+@@ -437,35 +861,206 @@
+     return;
+   }
+   page_painted_ = true;
++  if (content::WebContents* const contents = web_contents()) {
++    // helium-fork T044 (H+): the colour the declared rungs answer with for this
++    // document, taken here because this is the moment the ladder would use it.
++    // It is only ever compared against the document's first pixels, to decide
++    // whether this origin declares colours it does not render.
++    PageTint& tint = EnsurePageTint(contents);
++    if (!tint.declared_at_gate) {
++      std::optional<SkColor> declared = contents->GetBackgroundColor();
++      if (!declared) {
++        declared = contents->GetThemeColor();
++      }
++      if (declared) {
++        tint.declared_at_gate = SkColorSetA(*declared, SK_AlphaOPAQUE);
++      }
++    }
++  }
+   OnPageColorMaybeChanged();
++  // helium-fork T044: from here on the pixels on screen are this document's,
++  // so the poll has something to read. It runs even before the first sample
++  // lands -- a first readback dropped because the new document had no surface
++  // yet used to leave the band on the previous page's colour with nothing to
++  // retry it (T031's attribution for nytimes).
++  SchedulePageTopPoll(kTopPollFast);
+ }
+ 
+ void TopContainerView::OnPageColorMaybeChanged() {
+-  SamplePageTopColor();
++  SamplePageTopColor(SampleReason::kColorEvent);
+   // The band's background is resolved in BrowserViewLayoutImpl's post-layout
+   // pass and its children cache their colors, so this goes through the single
+   // update point rather than just repainting.
+   browser_view_->UpdateAddressBarBandTint();
+ }
+ 
+-void TopContainerView::SamplePageTopColor() {
++bool TopContainerView::declared_colors_usable() const {
++  const PageTint* const tint = FindPageTint(web_contents());
++  if (!tint || !tint->hold_until_pixels || tint->sampled_once) {
++    return true;
++  }
++  return !tint->hold_deadline.is_null() &&
++         base::TimeTicks::Now() >= tint->hold_deadline;
++}
++
++void TopContainerView::OnHoldForPixelsDeadline() {
++  // Nothing arrived. Publish whatever the ladder can answer with now.
++  browser_view_->UpdateAddressBarBandTint();
++}
++
++bool TopContainerView::MaySamplePageTopNow() const {
++  // helium-fork T044: 「只在页顶重采」, spelled out.
++  if (!page_painted_) {
++    return false;
++  }
++  content::WebContents* const contents = web_contents();
++  if (!contents ||
++      contents->GetVisibility() != content::Visibility::VISIBLE) {
++    return false;
++  }
++  if (!IsDrawn() || !browser_view_->ShouldUseContentCardInsets()) {
++    return false;
++  }
++  const PageTint* const tint = FindPageTint(contents);
++  if (!tint) {
++    return true;
++  }
++  if (!tint->at_top || !tint->page_scale_is_one) {
++    return false;
++  }
++  const base::TimeTicks now = base::TimeTicks::Now();
++  if (now < tint->inner_scroll_frozen_until) {
++    return false;
++  }
++  for (const base::TimeTicks& t :
++       {tint->last_scroll_input, tint->last_scroll_metadata}) {
++    if (!t.is_null() && now - t < kScrollQuiet) {
++      return false;
++    }
++  }
++  return true;
++}
++
++base::TimeDelta TopContainerView::PageTopPollDelay() const {
++  const PageTint* const tint = FindPageTint(web_contents());
++  if (!tint || tint->load_completed_at.is_null() ||
++      base::TimeTicks::Now() - tint->load_completed_at <= kTopPollFastWindow) {
++    return kTopPollFast;
++  }
++  return kTopPollSlow;
++}
++
++void TopContainerView::SchedulePageTopPoll(base::TimeDelta delay) {
++  if (!browser_view_->ShouldUseContentCardInsets()) {
++    return;  // no band: the toolbar is in the sidebar, on the app's surface.
++  }
++  const PageTint* const tint = FindPageTint(web_contents());
++  if (tint && tint->poll_capped) {
++    return;
++  }
++  // Start() replaces whatever was pending, so there is never more than one
++  // readback in flight and the cadence cannot run away from the GPU.
++  top_poll_timer_.Start(FROM_HERE, delay,
++                        base::BindOnce(&TopContainerView::PollPageTopColor,
++                                       base::Unretained(this)));
++}
++
++void TopContainerView::PollPageTopColor() {
++  PageTint* const tint = FindPageTint(web_contents());
++  if (tint && !tint->at_top) {
++    // ⛔ Off the top the poll stops dead rather than idling: the trip back to
++    // the top is what re-arms it (the metadata callback above).
++    return;
++  }
++  if (!MaySamplePageTopNow()) {
++    // Hidden toolbar (zen / native fullscreen), a scroll still settling, the
++    // inner-scroller suppression: keep the cadence but read nothing, so the
++    // band picks the page up within one interval of the reason going away.
++    SchedulePageTopPoll(PageTopPollDelay());
++    return;
++  }
++  SamplePageTopColor(tint && tint->sample_state.candidate
++                         ? SampleReason::kConfirm
++                         : SampleReason::kPoll);
++}
++
++void TopContainerView::OnInputEvent(const content::RenderWidgetHost& host,
++                                    const blink::WebInputEvent& event,
++                                    InputEventSource source) {
++  switch (event.GetType()) {
++    case blink::WebInputEvent::Type::kMouseWheel:
++    case blink::WebInputEvent::Type::kGestureScrollBegin:
++    case blink::WebInputEvent::Type::kGestureScrollUpdate:
++    case blink::WebInputEvent::Type::kGestureFlingStart:
++    case blink::WebInputEvent::Type::kGesturePinchBegin:
++      break;
++    default:
++      return;
++  }
++  // ⛔ Assignments only: this runs for every input event the renderer is sent.
++  if (PageTint* const tint = FindPageTint(web_contents())) {
++    tint->last_scroll_input = base::TimeTicks::Now();
++    tint->scroll_input_since_columns = true;
++  }
++}
++
++void TopContainerView::SamplePageTopColor(SampleReason reason) {
+   // helium-fork: read back the strip of page the band sits against.
+   //
+   // Only the first few rows: a header's text and logo are normally vertically
+   // centered well below them, so this averages background and not content.
+-  // The GPU does the averaging by scaling the strip to a single pixel, which
+-  // is why the output size is 1x1 rather than a bitmap we would reduce here.
++  // Sixteen columns rather than one averaged pixel, because "did the whole
++  // strip change, or one nav item's hover background" is the question that
++  // decides whether a change is the page's colour at all; the colour itself is
++  // their mean (helium::AverageOfColumns).
+   constexpr int kSampleStripHeight = 4;
+ 
+   content::WebContents* const contents = web_contents();
+   if (!contents) {
+     return;
+   }
++  // helium-fork T044: while the gate is closed the screen still holds the
++  // *previous* document's pixels (that is what paint holding is), and on a
++  // same-site navigation the widget -- and its frame sink -- are the same one,
++  // so a readback taken here comes back with the old page's colour stamped with
++  // the new page's generation. It then sits at the head of the ladder the
++  // moment the gate opens. ⛔ Do not read the page until it is this document's.
++  if (!page_painted_) {
++    return;
++  }
++  PageTint& tint = EnsurePageTint(contents);
++  // helium-fork T060: take the declared colour here too, not only at the gate.
++  // ReleasePagePaintGate() reads it out of WebContents::GetBackgroundColor(),
++  // which the renderer delivers over its own mojo (PageImpl::
++  // DidChangeBackgroundColor, std::nullopt until that message lands), while the
++  // gate opens off the compositor's frame metadata -- two pipes with no ordering
++  // between them, measured 1.7-8.5 ms apart on this machine. Whenever the gate
++  // won that race declared_at_gate stayed empty, OnPageTopColorSampled() skipped
++  // NoteDeclaredObservation() and then welded sampled_once shut, so H+ wrote the
++  // liar down on only 5 or 6 visits out of 10 -- and the visits it missed were
++  // also the ones whose flash arrived a frame late (T059: 30 fixture runs, the
++  // 2x2 of "declared known at the gate" against "recorded" has no exception).
++  // ⛔ Only until the document's own pixels land (!sampled_once): 口径③ judges
++  // the declared colour the document had actually published by the time its
++  // first pixels arrived, never one it swapped in afterwards.
++  // ⛔ And ⛔ not by holding the gate until the colour is in -- that is exactly
++  // the "band one frame late" T044 spent a round removing.
++  // Same statement WatchPageColors() already runs for a tab that finished
++  // loading in the background.
++  if (page_painted_ && !tint.sampled_once && !tint.declared_at_gate) {
++    tint.declared_at_gate = DeclaredNow(contents);
++  }
++  // Re-samples are gated to the top of the document; a document's *first*
++  // sample is not, or a page opened at an anchor would never get one.
++  if (tint.sampled_once && !MaySamplePageTopNow()) {
++    return;
++  }
+   content::RenderWidgetHostView* const view =
+       contents->GetRenderWidgetHostView();
+   if (!view || !view->IsSurfaceAvailableForCopy()) {
+     // Normal at tab-switch time: the incoming tab has not been shown yet, so
+-    // it has no surface. OnVisibilityChanged() retries once it does.
++    // it has no surface. OnVisibilityChanged() retries once it does, and the
++    // poll below picks the page up within one interval either way.
+     return;
+   }
+   const gfx::Size viewport = view->GetVisibleViewportSize();
+@@ -476,12 +1071,26 @@
+       0, 0, viewport.width(),
+       std::min(kSampleStripHeight, viewport.height()));
+   constexpr base::TimeDelta kSampleTimeout = base::Milliseconds(500);
++  // ⛔ The hold's deadline runs from the first readback *request*, not from the
++  // gate opening: a document that is deliberately not being sampled yet (a
++  // reload that restored a scroll position half way down the page) must keep
++  // holding the colour it has, not fall through to a declared colour 150 ms
++  // later that describes a strip nobody is looking at.
++  if (tint.hold_until_pixels && !tint.sampled_once &&
++      tint.hold_deadline.is_null()) {
++    tint.hold_deadline = base::TimeTicks::Now() + kHoldForPixelsDeadline;
++    tint.hold_timer.Start(
++        FROM_HERE, kHoldForPixelsDeadline,
++        base::BindOnce(&TopContainerView::OnHoldForPixelsDeadline,
++                       weak_factory_.GetWeakPtr()));
++  }
++  TRACE_EVENT_INSTANT("ui", "HeliumBandSample", "reason",
++                      SampleReasonName(static_cast<int>(reason)));
+   view->CopyFromSurface(
+-      strip, gfx::Size(1, 1), kSampleTimeout,
++      strip, gfx::Size(helium::kTopSampleColumns, 1), kSampleTimeout,
+       base::BindOnce(&TopContainerView::OnPageTopColorSampled,
+                      weak_factory_.GetWeakPtr(), contents->GetWeakPtr(),
+-                     ++EnsurePageTint(contents).sample_generation,
+-                     PageColorSchemeIsDark()));
++                     ++tint.sample_generation, PageColorSchemeIsDark(), reason));
+ }
+ 
+ // static
+@@ -490,11 +1099,11 @@
+     base::WeakPtr<content::WebContents> contents,
+     int generation,
+     bool dark_at_request,
++    SampleReason reason,
+     const content::CopyFromSurfaceResult& result) {
+   // The tab the sample was taken from may be gone, or may no longer be the one
+   // whose color the band is showing.
+-  if (!contents || !result.has_value() ||
+-      result.value().bitmap.drawsNothing()) {
++  if (!contents) {
+     return;
+   }
+   PageTint& tint = EnsurePageTint(contents.get());
+@@ -502,32 +1111,167 @@
+   if (generation != tint.sample_generation) {
+     return;
+   }
+-  const SkColor sampled =
+-      SkColorSetA(result.value().bitmap.getColor(0, 0), SK_AlphaOPAQUE);
++  // helium-fork T044: sixteen columns, or nothing.
++  //
++  // viz scales by a ratio rather than to an exact size (DelegatedFrameHost::
++  // CopyFromCompositingSurfaceInternal), so the bitmap that comes back is not
++  // guaranteed to be the size that was asked for. ⛔ A CHECK here would turn a
++  // resizing window into a crash; a short read is simply not a sample.
++  std::vector<SkColor> columns;
++  if (result.has_value() && !result.value().bitmap.drawsNothing()) {
++    const SkBitmap& bitmap = result.value().bitmap;
++    if (bitmap.height() >= 1 &&
++        bitmap.width() >= static_cast<int>(helium::kTopSampleColumns)) {
++      columns.reserve(helium::kTopSampleColumns);
++      for (size_t i = 0; i < helium::kTopSampleColumns; ++i) {
++        columns.push_back(
++            SkColorSetA(bitmap.getColor(static_cast<int>(i), 0), SK_AlphaOPAQUE));
++      }
++    }
++  }
++  TRACE_EVENT_INSTANT("ui", "HeliumBandSampled", "reason",
++                      SampleReasonName(static_cast<int>(reason)), "result",
++                      columns.empty() ? "void" : "ok");
++  if (columns.empty() || !self) {
++    if (self) {
++      self->SchedulePageTopPoll(self->PageTopPollDelay());
++    }
++    return;
++  }
+   // The pixels belong to whichever appearance was on screen when the readback
+   // was *asked for*. Stamping them with the appearance at callback time is a
+   // race the appearance switch loses: the readback issued as macOS returns to
+   // light still captures the dark rendering, and labelling that "light" is how
+   // a dark band survived on a white page. Mismatched samples are thrown away;
+   // the frame the renderer submits for the new appearance triggers another one.
+-  if (!self || self->PageColorSchemeIsDark() != dark_at_request) {
++  if (self->PageColorSchemeIsDark() != dark_at_request) {
++    self->SchedulePageTopPoll(self->PageTopPollDelay());
+     return;
+   }
+-  // Stamp even when the colour is unchanged: a page that looks the same in both
+-  // appearances still has to have its sample re-validated, or it stays retired
+-  // for the rest of the session.
+-  const bool unchanged =
+-      tint.sampled_top == sampled && tint.sampled_in_dark == dark_at_request;
+-  tint.sampled_in_dark = dark_at_request;
+-  if (unchanged) {
+-    return;
+-  }
+-  tint.sampled_top = sampled;
+-  // The result is cached on the tab either way; only the tab that is actually
+-  // showing needs to republish out of it.
+-  if (self && self->web_contents() == contents.get()) {
+-    self->browser_view_->UpdateAddressBarBandTint();
++  // A sample taken under the other appearance is not something to compare
++  // against either -- it describes a rendering that is no longer on screen.
++  const std::optional<SkColor> accepted =
++      tint.sampled_in_dark == dark_at_request ? tint.sampled_top : std::nullopt;
++  helium::TopSampleDecision decision;
++  if (reason == SampleReason::kColorEvent) {
++    // A colour event means the page itself said something changed; this fork
++    // has always taken that readback at its word.
++    decision.verdict = helium::TopSampleVerdict::kAccept;
++    decision.color = helium::AverageOfColumns(columns);
++  } else {
++    decision = helium::ClassifyTopSample(accepted, tint.accepted_columns,
++                                         tint.last_columns, columns,
++                                         tint.scroll_input_since_columns,
++                                         tint.sample_state);
++  }
++  tint.last_columns = columns;
++  tint.scroll_input_since_columns = false;
++  const base::TimeTicks now = base::TimeTicks::Now();
++  if (decision.scroll_correlated) {
++    // The strip moved with the user's scrolling while the root scroller stayed
++    // at the top: an inner scroller, or a rubber band. ⛔ Suppress, never
++    // freeze -- three quiet seconds and the poll is back.
++    tint.inner_scroll_frozen_until =
++        std::max(now, tint.last_scroll_input) + kInnerScrollFreeze;
++  }
++  base::TimeDelta next = self->PageTopPollDelay();
++  switch (decision.verdict) {
++    case helium::TopSampleVerdict::kAccept: {
++      // ⛔ Not `!=`. The readback is sixteen columns averaged back into one
++      // colour, and the rounding of that average moves by a level between two
++      // frames of a page that animates its top strip -- which made every single
++      // sample "a new colour", every new colour a publish, and every publish
++      // another readback through RequestResampleOnNextFrame(): 59 readbacks a
++      // second on tools/T044/www/top_anim.html, measured (tasks/evidence/T044/
++      // a3_rate_topanim.log), with the poll's own throttle powerless because
++      // that path is not the poll. One level is exactly the tolerance the
++      // confirmation pair already uses (kTopSampleConfirmTolerance = 1), and it
++      // is far below both the ±1 rounding and the standing band-vs-page offset
++      // on saturated colours (T029: 15-26), so nothing a user can see is lost.
++      const bool changed =
++          !tint.sampled_top ||
++          helium::MaxChannelDistance(*tint.sampled_top, decision.color) >
++              helium::kTopSampleConfirmTolerance ||
++          tint.sampled_in_dark != dark_at_request;
++      // Stamp even when the colour is unchanged: a page that looks the same in
++      // both appearances still has to have its sample re-validated, or it stays
++      // retired for the rest of the session.
++      tint.sampled_in_dark = dark_at_request;
++      tint.sampled_top = decision.color;
++      tint.accepted_columns = columns;
++      if (reason != SampleReason::kColorEvent && tint.sampled_once) {
++        // Following a page that repaints its own top strip forever (a carousel)
++        // reads as a band that will not sit still, so the number of changes one
++        // document may drag the band through is capped rather than judged.
++        if (tint.poll_accepts_since.is_null() ||
++            now - tint.poll_accepts_since > kPollAcceptWindow) {
++          tint.poll_accepts = 0;
++          tint.poll_accepts_since = now;
++        }
++        if (++tint.poll_accepts >= kMaxPollAccepts) {
++          tint.poll_capped = true;
++        }
++      }
++      if (!tint.sampled_once) {
++        // helium-fork T044 (H+): the document's first pixels are the verdict on
++        // what it declared. ⛔ Only the first ones: a page that repaints its own
++        // top strip later (the B-class change this ticket also fixes) has not
++        // lied about anything.
++        //
++        // helium-fork T061: ...and only when those first pixels are the ones at
++        // the TOP of the document. A document's first sample deliberately skips
++        // MaySamplePageTopNow() (see SamplePageTopColor(): "a page opened at an
++        // anchor would never get one"), so anything that commits already
++        // scrolled -- a `#fragment` link into a docs page, a reload that
++        // restored a scroll position -- hands this branch a strip from the
++        // middle of the page: background plus body text plus images. 口径③ is
++        // 「页顶像素 vs 声明底色」, so a mid-page strip has no standing to call
++        // the declared colour a lie -- and the record it would write is
++        // permanent (band_prefs::NoteDeclaredObservation only ever clears a
++        // flag it set for an origin that later behaves, never an honest one it
++        // should not have set), costing that origin the held frames on every
++        // later visit. Measured before this line existed: anchor_mid.html#mid,
++        // an honest fixture whose declared colour IS its top strip, was written
++        // down on 3 of 3 visits (tasks/evidence/T061/d61ctl_anchor.log).
++        //
++        // ⛔ tint.at_top, not MaySamplePageTopNow(): that predicate also
++        // demands the tab be VISIBLE and the scroll quiet, which would stop
++        // recording the background-tab liar 反例④ requires to be recorded, and
++        // would drop a navigation landing right after the previous document
++        // scrolled. at_top is the renderer's own is_scroll_offset_at_top,
++        // assigned in OnRenderFrameMetadataChangedBeforeActivation() before
++        // that same callback opens the paint gate, and it defaults to true so a
++        // tab that never produced metadata is still judged.
++        if (tint.declared_at_gate && tint.at_top) {
++          content::RenderFrameHost* const frame =
++              contents->GetPrimaryMainFrame();
++          if (frame) {
++            helium::band_prefs::NoteDeclaredObservation(
++                contents->GetBrowserContext(), frame->GetLastCommittedOrigin(),
++                helium::DeclaredLooksUntrustworthy(decision.color,
++                                                   *tint.declared_at_gate));
++          }
++        }
++        // The pixels are here, so the hold is over whatever its deadline said.
++        tint.hold_timer.Stop();
++      }
++      tint.sampled_once = true;
++      // The result is cached on the tab either way; only the tab that is
++      // actually showing needs to republish out of it.
++      if (changed && self->web_contents() == contents.get()) {
++        self->browser_view_->UpdateAddressBarBandTint();
++      }
++      break;
++    }
++    case helium::TopSampleVerdict::kConfirm:
++      // ⛔ Never accept a change on one readback: a fade, a carousel and a
++      // header video all look like "a new colour" for one sample.
++      next = tint.sample_state.animating ? kTopPollSlow : kTopPollConfirm;
++      break;
++    case helium::TopSampleVerdict::kIgnore:
++      break;
+   }
++  self->SchedulePageTopPoll(next);
+ }
+ 
+ BEGIN_METADATA(TopContainerView)
+Index: src/chrome/browser/ui/views/frame/top_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/top_container_view.h
++++ src/chrome/browser/ui/views/frame/top_container_view.h
+@@ -8,9 +8,11 @@
+ #include <optional>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/time/time.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/timer/timer.h"
+ #include "content/public/browser/render_frame_metadata_provider.h"
++#include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_observer.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents_observer.h"
+@@ -31,7 +33,11 @@
+ class TopContainerView : public views::View,
+                          public content::WebContentsObserver,
+                          public content::RenderFrameMetadataProvider::Observer,
+-                         public content::RenderWidgetHostObserver {
++                         public content::RenderWidgetHostObserver,
++                         // helium-fork T044: the only thing that says "the user
++                         // is scrolling" when the root scroller never moves --
++                         // an inner scroller, or a rubber band at the top.
++                         public content::RenderWidgetHost::InputEventObserver {
+   METADATA_HEADER(TopContainerView, views::View)
+ 
+  public:
+@@ -97,6 +103,45 @@
+   // together.
+   bool page_painted() const { return page_painted_; }
+ 
++  // helium-fork: has the renderer put a frame of *this* document on screen?
++  //
++  // Deliberately not page_painted(), and deliberately not
++  // awaiting_first_frame_: that flag is cleared inside
++  // ReleasePagePaintGate() itself, so it can never disagree with the gate.
++  // The gate opens on several proxies for "the previous page is gone" --
++  // DocumentOnLoadCompletedInPrimaryMainFrame() and the paint-holding
++  // backstop among them -- and for a small document load completion beats
++  // its first frame by a few hundred ms. Anything that has to know whether
++  // the page's own pixels are on screen (the band's waiting colour, see
++  // BrowserViewTabbedLayoutImpl::ConfigureTopContainerBackground()) needs
++  // this one, which only the renderer's frame path writes.
++  bool renderer_frame_seen() const { return renderer_frame_seen_; }
++
++  // helium-fork T044 (H+): may helium::ResolveBandTint() use what the page
++  // *declares* for the document on screen, or does it have to hold the colour
++  // the band already shows until the page's own pixels arrive?
++  //
++  // False for exactly three kinds of navigation: a reload and a same-URL
++  // navigation (where the colour on screen is this very page's, so holding it
++  // is not a guess), and any origin this profile has already caught declaring
++  // one colour and rendering another. Everywhere else the declared colour is
++  // what lets the band land in the same frame the page does, which is the
++  // behaviour the previous round was spent buying.
++  bool declared_colors_usable() const;
++
++  // helium-fork T036: read the page's top strip again on the renderer's next
++  // frame.
++  //
++  // The band's first sample after a navigation can be taken while the new
++  // document has no surface to copy from (T031's attribution: the readback is
++  // dropped and nothing retries), and the publisher is the only place that
++  // knows a tint was actually published. This used to happen by accident --
++  // publishing ended in a whole-window Widget::ThemeChanged(), whose
++  // propagation reached OnThemeChanged() below, which armed exactly this --
++  // and the accident went away when the publisher stopped announcing the tint
++  // as a theme change. ⛔ Called once per *changed* tint, never per frame.
++  void RequestResampleOnNextFrame();
++
+   // views::View:
+   // helium-fork: a macOS appearance change re-renders every page. The active
+   // tab is re-read here; hidden ones retire their own samples.
+@@ -145,6 +190,17 @@
+   void RenderWidgetHostDestroyed(content::RenderWidgetHost* widget_host)
+       override;
+ 
++  // content::RenderWidgetHost::InputEventObserver:
++  //
++  // helium-fork T044: only wheel and trackpad gestures are taken as "the user
++  // is scrolling". ⛔ Deliberately NOT the keyboard: Space/PageDown/Home scroll
++  // a document, but they are also what someone types into a field at the top of
++  // the page, and every one of them would push the next page-top readback
++  // another 750 ms out.
++  void OnInputEvent(const content::RenderWidgetHost& host,
++                    const blink::WebInputEvent& event,
++                    InputEventSource source) override;
++
+  private:
+   // helium-fork: the band's tint is resolved during layout, so a page color
+   // change has to ask for one.
+@@ -154,8 +210,14 @@
+   // is what a cached sample has to still agree with to be usable.
+   bool PageColorSchemeIsDark() const;
+ 
++  // helium-fork: why a readback was asked for. A colour event's readback is
++  // taken at its word (that is what this fork has always done); a poll's is
++  // only believed once a second one agrees with it, because a poll can land in
++  // the middle of a fade, a carousel or a header video.
++  enum class SampleReason { kColorEvent, kPoll, kConfirm };
++
+   // helium-fork: asks the compositor for the top strip of the viewport.
+-  void SamplePageTopColor();
++  void SamplePageTopColor(SampleReason reason);
+   static void OnPageTopColorSampled(
+       base::WeakPtr<TopContainerView> self,
+       base::WeakPtr<content::WebContents> contents,
+@@ -163,8 +225,29 @@
+       // The appearance the readback was requested under; the result is
+       // discarded if it no longer matches (see the .cc).
+       bool dark_at_request,
++      SampleReason reason,
+       const content::CopyFromSurfaceResult& result);
+ 
++  // helium-fork T044: may the page's pixels be read *right now*?
++  //
++  // ⛔ This is the whole of 「只在页顶重采」: off the top of the document the
++  // band keeps what it has, because a strip taken further down averages the
++  // page's background together with its text and comes out a few levels darker
++  // (M3.3g deleted scroll re-sampling for exactly that). It also holds off for
++  // 750 ms after any scroll input, which is what keeps a readback out of the
++  // middle of macOS's rubber band -- where the top of the viewport shows the
++  // document background rather than the page.
++  //
++  // ⛔ Only pixel readbacks are gated. A page that *declares* a new background
++  // is announcing something about itself rather than about where it is
++  // scrolled to, and that announcement is published from anywhere.
++  bool MaySamplePageTopNow() const;
++  // helium-fork T044: the poll itself.
++  void SchedulePageTopPoll(base::TimeDelta delay);
++  void OnHoldForPixelsDeadline();
++  void PollPageTopColor();
++  base::TimeDelta PageTopPollDelay() const;
++
+   // helium-fork: releases the page_painted() gate. Called from the frame
+   // metadata signal, and from the two WebContentsObserver signals that mean
+   // "the new document is what the user is looking at now".
+@@ -195,7 +278,15 @@
+   // Only the *first* frame after a commit opens the gate; metadata arrives for
+   // every frame the renderer submits, including the old document's.
+   bool awaiting_first_frame_ = false;
++  // Written only by OnRenderFrameMetadataChangedBeforeActivation() (and
++  // reseeded per document); see renderer_frame_seen().
++  bool renderer_frame_seen_ = true;
+   base::OneShotTimer page_paint_timer_;
++  // helium-fork T044: one readback in flight at a time, re-armed from the
++  // result, so the cadence can never run away from what the GPU can answer.
++  // Per window, not per tab: only the active tab is ever polled, and the state
++  // the decision needs rides on the tab (see PageTint in the .cc).
++  base::OneShotTimer top_poll_timer_;
+   base::WeakPtrFactory<TopContainerView> weak_factory_{this};
+ };
+ 
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -179,6 +179,7 @@
+ #include "ui/views/property_effects.h"
+ #include "ui/views/style/typography.h"
+ #include "ui/views/style/typography_provider.h"
++#include "ui/views/mouse_watcher_view_host.h"
+ #include "ui/views/view.h"
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
+@@ -338,6 +339,16 @@
+   // (NotifyEnterExitOfDescendant breaks on `p->Contains(sibling)`), so this
+   // costs nothing on icon-to-icon moves.
+   SetNotifyEnterExitOnChild(true);
++  // helium-fork 2a-r5 (user 2026-09-06 #6): the exit signal that cannot be
++  // starved, the same one ToolbarView keeps. Hover here is latched from
++  // enter/exit, and one exit that never arrives -- macOS defers one across a
++  // click and replays it at the click's location, where IsMouseHovered()
++  // vetoes it (OnOmniboxHovered) -- left the band's capsule lit until the
++  // pointer came back. The watcher reads the event stream itself and fires
++  // the moment the pointer is outside the field.
++  arc_hover_watcher_ = std::make_unique<views::MouseWatcher>(
++      std::make_unique<views::MouseWatcherViewHost>(this, gfx::Insets()),
++      this);
+ 
+   // Note that children with layers are *not* clipped, because focus rings have
+   // to draw outside the parent's bounds.
+@@ -1276,6 +1287,31 @@
+   RefreshClearAllButtonIcon();
+ }
+ 
++bool LocationBarView::IsOmniboxPopupWidgetOpen() const {
++  return omnibox_popup_view_ && omnibox_popup_view_->IsOpen();
++}
++
++void LocationBarView::RefreshBandTint() {
++  if (!IsInitialized()) {
++    return;
++  }
++  // helium-fork T036: order is the one OnThemeChanged() fixed above --
++  // RefreshBackground() moves the surface the pushed colours are computed
++  // against, so computing them first pushes the colour for the previous fill.
++  RefreshBackground();
++  RefreshPushedIconColors();
++  if (omnibox_view_) {
++    omnibox_view_->EmphasizeURLComponents();
++  }
++  // helium-fork T040: the site settings icon bakes its colour when its image is
++  // built, from GetSecurityChipColor(), which reads GetFieldBackdropColor() --
++  // so it too has to come after RefreshBackground(). It was left out above and
++  // kept the colour of whatever tint it was last built under.
++  if (location_icon_view_) {
++    location_icon_view_->RefreshBandTint();
++  }
++}
++
+ void LocationBarView::RefreshPushedIconColors() {
+   // RefreshBackground() runs once from Init(), before the children this pushes
+   // into exist -- page_action_icon_controller_ is still null there, and
+@@ -2475,6 +2511,13 @@
+   OnOmniboxHovered(false);
+ }
+ 
++void LocationBarView::MouseMovedOutOfHost() {
++  // helium-fork 2a-r5: the pointer is outside the field, whatever RootView
++  // thinks it is over; IsMouseHovered() agrees, so the veto in
++  // OnOmniboxHovered stands aside.
++  OnOmniboxHovered(false);
++}
++
+ void LocationBarView::ShowContextMenu(const gfx::Point& p,
+                                       ui::mojom::MenuSourceType source_type) {
+   omnibox_view_->ShowContextMenu(p, source_type);
+@@ -2788,6 +2831,11 @@
+     if (!omnibox_view_->HasFocus()) {
+       hover_animation_.Show();
+     }
++    // helium-fork 2a-r5: arm the exit that cannot be starved (constructor).
++    // One-shot, so re-armed on every hover.
++    if (arc_hover_watcher_ && GetWidget() && GetWidget()->GetNativeWindow()) {
++      arc_hover_watcher_->Start(GetWidget()->GetNativeWindow());
++    }
+   } else {
+     hover_animation_.Hide();
+   }
+Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -44,6 +44,7 @@
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/image/image.h"
+ #include "ui/views/animation/animation_delegate_views.h"
++#include "ui/views/mouse_watcher.h"
+ #include "ui/views/context_menu_controller.h"
+ #include "ui/views/controls/focus_ring.h"
+ #include "ui/views/drag_controller.h"
+@@ -118,6 +119,7 @@
+       public views::FocusChangeListener,
+       public views::DragController,
+       public views::AnimationDelegateViews,
++      public views::MouseWatcherListener,
+       public IconLabelBubbleView::Delegate,
+       public LocationIconView::Delegate,
+       public ContentSettingImageViewDelegate,
+@@ -219,6 +221,25 @@
+ 
+   OmniboxViewViews* omnibox_view() { return omnibox_view_; }
+ 
++  // helium-fork T036: is the classic omnibox popup's own widget on screen?
++  //
++  // That widget is a ThemeCopyingWidget (omnibox_popup_view_views.cc's
++  // PopupWidget), which is the one surface that learns this window's colours
++  // through WidgetObserver::OnWidgetThemeChanged and nothing else, so
++  // BrowserView::UpdateAddressBarBandTint() has to keep firing the
++  // whole-window theme change while it is up. Deliberately not
++  // OmniboxController::IsPopupOpen(): that one is also true for the WebUI
++  // popups, which do not copy this widget's theme, and asking it runs the
++  // popup-state validation callback.
++  bool IsOmniboxPopupWidgetOpen() const;
++
++  // helium-fork T036: re-derive everything in the field that comes from the
++  // band's tint. Same first two calls as OnThemeChanged(), in the same order
++  // and for the same reason (see the .cc); the third is the URL text, whose
++  // colours are cached in the render text. RefreshClearAllButtonIcon() is
++  // deliberately not here -- that icon is not derived from the band.
++  void RefreshBandTint();
++
+   const OmniboxController* GetOmniboxController() const;
+ 
+ 
+@@ -587,6 +608,9 @@
+   // event the field itself sees -- OnMouseMoved goes to the icon.
+   void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
++
++  // views::MouseWatcherListener:
++  void MouseMovedOutOfHost() override;
+   void ShowContextMenu(const gfx::Point& p,
+                        ui::mojom::MenuSourceType source_type) override;
+ 
+@@ -750,6 +774,9 @@
+   // 200ms after the transition, and the swap must happen exactly once, on the
+   // frame the pointer crosses the boundary.
+   bool arc_hovered_ = false;
++  // helium-fork 2a-r5: fires when the pointer is outside the field, from the
++  // event stream itself (see the constructor). Armed on every hover.
++  std::unique_ptr<views::MouseWatcher> arc_hover_watcher_;
+   // helium-fork r8.3: true while the field is wearing the composer's larger
+   // type. Kept so SetArcComposerTypography() is idempotent -- it is called
+   // from a placement funnel that runs on every state change.
+Index: src/chrome/browser/ui/views/location_bar/location_icon_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_icon_view.cc
++++ src/chrome/browser/ui/views/location_bar/location_icon_view.cc
+@@ -357,6 +357,33 @@
+   UpdateIcon();
+ }
+ 
++void LocationIconView::RefreshBandTint() {
++  // helium-fork T040: the glyph's colour is baked into its image when the image
++  // is built (see SetArcPlainIcon() above), from GetForegroundColor(), which on
++  // the band is derived from the band's tint. The band used to announce a new
++  // tint as a whole-window theme change, which rebuilt it through
++  // OnThemeChanged(); T036 narrowed that to explicit refreshes and this view
++  // was not among them, so after "restart, open a dark site" the icon stayed
++  // in the colour it was built in while the URL beside it turned white.
++  //
++  // A publish can land while the window is being torn down, and every colour
++  // below is read through the colour provider, which is gone with the widget.
++  if (!GetWidget()) {
++    return;
++  }
++  // The chip text ("Not secure") follows the same foreground.
++  UpdateLabelColors();
++  UpdateIcon();
++  // The separator next to the chip text reads its colour at paint time but
++  // sits on its own layer, which the band's repaint does not reach.
++  if (separator_view()) {
++    separator_view()->SchedulePaint();
++  }
++  // Deliberately not UpdateBackground(): nothing in it follows the band (the
++  // fill is always transparent, see SetBackgroundColor()), and its non-composer
++  // branch turns the ink drop back on -- r8.5's second reset point.
++}
++
+ void LocationIconView::UpdateBackground() {
+   CHECK(GetColorProvider());
+   if (arc_plain_icon_) {
+Index: src/chrome/browser/ui/views/location_bar/location_icon_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/location_bar/location_icon_view.h
++++ src/chrome/browser/ui/views/location_bar/location_icon_view.h
+@@ -130,6 +130,12 @@
+   // update.
+   void SetArcPlainIcon(bool plain);
+ 
++  // helium-fork T040: re-derive everything this view takes from the address
++  // bar band's tint -- the glyph, the chip text and the separator. Called by
++  // LocationBarView::RefreshBandTint() when the band publishes a new tint;
++  // until T036 the whole-window theme change did this via OnThemeChanged().
++  void RefreshBandTint();
++
+   const views::InkDrop* get_ink_drop_for_testing();
+ 
+  protected:
+Index: src/chrome/browser/ui/views/toolbar/toolbar_button.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_button.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_button.cc
+@@ -458,6 +458,15 @@
+   LabelButton::OnBoundsChanged(previous_bounds);
+ }
+ 
++void ToolbarButton::RefreshBandTint() {
++  // helium-fork T036: the same two calls OnThemeChanged() makes, minus the
++  // LabelButton half -- a band tint change moves the surface under the icon,
++  // not the button's images or its theme.
++  UpdateColorsAndInsets();
++  UpdateIcon();
++  SchedulePaint();
++}
++
+ void ToolbarButton::OnThemeChanged() {
+   UpdateColorsAndInsets();
+   UpdateIcon();
+Index: src/chrome/browser/ui/views/toolbar/toolbar_button.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_button.h
++++ src/chrome/browser/ui/views/toolbar/toolbar_button.h
+@@ -117,6 +117,11 @@
+   // icon state changes, e.g. in response to theme or touch mode changes.
+   virtual void UpdateIcon();
+ 
++  // helium-fork T036: re-derive the colours that come from the Arc band's
++  // tint (see GetForegroundColor()). Called by ToolbarView::SetBandTint()
++  // instead of letting a whole-window theme change do it.
++  void RefreshBandTint();
++
+   // Returns the button's corner radius for `edge`.
+   virtual float GetCornerRadiusFor(ToolbarButton::Edge edge) const;
+ 
+Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -61,6 +61,7 @@
+ #include "chrome/browser/ui/global_error/global_error_service_factory.h"
+ #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/helium/arc_toolbar_host.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
+ #include "content/public/browser/navigation_controller.h"
+@@ -2343,6 +2344,22 @@
+   const SkColor color_;
+ };
+ 
++// helium-fork T036: re-derive every band-derived colour under `view`.
++//
++// The walk is the counterpart of ToolbarView::GetArcBandTintFor()'s ancestor
++// walk and answers for exactly the same set: a button that has been
++// reparented out of the toolbar (the sidebar's collapse and navigation
++// controls) is no longer a descendant, so it is not refreshed -- which is
++// right, it is on the app surface and keeps the theme's colours.
++void RefreshBandTintInSubtree(views::View* view) {
++  for (views::View* const child : view->children()) {
++    if (ToolbarButton* const button = views::AsViewClass<ToolbarButton>(child)) {
++      button->RefreshBandTint();
++    }
++    RefreshBandTintInSubtree(child);
++  }
++}
++
+ }  // namespace
+ 
+ void ToolbarView::SetBandTint(std::optional<SkColor> tint) {
+@@ -2358,6 +2375,22 @@
+     views::SetCascadingColorProviderColor(
+         this, views::kCascadingBackgroundColor, kColorToolbar);
+   }
++  // helium-fork T036: refresh the consumers here instead of announcing the
++  // tint as a whole-window theme change.
++  //
++  // The children cache what they derive from this tint and used to re-derive
++  // it only in OnThemeChanged(), which BrowserView::UpdateAddressBarBandTint()
++  // provoked with Widget::ThemeChanged(). That walks every view in the window,
++  // invalidates the window's colour provider and re-sets the window's own
++  // background colour -- none of which a page-colour change needs, and all of
++  // which the band waits for: measured 37.8-67.7 ms from publish to the
++  // band's pixels (T036 build 1, tasks/evidence/T036/probe.raw.log), while the
++  // page's own frame needs no browser main-thread work at all.
++  RefreshBandTintInSubtree(this);
++  if (location_bar_view_) {
++    location_bar_view_->RefreshBandTint();
++  }
++  SchedulePaint();
+ }
+ 
+ bool ToolbarView::IsArcBandHosted() const {
+@@ -2711,9 +2744,16 @@
+   }
+   cc::PaintFlags flags;
+   flags.setAntiAlias(true);
+-  flags.setColor(helium::GetSidebarSurfaceColorAt(
+-      provider->GetColor(kColorToolbar),
+-      arc_row_hover_animation_.GetCurrentValue()));
++  // Under the native frame material: the same recipe as an overlay on the
++  // glass (2026-09-05, favorites cards and this row alike had vanished
++  // against the desktop showing through).
++  flags.setColor(helium::ShouldUseNativeFrameMaterials(this)
++                     ? helium::GetSidebarSurfaceOverlayAt(
++                           provider->GetColor(kColorToolbar),
++                           arc_row_hover_animation_.GetCurrentValue())
++                     : helium::GetSidebarSurfaceColorAt(
++                           provider->GetColor(kColorToolbar),
++                           arc_row_hover_animation_.GetCurrentValue()));
+   canvas->DrawRoundRect(
+       gfx::RectF(GetLocalBounds()),
+       GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius), flags);

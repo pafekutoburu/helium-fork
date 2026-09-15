@@ -1,0 +1,1125 @@
+Index: src/chrome/browser/prefs/session_startup_pref.cc
+===================================================================
+--- src.orig/chrome/browser/prefs/session_startup_pref.cc
++++ src/chrome/browser/prefs/session_startup_pref.cc
+@@ -75,12 +75,13 @@
+     return SessionStartupPref::LAST;
+   }
+ #endif
+-  // helium-fork M3.11-r1 (user 2026-08-24): was SessionStartupPref::DEFAULT,
+-  // i.e. a fresh New Tab page. The sidebar's Today section is nothing but
+-  // this window's ordinary tabs, so Chromium's default emptied it on every
+-  // restart. Only the default moves; Settings > On startup still offers all
+-  // three of Chromium's choices and a profile that has picked one keeps it.
+-  return SessionStartupPref::LAST;
++  // helium-fork: M3.11-r1 (user 2026-08-24) moved this to LAST so the
++  // sidebar's Today section survived a restart; 2a-r4 (user 2026-09-06 #4)
++  // moves it back -- closing the window or quitting ends every tab, a
++  // relaunch opens one blank page, nothing dormant behind it. Settings >
++  // On startup still offers Chromium's three choices; "Continue where you
++  // left off" is the user's explicit opt-in to a restore.
++  return SessionStartupPref::DEFAULT;
+ #endif
+ }
+ 
+Index: src/chrome/browser/sessions/exit_type_service.h
+===================================================================
+--- src.orig/chrome/browser/sessions/exit_type_service.h
++++ src/chrome/browser/sessions/exit_type_service.h
+@@ -93,6 +93,14 @@
+ 
+   std::unique_ptr<CrashedLock> CreateCrashedLock();
+ 
++  // helium-fork T027: acknowledges the crash on behalf of a startup that
++  // restored the previous session by itself -- the same acknowledgement the
++  // crash bubble's "Restore" button ends up performing when its CrashedLock is
++  // destroyed. If the restore is still running this waits for it to finish
++  // (see CheckUserAckedCrash), so a crash mid-restore still leaves the
++  // previous session file untouched.
++  void AckCrashAfterAutoRestore() { CheckUserAckedCrash(); }
++
+   Profile* profile() { return profile_; }
+ 
+   // Adds a callback that is called once the crash state is acknowledged and
+Index: src/chrome/browser/sessions/session_restore.cc
+===================================================================
+--- src.orig/chrome/browser/sessions/session_restore.cc
++++ src/chrome/browser/sessions/session_restore.cc
+@@ -50,6 +50,7 @@
+ #include "chrome/browser/search/search.h"
+ #include "chrome/browser/sessions/app_session_service.h"
+ #include "chrome/browser/sessions/app_session_service_factory.h"
++#include "chrome/browser/sessions/session_common_utils.h"
+ #include "chrome/browser/sessions/session_restore_delegate.h"
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
+@@ -74,6 +75,7 @@
+ #include "chrome/browser/ui/startup/startup_types.h"
+ #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_state.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
+ #include "chrome/browser/ui/ui_features.h"
+@@ -940,6 +942,7 @@
+     if (last_normal_browser && !startup_tabs_.empty()) {
+       browser_to_activate = OpenStartupUrls(last_normal_browser, startup_tabs_);
+     }
++    ShowDeferredBrowsers();  // helium-fork 2a-r5, see RestoreTab
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+     ash::BootTimesRecorder::Get()->AddLoginTimeMarker(
+@@ -1014,17 +1017,125 @@
+     std::map<split_tabs::SplitTabId, std::vector<tabs::TabInterface*>>
+         tabs_by_split_id;
+ 
++    // helium-fork 2a-r7 (user 2026-09-07 #2: after every restart the Ctrl+Tab
++    // HUD held a second card -- always the first Today row, whatever site it
++    // was). TabStripModel::InsertTabAtImpl makes the first tab to enter an
++    // *empty* strip active whatever `add_types` says, and on macOS attaching
++    // an active tab to a window that has not been shown yet still reports its
++    // contents visible (WebContentsViewCocoa::updateWebContentsVisibility asks
++    // only isHidden / hasWindow, never [[self window] isVisible]) -- so
++    // NavigationController::SetActive(true) starts that tab's restore load.
++    // "激活即加载" (pitfalls 2a-r5 #1), except nobody chose the activation.
++    //
++    // The tab that lands in the empty strip therefore has to be the one that
++    // is going to be active anyway:
++    //   * with startup tabs, the blank New Tab page the startup pass will
++    //     reuse -- the window's own, or one minted here when it has none;
++    //   * with no startup tabs ("continue where you left off"), the session's
++    //     own selected tab, which ShowBrowser is about to load regardless.
++    // Everything else goes in behind it and stays asleep (⛔ 2a-r5 ①: 重启＝
++    // Today 行全在、全睡着、点了才加载).
++    //
++    // Only TYPE_NORMAL windows get this: a restored popup or app window has
++    // no sidebar, no Ctrl+Tab HUD (browser_window_features.cc only builds
++    // those inside its TYPE_NORMAL block) and no business being handed a
++    // chrome://newtab -- it keeps today's behaviour exactly.
++
++    // "With startup tabs" means precisely the case AppendURLsToBrowser reuses
++    // a blank New Tab page for: its first normal startup tab is one. With
++    // "open these pages" instead, there is nothing to reuse and nothing to
++    // mint -- that configuration keeps today's behaviour.
++    bool startup_is_blank_ntp = false;
++    for (const StartupTab& startup_tab : startup_tabs_) {
++      if (startup_tab.type == StartupTab::Type::kFromLastAndUrlsStartupPref) {
++        continue;  // OpenStartupUrls gives these a window of their own.
++      }
++      startup_is_blank_ntp =
++          helium_workspace::IsBlankNewTabState(startup_tab.url, 1);
++      break;
++    }
++    const bool strip_was_empty = browser->tab_strip_model()->empty();
++    const bool land_on_blank = strip_was_empty && startup_is_blank_ntp &&
++                               browser != browser_ && browser->is_type_normal();
++    const bool land_on_selected =
++        strip_was_empty && startup_tabs_.empty() && browser->is_type_normal();
++
++    // The session tab that has to be restored first, or -1 for "restore in
++    // session order". A tab with no navigations at all is skipped by
++    // RestoreTab (upstream, crbug.com/40290475) and must not be read here:
++    // GetNavigationIndexToSelect() answers 0 for an empty list.
++    int first_tab = -1;
++    if (land_on_blank) {
++      for (int i = 0; i < static_cast<int>(window.tabs.size()); ++i) {
++        const sessions::SessionTab& tab = *(window.tabs[i]);
++        if (tab.navigations.empty()) {
++          continue;
++        }
++        const sessions::SerializedNavigationEntry& nav =
++            tab.navigations[GetNavigationIndexToSelect(tab)];
++        if (helium_workspace::IsBlankNewTabState(
++                nav.virtual_url(), static_cast<int>(tab.navigations.size()))) {
++          first_tab = i;
++          break;
++        }
++      }
++    } else if (land_on_selected &&
++               !window.tabs[selected_tab_index]->navigations.empty()) {
++      first_tab = selected_tab_index;
++    }
++
++    // No blank New Tab page of its own: mint the one the startup pass will
++    // reuse, in front of everything, so that it -- and not a restored page --
++    // is what the strip activates. Each restored tab then goes in at its own
++    // index, ahead of it, and it is pushed to the end, which is where the
++    // appended startup tab used to sit: the sidebar's row order is unchanged.
++    if (land_on_blank && first_tab < 0) {
++      chrome::AddTabAt(browser, GURL(), /*index=*/0, /*foreground=*/true);
++    }
++
++    // The order the tabs are handed to RestoreTab in. Each still goes to its
++    // own index, so the strip ends up in session order either way.
++    std::vector<int> restore_order;
++    restore_order.reserve(window.tabs.size());
++    if (first_tab >= 0) {
++      restore_order.push_back(first_tab);
++    }
++    for (int i = 0; i < static_cast<int>(window.tabs.size()); ++i) {
++      if (i != first_tab) {
++        restore_order.push_back(i);
++      }
++    }
++
++    // The session indices already put into the strip, so that each tab can be
++    // given the index its own session position maps to (see the loop).
++    std::vector<int> inserted;
++    inserted.reserve(window.tabs.size());
++
+     // Anchor both clocks to the current instant so the last active time (a
+     // base::Time) can be mapped onto the TimeTicks timeline WebContents wants.
+     const base::Time now = base::Time::Now();
+     const base::TimeTicks now_ticks = base::TimeTicks::Now();
+-    for (int i = 0; i < static_cast<int>(window.tabs.size()); ++i) {
++    for (int i : restore_order) {
+       const sessions::SessionTab& tab = *(window.tabs[i]);
+ 
+       // Loads are scheduled for each restored tab unless the tab is going to
+       // be selected as ShowBrowser() will load the selected tab.
+       bool is_selected_tab =
+           (initial_tab_count == 0) && (i == selected_tab_index);
++      // helium-fork 2a-r5 (user 2026-09-06 #4): with startup tabs to open on
++      // top (the New Tab page / the user's pages), no restored tab is
++      // selected: the selected one is created *visible* (AddRestoredTab's
++      // initially_hidden = !select) and a visible page loads
++      // (NavigationController::SetActive) -- a page the user did not ask
++      // for. All of them go in hidden and asleep; the startup tab becomes
++      // the active one (OpenStartupUrls) and only then is the window shown
++      // (ShowDeferredBrowsers). With no startup tabs ("continue where you
++      // left off") that page is the one that should load: unchanged.
++      if (is_selected_tab && !startup_tabs_.empty() && browser != browser_) {
++        is_selected_tab = false;
++        deferred_show_browsers_.push_back(browser);
++        did_show_browser = true;
++      }
+ 
+       // Convert the last active time because WebContents needs a TimeTicks.
+       const base::TimeTicks last_active_time_ticks =
+@@ -1033,11 +1144,29 @@
+       // If the browser already has tabs, we want to restore the new ones after
+       // the existing ones. E.g. this happens in Win8 Metro where we merge
+       // windows or when launching a hosted app from the app launcher.
+-      int tab_index = i + initial_tab_count;
++      //
++      // helium-fork 2a-r7: a tab's index is how many of the tabs *before it in
++      // the session* are already in the strip -- not its session index. With
++      // no reordering and no skipped tab the two are the same number, which is
++      // what upstream's `i + initial_tab_count` computes; they part company
++      // when a tab is restored out of order (above), and when one is dropped
++      // for having no navigations at all (RestoreTab returns early; upstream
++      // relies on the insertion index being clamped to the end, which stops
++      // being the end once a minted blank page is sitting there).
++      int placed_before = 0;
++      for (int done : inserted) {
++        if (done < i) {
++          ++placed_before;
++        }
++      }
++      int tab_index = placed_before + initial_tab_count;
+       RestoreTab(tab, browser, is_active_browser, restored_tabs, new_group_ids,
+                  &tabs_by_split_id, tab_index, is_selected_tab,
+                  last_active_time_ticks, tab.last_active_time,
+                  did_show_browser);
++      if (!tab.navigations.empty()) {
++        inserted.push_back(i);  // RestoreTab's only early return
++      }
+     }
+ 
+       for (const auto& pair : tabs_by_split_id) {
+@@ -1048,6 +1177,13 @@
+           tab_index_list.push_back(
+               browser->GetTabStripModel()->GetIndexOfTab(tab));
+         }
++        // helium-fork 2a-r7: these are pushed in *restore* order, which is no
++        // longer ascending (see restore_order above), and RestoreSplit CHECKs
++        // that what it is handed is sorted. Sorting is the identity whenever
++        // the order was not changed, the two tabs keep their own indices
++        // either way, and RestoreSplit's own comment says its pivot
++        // (indices[0]) does not matter. This list has no other consumer.
++        std::ranges::sort(tab_index_list);
+ 
+         // The number of supported split tabs is 2. Do not attempt to restore
+         // more than this to future proof it.
+@@ -1142,6 +1278,16 @@
+                              web_contents));
+   }
+ 
++  // helium-fork 2a-r5: the windows RestoreTab held back, shown now that the
++  // startup tabs are in (see there).
++  void ShowDeferredBrowsers() {
++    for (Browser* browser : deferred_show_browsers_) {
++      browser->GetWindow()->Show();
++      BrowserInitState::From(browser)->set_is_session_restore(false);
++    }
++    deferred_show_browsers_.clear();
++  }
++
+   void RestoreSplitTabVisualData(
+       Browser* browser,
+       const std::vector<std::unique_ptr<sessions::SessionSplitTab>>&
+@@ -1295,6 +1441,31 @@
+         continue;
+       }
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
++      // helium-fork 2a-r1 / 2a-r5: with "Open the New Tab page" the session
++      // is restored anyway (the sidebar's Today, asleep), and the NTP that
++      // startup wants on top may already be sitting in it, untouched, from
++      // the last launch. Activate that one instead of stacking another blank
++      // tab per launch.
++      // 2a-r5: the fork's own reading of "blank new tab" (both spellings of
++      // the NTP URL) -- search::IsNTPURL() only knows the WebUI origin
++      // chrome://new-tab-page, never the virtual chrome://newtab/ a tab
++      // shows, so 2a-r1's version of this never matched and a blank tab
++      // piled up per launch.
++      if (is_first_tab && helium_workspace::IsBlankNewTabState(url, 1)) {
++        TabStripModel* const model = browser->tab_strip_model();
++        int blank_ntp = -1;
++        for (int i = 0; i < model->count() && blank_ntp < 0; ++i) {
++          if (helium_workspace::IsBlankNewTabContents(
++                  model->GetWebContentsAt(i))) {
++            blank_ntp = i;
++          }
++        }
++        if (blank_ntp >= 0) {
++          model->ActivateTabAt(blank_ntp);
++          is_first_tab = false;
++          continue;
++        }
++      }
+       int add_types = AddTabTypes::ADD_FORCE_INDEX;
+       if (is_first_tab) {
+         add_types |= AddTabTypes::ADD_ACTIVE;
+@@ -1413,6 +1584,8 @@
+ 
+   // Set of URLs to open in addition to those restored from the session.
+   StartupTabs startup_tabs_;
++  // helium-fork 2a-r5: windows whose Show() waits for the startup tabs.
++  std::vector<raw_ptr<Browser>> deferred_show_browsers_;
+ 
+   // When synchronous we run a nested run loop. To avoid creating windows
+   // from the nested run loop (which can make exiting the nested message
+Index: src/chrome/browser/sessions/session_restore_delegate.cc
+===================================================================
+--- src.orig/chrome/browser/sessions/session_restore_delegate.cc
++++ src/chrome/browser/sessions/session_restore_delegate.cc
+@@ -12,11 +12,14 @@
+ #include "base/compiler_specific.h"
+ #include "base/metrics/field_trial.h"
+ #include "base/strings/string_util.h"
+-#include "chrome/browser/performance_manager/public/background_tab_loading_policy.h"
+ #include "chrome/browser/sessions/session_restore_stats_collector.h"
+ #include "chrome/common/url_constants.h"
++#include "components/favicon/content/content_favicon_driver.h"
++#include "components/favicon/core/favicon_driver.h"
+ #include "components/tab_groups/tab_group_id.h"
+ #include "components/tab_groups/tab_group_visual_data.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/web_contents.h"
+ 
+ namespace {
+@@ -93,12 +96,45 @@
+           SessionRestoreStatsCollector::UmaStatsReportingDelegate>())
+       ->TrackTabs(tabs);
+ 
+-  std::vector<content::WebContents*> web_contents_vector;
+-  web_contents_vector.reserve(tabs.size());
+-  for (const auto& tab : tabs) {
+-    CHECK(tab.contents());
+-    web_contents_vector.push_back(tab.contents());
++  // helium-fork 2a-r5 (user 2026-09-06 #4): restored tabs stay asleep. The
++  // background policy (ScheduleLoadForRestoredTabs) would load them one after
++  // another behind the user's back; here a restored tab is a sidebar row with
++  // a title, an icon and a space, and its page loads when the row is clicked
++  // (activation calls LoadIfNecessary). The selected tab is loaded by
++  // SessionRestoreImpl::ShowBrowser regardless. The archive countdown keeps
++  // running from the restored last-active time (workspace_archive_policy.h).
++  // Arc's sidebar items are data the same way, the page arriving on click
++  // (not measured this round: Arc had no window open).
++
++  // helium-fork 2a-r6 (user 2026-09-06 #2b): ask for each restored tab's
++  // stored favicon. A row's icon comes from its NavigationEntry
++  // (TabUIHelper::GetFavicon -> ContentFaviconDriver::GetFavicon), and the
++  // only thing that ever fills that in is FetchFavicon() from
++  // DidFinishNavigation -- which a tab that never loads never reaches, so
++  // every restored Today row drew the placeholder globe. FetchFavicon() looks
++  // the page URL up in the favicon database and, on a hit, writes the image
++  // into the entry and invalidates the tab; with no page there are no icon
++  // candidates, so it never goes to the network. This is the call upstream
++  // assumes has happened here -- see TabUIHelper::ShouldHideThrobber's "a
++  // restored tab's favicon is already fetched by SessionRestoreDelegate".
++  for (const RestoredTab& tab : tabs) {
++    content::WebContents* const contents = tab.contents();
++    if (!contents) {
++      continue;
++    }
++    favicon::FaviconDriver* const driver =
++        favicon::ContentFaviconDriver::FromWebContents(contents);
++    if (!driver || driver->FaviconIsValid()) {
++      continue;
++    }
++    // The restored entry, not WebContents::GetLastCommittedURL(): nothing has
++    // committed in the renderer yet, so that one is empty. ContentFaviconDriver
++    // DCHECKs that the URL it is answered with is the entry's own.
++    content::NavigationEntry* const entry =
++        contents->GetController().GetLastCommittedEntry();
++    if (!entry || entry->IsInitialEntry() || !entry->GetURL().is_valid()) {
++      continue;
++    }
++    driver->FetchFavicon(entry->GetURL(), /*is_same_document=*/false);
+   }
+-  performance_manager::policies::ScheduleLoadForRestoredTabs(
+-      std::move(web_contents_vector));
+ }
+Index: src/chrome/browser/sessions/session_service.cc
+===================================================================
+--- src.orig/chrome/browser/sessions/session_service.cc
++++ src/chrome/browser/sessions/session_service.cc
+@@ -586,8 +586,11 @@
+         *base::CommandLine::ForCurrentProcess(), profile());
+     sessions::TabRestoreService* tab_restore_service =
+         TabRestoreServiceFactory::GetForProfileIfExisting(profile());
+-    if (pref.ShouldRestoreLastSession() &&
+-        (!tab_restore_service || !tab_restore_service->IsRestoring())) {
++    // helium-fork 2a-r1 / 2a-r5: every startup type restores (the sidebar's
++    // Today lives in the session; the tabs come back asleep), not only LAST
++    // -- see StartupBrowserCreatorImpl::DetermineBrowserOpenBehavior. This is
++    // the path a first window takes after the last one was closed (the Dock).
++    if ((!tab_restore_service || !tab_restore_service->IsRestoring())) {
+       SessionRestore::RestoreSession(
+           profile(), browser,
+           SessionRestore::RESTORE_BROWSER |
+Index: src/chrome/browser/ui/browser_ui_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_ui_prefs.cc
++++ src/chrome/browser/ui/browser_ui_prefs.cc
+@@ -144,6 +144,8 @@
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, true);
+ 
++  registry->RegisterIntegerPref(prefs::kHeliumCrashAutoRestoreCount, 0);
++
+   registry->RegisterBooleanPref(prefs::kHomePageIsNewTabPage, true,
+                                 pref_registration_flags);
+   registry->RegisterBooleanPref(prefs::kShowHomeButton, false,
+Index: src/chrome/browser/ui/helium_workspace/crash_auto_restore.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/crash_auto_restore.cc
+@@ -0,0 +1,211 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/crash_auto_restore.h"
++
++#include <utility>
++
++#include "base/files/file_enumerator.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/memory/ptr_util.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/task/task_traits.h"
++#include "base/task/thread_pool.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/sessions/exit_type_service.h"
++#include "chrome/browser/ui/helium_workspace/crash_auto_restore_policy.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
++#include "components/sessions/core/command_storage_backend.h"
++#include "components/sessions/core/command_storage_manager.h"
++
++namespace helium_workspace {
++
++namespace {
++
++constexpr char kUserDataKey[] = "helium_workspace::CrashAutoRestore";
++
++// Not `Session_*` and not `Tabs_*`: CommandStorageBackend only enumerates its
++// own prefixes (GetSessionFilesSortedByReverseTimestamp), and deletes only what
++// it enumerated (DeleteLastSessionFiles, run at every startup), so a backup
++// under this name survives.
++constexpr base::FilePath::CharType kBackupPrefix[] =
++    FILE_PATH_LITERAL("HeliumCrashBackup_");
++
++base::TimeDelta g_healthy_after = kDefaultHealthyAfter;
++
++CrashRestoreExitType ToPolicyExitType(ExitType exit_type) {
++  switch (exit_type) {
++    case ExitType::kClean:
++      return CrashRestoreExitType::kClean;
++    case ExitType::kCrashed:
++      return CrashRestoreExitType::kCrashed;
++    case ExitType::kForcedShutdown:
++      return CrashRestoreExitType::kForcedShutdown;
++  }
++}
++
++// Copies the session file that this launch is about to restore from. It has to
++// happen before the crash is acknowledged: acking re-enables saving, this run
++// writes a newer file, and at the *next* startup CommandStorageBackend deletes
++// every session file except the newest usable one -- which is how a partial
++// restore can make the good file disappear for good.
++//
++// `decided_at` is the moment the auto-restore branch was taken, on the UI
++// thread. The lookup ignores anything newer, so it cannot end up copying the
++// session file this run wrote after the crash was acknowledged -- backing up
++// the post-restore state instead of the pre-crash one is exactly the failure
++// the backup exists to prevent (r2 code review, Minor 4). Pinning by timestamp
++// rather than resolving the path on the UI thread keeps startup free of file
++// I/O (base::ScopedAllowBlocking is friend-only, and this is a DCHECK build).
++void BackupUsableSessionFileOnBackgroundThread(base::FilePath profile_path,
++                                               base::Time decided_at) {
++  const base::FilePath src =
++      sessions::CommandStorageBackend::GetUnencryptedFileUsableForLastSession(
++          profile_path,
++          sessions::CommandStorageManager::SessionType::kSessionRestore,
++          decided_at);
++  if (src.empty()) {
++    return;
++  }
++  const base::FilePath dir = src.DirName();
++  base::FilePath::StringType name(kBackupPrefix);
++  name += base::NumberToString(
++      base::Time::Now().ToDeltaSinceWindowsEpoch().InMicroseconds());
++  const base::FilePath dst = dir.Append(name);
++  if (!base::CopyFile(src, dst)) {
++    return;
++  }
++  // Keep exactly one backup: the user only ever wants the newest one, and this
++  // directory is otherwise pruned by Chromium itself.
++  base::FilePath::StringType pattern(kBackupPrefix);
++  pattern += FILE_PATH_LITERAL("*");
++  base::FileEnumerator old_backups(dir, /*recursive=*/false,
++                                   base::FileEnumerator::FILES, pattern);
++  for (base::FilePath path = old_backups.Next(); !path.empty();
++       path = old_backups.Next()) {
++    if (path != dst) {
++      base::DeleteFile(path);
++    }
++  }
++}
++
++}  // namespace
++
++CrashAutoRestore::CrashAutoRestore(Profile* profile) : profile_(profile) {}
++
++CrashAutoRestore::~CrashAutoRestore() = default;
++
++// static
++CrashAutoRestore* CrashAutoRestore::GetOrCreate(Profile* profile) {
++  auto* existing =
++      static_cast<CrashAutoRestore*>(profile->GetUserData(&kUserDataKey));
++  if (existing) {
++    return existing;
++  }
++  auto owned = base::WrapUnique(new CrashAutoRestore(profile));
++  CrashAutoRestore* raw = owned.get();
++  profile->SetUserData(&kUserDataKey, std::move(owned));
++  return raw;
++}
++
++// static
++bool CrashAutoRestore::OnStartupShouldAutoRestore(Profile* profile,
++                                                  bool is_post_crash_launch) {
++  if (!profile) {
++    return false;
++  }
++  Profile* original = profile->GetOriginalProfile();
++  CrashAutoRestore* self = GetOrCreate(original);
++  if (self->decided_) {
++    return self->did_auto_restore_;
++  }
++  self->decided_ = true;
++
++  PrefService* prefs = original->GetPrefs();
++  // Read the exit type through ExitTypeService, never through
++  // prefs::kSessionExitType: the service rewrites that pref to "Crashed" in its
++  // own constructor, so the pref no longer describes the previous run.
++  const CrashRestoreExitType last_exit =
++      ToPolicyExitType(ExitTypeService::GetLastSessionExitType(original));
++  int count = prefs->GetInteger(prefs::kHeliumCrashAutoRestoreCount);
++  if (ShouldResetCountAtStartup(last_exit, count)) {
++    prefs->SetInteger(prefs::kHeliumCrashAutoRestoreCount, 0);
++    prefs->CommitPendingWrite();
++    count = 0;
++  }
++
++  // Every launch arms the timer, not just the ones that restore: this build can
++  // crash on the way out, so a clean exit is not something the loop guard may
++  // wait for. A run that simply stays up long enough is proof enough that we
++  // are not in a crash loop.
++  self->StartHealthTimer();
++
++  // Everything below is a side effect of *taking* the auto-restore branch, so
++  // it may only happen when this launch actually takes it. `is_post_crash_launch`
++  // carries the two conditions the policy cannot see -- the profile has not
++  // been launched with a browser open yet, and the upstream
++  // --hide-crash-restore-bubble switch is absent (HasPendingUncleanExit). With
++  // that switch the browser neither restores nor acknowledges anything, so
++  // burning the one allowed automatic restore would be wrong (r2 code review,
++  // Minor 3).
++  if (!is_post_crash_launch ||
++      !ShouldAutoRestoreAfterCrash(last_exit, count)) {
++    return false;
++  }
++
++  // Write the counter *before* the restore starts, and force it out to disk:
++  // PrefService commits on a delay, and the case this guard exists for is
++  // precisely "crashes again a few seconds from now".
++  prefs->SetInteger(prefs::kHeliumCrashAutoRestoreCount, kCountAfterAutoRestore);
++  prefs->CommitPendingWrite();
++
++  // Pin *which* file is meant here, at the moment the branch is taken: the copy
++  // itself runs on the pool, but it may only consider files that already
++  // existed now (see BackupUsableSessionFileOnBackgroundThread).
++  base::ThreadPool::PostTask(
++      FROM_HERE,
++      {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++       base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
++      base::BindOnce(&BackupUsableSessionFileOnBackgroundThread,
++                     original->GetPath(), base::Time::Now()));
++
++  self->did_auto_restore_ = true;
++  return true;
++}
++
++// static
++bool CrashAutoRestore::DidAutoRestoreThisLaunch(Profile* profile) {
++  if (!profile) {
++    return false;
++  }
++  auto* self = static_cast<CrashAutoRestore*>(
++      profile->GetOriginalProfile()->GetUserData(&kUserDataKey));
++  return self && self->did_auto_restore_;
++}
++
++// static
++void CrashAutoRestore::SetHealthyAfterForTesting(base::TimeDelta healthy_after) {
++  g_healthy_after = healthy_after;
++}
++
++void CrashAutoRestore::StartHealthTimer() {
++  health_timer_.Start(FROM_HERE, g_healthy_after,
++                      base::BindOnce(&CrashAutoRestore::OnRunIsHealthy,
++                                     base::Unretained(this)));
++}
++
++void CrashAutoRestore::OnRunIsHealthy() {
++  PrefService* prefs = profile_->GetPrefs();
++  const int count = prefs->GetInteger(prefs::kHeliumCrashAutoRestoreCount);
++  if (!ShouldResetCountAfterUptime(g_healthy_after, g_healthy_after, count)) {
++    return;
++  }
++  prefs->SetInteger(prefs::kHeliumCrashAutoRestoreCount, 0);
++  prefs->CommitPendingWrite();
++}
++
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/crash_auto_restore.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/crash_auto_restore.h
+@@ -0,0 +1,69 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_CRASH_AUTO_RESTORE_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_CRASH_AUTO_RESTORE_H_
++
++#include "base/memory/raw_ptr.h"
++#include "base/supports_user_data.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++
++class Profile;
++
++namespace helium_workspace {
++
++// helium-fork T027: the per-profile half of the post-crash auto-restore --
++// the pref counter, the health timer and the backup of the session file that
++// is about to be restored. The decision itself lives in
++// crash_auto_restore_policy.h (dependency-free, unit tested).
++//
++// One instance per original profile, held as user data on the Profile so the
++// timer dies with it.
++class CrashAutoRestore : public base::SupportsUserData::Data {
++ public:
++  CrashAutoRestore(const CrashAutoRestore&) = delete;
++  CrashAutoRestore& operator=(const CrashAutoRestore&) = delete;
++  ~CrashAutoRestore() override;
++
++  // Called once per profile launch from StartupBrowserCreatorImpl, *before*
++  // the browser-open behaviour is decided. Always arms the health timer (a run
++  // that stays up clears the loop counter, whether or not it restored
++  // anything); returns true when this launch should restore the previous
++  // session even though the last exit was a crash. Backs the session file up
++  // and writes the counter as part of returning true.
++  // `is_post_crash_launch` is the caller's own answer (HasPendingUncleanExit):
++  // it also covers "this profile already has a browser open" and the upstream
++  // --hide-crash-restore-bubble switch, neither of which the policy can see.
++  // The health timer is armed regardless of it; only the side effects (counter,
++  // backup, "this launch auto-restored") are gated on it.
++  static bool OnStartupShouldAutoRestore(Profile* profile,
++                                         bool is_post_crash_launch);
++
++  // True when this launch took the auto-restore branch. Note the semantics:
++  // "took the branch", not "got tabs back" -- an empty or unusable session
++  // makes SessionRestore return null, and the crash bubble must stay away in
++  // that case too, otherwise its CrashedLock blocks the explicit ack and the
++  // crashed state stays sticky.
++  static bool DidAutoRestoreThisLaunch(Profile* profile);
++
++  static void SetHealthyAfterForTesting(base::TimeDelta healthy_after);
++
++ private:
++  explicit CrashAutoRestore(Profile* profile);
++
++  static CrashAutoRestore* GetOrCreate(Profile* profile);
++
++  void StartHealthTimer();
++  void OnRunIsHealthy();
++
++  const raw_ptr<Profile> profile_;
++  bool decided_ = false;
++  bool did_auto_restore_ = false;
++  base::OneShotTimer health_timer_;
++};
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_CRASH_AUTO_RESTORE_H_
+Index: src/chrome/browser/ui/helium_workspace/crash_auto_restore_policy.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/crash_auto_restore_policy.h
+@@ -0,0 +1,72 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_WORKSPACE_CRASH_AUTO_RESTORE_POLICY_H_
++#define CHROME_BROWSER_UI_HELIUM_WORKSPACE_CRASH_AUTO_RESTORE_POLICY_H_
++
++#include "base/time/time.h"
++
++// helium-fork T027: when may a post-crash launch restore the previous session
++// by itself?
++//
++// Upstream never restores after a crash (StartupBrowserCreatorImpl::
++// DetermineBrowserOpenBehavior) and waits for the user to acknowledge the crash
++// bubble; until that ack SessionService keeps saving disabled, so the run after
++// a crash writes nothing at all. In this fork the sidebar's Today section *is*
++// the session, so that rule costs the user their whole sidebar, and the fork
++// has already decided that every startup restores without asking (2a-r5).
++//
++// The protection upstream bought with that rule -- a crash loop must not
++// overwrite the last good session file -- is kept here by a counter: the first
++// post-crash launch restores, a second one in a row does not. A run that stays
++// up for `healthy_after` is considered healthy and clears the counter, so an
++// occasional crash never degrades into "empty window forever" (the deciding
++// point: this build can also crash *on exit*, so a clean exit is not something
++// the counter may depend on).
++//
++// This header is deliberately dependency-free (base only) so the decision can
++// be unit tested in helium_workspace_unittests.
++namespace helium_workspace {
++
++// Mirrors the three states of ExitType (chrome/browser/sessions/
++// exit_type_service.h) without depending on it.
++enum class CrashRestoreExitType {
++  kClean,
++  kCrashed,
++  kForcedShutdown,
++};
++
++// How long a run has to stay up before it counts as healthy.
++inline constexpr base::TimeDelta kDefaultHealthyAfter = base::Seconds(60);
++
++// The counter value written when the auto-restore branch is taken.
++inline constexpr int kCountAfterAutoRestore = 1;
++
++// The whole decision: only a crashed previous exit qualifies, and only while
++// the loop counter is clear. `kForcedShutdown` (system shutdown / logout) is
++// not a crash -- it must neither restore through this path nor touch the
++// counter.
++inline bool ShouldAutoRestoreAfterCrash(CrashRestoreExitType last_exit,
++                                        int auto_restore_count) {
++  return last_exit == CrashRestoreExitType::kCrashed && auto_restore_count <= 0;
++}
++
++// A clean previous exit clears the counter right away; anything else leaves it
++// to the health timer.
++inline bool ShouldResetCountAtStartup(CrashRestoreExitType last_exit,
++                                      int auto_restore_count) {
++  return last_exit == CrashRestoreExitType::kClean && auto_restore_count != 0;
++}
++
++// A run that has been up this long is healthy: whatever crashed before, it was
++// not a crash loop.
++inline bool ShouldResetCountAfterUptime(base::TimeDelta uptime,
++                                        base::TimeDelta healthy_after,
++                                        int auto_restore_count) {
++  return auto_restore_count != 0 && uptime >= healthy_after;
++}
++
++}  // namespace helium_workspace
++
++#endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_CRASH_AUTO_RESTORE_POLICY_H_
+Index: src/chrome/browser/ui/helium_workspace/crash_auto_restore_policy_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium_workspace/crash_auto_restore_policy_unittest.cc
+@@ -0,0 +1,64 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/ui/helium_workspace/crash_auto_restore_policy.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium_workspace {
++namespace {
++
++using ExitT = CrashRestoreExitType;
++
++TEST(CrashAutoRestorePolicyTest, OnlyACrashedExitRestores) {
++  EXPECT_TRUE(ShouldAutoRestoreAfterCrash(ExitT::kCrashed, 0));
++  EXPECT_FALSE(ShouldAutoRestoreAfterCrash(ExitT::kClean, 0));
++  // A system shutdown / logout is not a crash: no restore through this path.
++  EXPECT_FALSE(ShouldAutoRestoreAfterCrash(ExitT::kForcedShutdown, 0));
++}
++
++TEST(CrashAutoRestorePolicyTest, CounterIsTheLoopGuard) {
++  // First post-crash launch restores; a second one in a row does not, so the
++  // last good session file survives a crash loop.
++  EXPECT_TRUE(ShouldAutoRestoreAfterCrash(ExitT::kCrashed, 0));
++  EXPECT_FALSE(ShouldAutoRestoreAfterCrash(ExitT::kCrashed, 1));
++  EXPECT_FALSE(ShouldAutoRestoreAfterCrash(ExitT::kCrashed, 2));
++  // A negative value (corrupt pref) must behave like zero, not like "blocked".
++  EXPECT_TRUE(ShouldAutoRestoreAfterCrash(ExitT::kCrashed, -1));
++}
++
++TEST(CrashAutoRestorePolicyTest, CleanExitClearsTheCounterAtStartup) {
++  EXPECT_TRUE(ShouldResetCountAtStartup(ExitT::kClean, 1));
++  EXPECT_FALSE(ShouldResetCountAtStartup(ExitT::kClean, 0));
++  EXPECT_FALSE(ShouldResetCountAtStartup(ExitT::kCrashed, 1));
++  // Forced shutdown leaves the counter alone -- it says nothing about whether
++  // the previous run was healthy.
++  EXPECT_FALSE(ShouldResetCountAtStartup(ExitT::kForcedShutdown, 1));
++}
++
++TEST(CrashAutoRestorePolicyTest, AHealthyRunClearsTheCounter) {
++  const base::TimeDelta healthy = kDefaultHealthyAfter;
++  EXPECT_FALSE(ShouldResetCountAfterUptime(healthy - base::Seconds(1), healthy, 1));
++  EXPECT_TRUE(ShouldResetCountAfterUptime(healthy, healthy, 1));
++  EXPECT_TRUE(ShouldResetCountAfterUptime(healthy + base::Hours(2), healthy, 1));
++  // Nothing to do when the counter is already clear.
++  EXPECT_FALSE(ShouldResetCountAfterUptime(healthy + base::Hours(2), healthy, 0));
++}
++
++TEST(CrashAutoRestorePolicyTest, HealthyAfterIsAParameter) {
++  // The duration is injected so the timer can be exercised without waiting a
++  // real minute.
++  const base::TimeDelta healthy = base::Milliseconds(10);
++  EXPECT_FALSE(ShouldResetCountAfterUptime(base::Milliseconds(9), healthy, 1));
++  EXPECT_TRUE(ShouldResetCountAfterUptime(base::Milliseconds(10), healthy, 1));
++}
++
++TEST(CrashAutoRestorePolicyTest, CountWrittenWhenTheBranchIsTaken) {
++  EXPECT_EQ(1, kCountAfterAutoRestore);
++  EXPECT_FALSE(
++      ShouldAutoRestoreAfterCrash(ExitT::kCrashed, kCountAfterAutoRestore));
++}
++
++}  // namespace
++}  // namespace helium_workspace
+Index: src/chrome/browser/ui/startup/infobar_utils.cc
+===================================================================
+--- src.orig/chrome/browser/ui/startup/infobar_utils.cc
++++ src/chrome/browser/ui/startup/infobar_utils.cc
+@@ -22,6 +22,7 @@
+ #include "chrome/browser/ui/startup/helium_crash_dialog_controller.h"
+ #include "chrome/browser/ui/startup/obsolete_system_infobar_delegate.h"
+ #include "chrome/browser/ui/startup/oscryptasync_availability_infobar_delegate.h"
++#include "chrome/browser/ui/helium_workspace/crash_auto_restore.h"
+ #include "chrome/browser/ui/startup/startup_browser_creator.h"
+ #include "chrome/browser/ui/startup/startup_types.h"
+ #include "chrome/browser/ui/ui_features.h"
+@@ -147,9 +148,17 @@
+   }
+ 
+   // Web apps should not display the session restore bubble (crbug.com/40800614)
++  // helium-fork T027: a launch that restored the previous session by itself
++  // must not also offer to restore it. Two reasons, both load-bearing: pressing
++  // "Restore" would append the same session a second time (the window is no
++  // longer a lone NTP, so RestoreSessionAfterCrash does not clobber), and the
++  // bubble holds an ExitTypeService::CrashedLock that blocks the explicit
++  // acknowledgement, which would leave the profile stuck in the crashed state.
+   const bool should_display_bubble =
+       !startup_command_line.HasSwitch("hide-crashed-bubble") &&
+-      !is_web_app && HasPendingUncleanExit(browser->GetProfile());
++      !is_web_app && HasPendingUncleanExit(browser->GetProfile()) &&
++      !helium_workspace::CrashAutoRestore::DidAutoRestoreThisLaunch(
++          browser->GetProfile());
+   base::UmaHistogramBoolean("Startup.CrashBubbleShown", should_display_bubble);
+   if (should_display_bubble) {
+     SessionCrashedBubble::ShowIfNotOffTheRecordProfile(
+Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+@@ -60,6 +60,8 @@
+ #include "chrome/common/pref_names.h"
+ #include "chrome/common/webui_url_constants.h"
+ #include "components/custom_handlers/protocol_handler_registry.h"
++#include "chrome/browser/sessions/exit_type_service.h"
++#include "chrome/browser/ui/helium_workspace/crash_auto_restore.h"
+ #include "components/helium_services/pref_names.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/signin/public/base/signin_switches.h"
+@@ -480,6 +482,15 @@
+   const bool is_incognito_or_guest = profile_->IsOffTheRecord();
+   bool is_post_crash_launch = HasPendingUncleanExit(profile_);
+ 
++  // helium-fork T027: ask first, unconditionally -- besides answering "may this
++  // post-crash launch restore by itself", the call arms the health timer that
++  // clears the crash-loop counter once this run has stayed up (that must happen
++  // on ordinary launches too, or the counter would only ever be cleared by a
++  // clean exit, which this build cannot be relied on to reach).
++  const bool helium_auto_restore_after_crash =
++      helium_workspace::CrashAutoRestore::OnStartupShouldAutoRestore(
++          profile_, is_post_crash_launch);
++
+   // Defer adding info bars until the browser window is ready. The observer
+   // will delete itself once the infobars are added.
+   // It is safe to store Profile* in the callback as callback will be destroyed
+@@ -540,6 +551,9 @@
+   if (is_post_crash_launch) {
+     behavior_options |= IS_POST_CRASH_LAUNCH;
+   }
++  if (helium_auto_restore_after_crash) {
++    behavior_options |= HELIUM_CRASH_AUTO_RESTORE;
++  }
+   if (command_line_->HasSwitch(switches::kOpenInNewWindow)) {
+     behavior_options |= HAS_NEW_WINDOW_SWITCH;
+   }
+@@ -572,6 +586,18 @@
+   Browser* browser = RestoreOrCreateBrowser(
+       tabs, behavior, restore_options, process_startup, is_post_crash_launch);
+ 
++  // helium-fork T027: the restore just took the place of the user pressing
++  // "Restore" in the crash bubble, so the crash is acknowledged the same way --
++  // which is what re-enables session saving for this run and lets
++  // ~ExitTypeService write the exit type back to clean. Without it the profile
++  // stays in the crashed state forever and no session is ever written again.
++  if (helium_auto_restore_after_crash) {
++    if (ExitTypeService* exit_type_service =
++            ExitTypeService::GetInstanceForProfile(profile_)) {
++      exit_type_service->AckCrashAfterAutoRestore();
++    }
++  }
++
+   tab_groups::MaybeShowSharedTabGroupVersionOutOfDateModal(browser);
+   tab_groups::MaybeShowSharedTabGroupVersionUpToDateToast(browser);
+ 
+@@ -745,10 +771,12 @@
+     bool is_post_crash_launch) {
+   Browser* browser = nullptr;
+   if (behavior == BrowserOpenBehavior::SYNCHRONOUS_RESTORE) {
+-    // It's worth noting that this codepath is not hit by crash restore
+-    // because we want to avoid a crash restore loop, so we don't
+-    // automatically restore after a crash.
+-    // Crash restores are triggered via session_crashed_bubble_view.cc
++    // helium-fork T027: upstream noted here that crash restores never reach
++    // this path and are triggered from session_crashed_bubble_view.cc instead.
++    // That is no longer true: the first launch after a crash comes through here
++    // with HELIUM_CRASH_AUTO_RESTORE set (DetermineBrowserOpenBehavior), and
++    // the crash-loop protection is the counter in
++    // helium_workspace::CrashAutoRestore rather than the absence of a restore.
+     if (ShouldRestoreApps(StartupBrowserCreator::WasRestarted(), profile_)) {
+       restore_options |= SessionRestore::RESTORE_APPS;
+     }
+@@ -811,12 +839,27 @@
+     return BrowserOpenBehavior::NEW;
+   }
+ 
+-  if (pref.ShouldRestoreLastSession()) {
+-    // Don't perform a session restore on a post-crash launch, as this could
+-    // cause a crash loop.
+-    if (!(options & IS_POST_CRASH_LAUNCH)) {
+-      return BrowserOpenBehavior::SYNCHRONOUS_RESTORE;
+-    }
++  // helium-fork 2a-r1 (user 2026-09-05 #10), kept by 2a-r5 (user 2026-09-06
++  // #4): the sidebar's Today section is the window's ordinary tabs, so
++  // *every* startup choice restores the last session here -- "Open the New
++  // Tab page" and "Open specific pages" only decide what opens on top of it
++  // (DetermineStartupTabs hands the NTP / the pages over as startup tabs,
++  // and SessionRestore appends them to the restored window as the active
++  // tab). The restored tabs come back asleep -- title, icon and space in the
++  // sidebar, no page behind them until clicked
++  // (SessionRestoreDelegate::RestoreTabs) -- so nothing loads that the user
++  // did not ask for. The post-crash rule stays: no restore, no crash loop.
++  //
++  // helium-fork T027: the post-crash rule is no longer absolute. Upstream skips
++  // the restore so a crash loop cannot overwrite the last good session file,
++  // and hands the user the crash bubble instead; here the sidebar's Today
++  // section *is* the session, and the fork already decided not to ask (2a-r5),
++  // so the first launch after a crash restores as usual. The protection is kept
++  // by helium_workspace::CrashAutoRestore: a second post-crash launch in a row
++  // falls through to the upstream path below and writes nothing.
++  if (!(options & IS_POST_CRASH_LAUNCH) ||
++      (options & HELIUM_CRASH_AUTO_RESTORE)) {
++    return BrowserOpenBehavior::SYNCHRONOUS_RESTORE;
+   }
+ 
+   return BrowserOpenBehavior::NEW;
+Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.h
+===================================================================
+--- src.orig/chrome/browser/ui/startup/startup_browser_creator_impl.h
++++ src/chrome/browser/ui/startup/startup_browser_creator_impl.h
+@@ -155,7 +155,10 @@
+     IS_POST_CRASH_LAUNCH = (1 << 1),
+     HAS_NEW_WINDOW_SWITCH = (1 << 2),
+     HAS_CMD_LINE_TABS = (1 << 3),
+-    HAS_SAME_TAB_SWITCH = (1 << 4)
++    HAS_SAME_TAB_SWITCH = (1 << 4),
++    // helium-fork T027: this post-crash launch may restore the previous
++    // session by itself (helium_workspace::CrashAutoRestore decided so).
++    HELIUM_CRASH_AUTO_RESTORE = (1 << 5)
+   };
+ 
+   using BrowserOpenBehaviorOptions = uint32_t;
+Index: src/chrome/common/pref_names.h
+===================================================================
+--- src.orig/chrome/common/pref_names.h
++++ src/chrome/common/pref_names.h
+@@ -677,6 +677,14 @@
+ inline constexpr char kHeliumMinimalLocationBar[] =
+     "helium.browser.minimal_location_bar";
+ 
++// An integer pref: how many launches in a row have restored the previous
++// session after a crash without the run in between proving itself healthy.
++// Non-zero blocks another automatic post-crash restore, which is what keeps a
++// crash loop from overwriting the last good session file (helium-fork T027,
++// helium_workspace::CrashAutoRestore).
++inline constexpr char kHeliumCrashAutoRestoreCount[] =
++    "helium.workspace.crash_auto_restore_count";
++
+ // A boolean pref set to true if a Home button to open the Home pages should be
+ // visible on the toolbar.
+ inline constexpr char kShowHomeButton[] = "browser.show_home_button";
+Index: src/components/sessions/content/session_tab_helper.cc
+===================================================================
+--- src.orig/components/sessions/content/session_tab_helper.cc
++++ src/components/sessions/content/session_tab_helper.cc
+@@ -100,6 +100,32 @@
+   delegate->TabNavigationPathEntriesDeleted(window_id(), session_id());
+ }
+ 
++void SessionTabHelper::TitleWasSet(content::NavigationEntry* entry) {
++  // helium-fork 2a-r5 (user 2026-09-06 #4): record the title when it is set.
++  // Upstream only re-records an entry on NavigationEntryChanged, which the
++  // controller fires for page-state updates -- a tab quit before one
++  // arrives is restored with an empty title, and a restored tab that stays
++  // asleep (never loaded, see SessionRestoreDelegate::RestoreTabs) would
++  // show its URL in the sidebar for good.
++  SessionTabHelperDelegate* delegate = GetDelegate();
++  if (!delegate || !entry) {
++    return;
++  }
++  content::NavigationController& controller = web_contents()->GetController();
++  int index = -1;
++  for (int i = 0; i < controller.GetEntryCount() && index < 0; ++i) {
++    if (controller.GetEntryAtIndex(i) == entry) {
++      index = i;
++    }
++  }
++  if (index < 0) {
++    return;
++  }
++  delegate->UpdateTabNavigation(
++      window_id(), session_id(),
++      ContentSerializedNavigationBuilder::FromNavigationEntry(index, entry));
++}
++
+ void SessionTabHelper::NavigationEntryChanged(
+     const content::EntryChangedDetails& change_details) {
+   SessionTabHelperDelegate* delegate = GetDelegate();
+Index: src/components/sessions/content/session_tab_helper.h
+===================================================================
+--- src.orig/components/sessions/content/session_tab_helper.h
++++ src/components/sessions/content/session_tab_helper.h
+@@ -67,6 +67,7 @@
+   void NavigationListPruned(
+       const content::PrunedDetails& pruned_details) override;
+   void NavigationEntriesDeleted() override;
++  void TitleWasSet(content::NavigationEntry* entry) override;
+   void NavigationEntryChanged(
+       const content::EntryChangedDetails& change_details) override;
+ 
+Index: src/components/sessions/core/command_storage_backend.cc
+===================================================================
+--- src.orig/components/sessions/core/command_storage_backend.cc
++++ src/components/sessions/core/command_storage_backend.cc
+@@ -801,6 +801,28 @@
+   return std::nullopt;
+ }
+ 
++// static
++base::FilePath CommandStorageBackend::GetUnencryptedFileUsableForLastSession(
++    const base::FilePath& path,
++    CommandStorageManager::SessionType type,
++    base::Time not_newer_than) {
++  for (const SessionInfo& session :
++       GetSessionFilesSortedByReverseTimestamp(path, type,
++                                               /*encrypted=*/false)) {
++    if (session.timestamp > not_newer_than) {
++      continue;
++    }
++    // Same predicate as CanUseFileForLastSession(); the header is never
++    // encrypted, so no encryptor is needed to tell a truncated file apart.
++    const SessionFileReader::MarkerStatus status =
++        SessionFileReader::GetMarkerStatus(session.path, /*encryptor=*/nullptr);
++    if (!status.is_header_valid || status.has_marker) {
++      return session.path;
++    }
++  }
++  return base::FilePath();
++}
++
+ void CommandStorageBackend::DeleteLastSessionFiles() const {
+   // Delete session files whose paths do not match the last session path. This
+   // is called at startup, before a file has been opened for writing.
+Index: src/components/sessions/core/command_storage_backend.h
+===================================================================
+--- src.orig/components/sessions/core/command_storage_backend.h
++++ src/components/sessions/core/command_storage_backend.h
+@@ -120,6 +120,22 @@
+   // Parses out the timestamp from a path pointing to a session file.
+   static bool TimestampFromPath(const base::FilePath& path, base::Time& result);
+ 
++  // helium-fork T027: the unencrypted session file this profile would be
++  // restored from -- newest first, skipping files that were cut short before
++  // the initial-state marker was written, exactly like FindLastSessionFile()
++  // does at startup. Callers that need to copy that file before it is replaced
++  // cannot use FindLastSessionFile(): it lives on the backend sequence and is
++  // only computed once, at init. Returns an empty path if there is none.
++  // Must be called on a sequence that allows blocking.
++  // `not_newer_than` pins the answer to a moment in time: files created after
++  // it are ignored. Callers that decided *what* to copy at startup can pass the
++  // time of that decision and still do the copying later, without the risk of
++  // picking up a file this run wrote in the meantime.
++  static base::FilePath GetUnencryptedFileUsableForLastSession(
++      const base::FilePath& path,
++      CommandStorageManager::SessionType type,
++      base::Time not_newer_than = base::Time::Max());
++
+   // Returns the commands from the last session file.
+   ReadCommandsResult ReadLastSessionCommands();
+ 
