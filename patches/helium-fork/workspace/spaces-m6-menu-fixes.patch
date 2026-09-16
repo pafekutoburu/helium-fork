@@ -1,0 +1,219 @@
+Index: src/chrome/browser/ui/views/frame/helium_sidebar_menu_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/helium_sidebar_menu_view.cc
++++ src/chrome/browser/ui/views/frame/helium_sidebar_menu_view.cc
+@@ -9,11 +9,13 @@
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "cc/paint/paint_flags.h"
+ #include "chrome/app/vector_icons/vector_icons.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/chrome_pages.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_floating_sidebar.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_menu.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+@@ -113,6 +115,36 @@
+   }
+ }
+ 
++void HeliumSidebarMenuView::HideForSidebarFold() {
++  if (fold_paced_hide_ && !shown_) {
++    return;  // the fold's second notification (kCollapsed): leg already running
++  }
++  if (shown_) {
++    SetShown(false);  // hooks off, submenus gone, the panel's own fade begun
++  }
++  fold_paced_hide_ = true;
++  // Whatever is still on screen -- the fade just begun, an Escape fade
++  // already in flight, or an opening cut short -- is re-paced so that the
++  // part left ends with the sidebar's hide leg. SlideAnimation runs a leg
++  // for slide_duration * (distance left) (SlideAnimation::GetDuration), so
++  // the duration is stretched by 1 / opacity for the remaining fade to take
++  // the leg's full length; Reset() first, since Hide() on a leg already
++  // hiding is a no-op. Zero (reduce motion) stays zero: the leg then ends
++  // synchronously, AnimationEnded included (T025 (2): it must reach
++  // SetVisible(false), not stop at transparent).
++  const double opacity = open_animation_.GetCurrentValue();
++  if (opacity <= 0.0) {
++    AnimationEnded(&open_animation_);  // nothing to fade: just make sure it is hidden
++    return;
++  }
++  open_animation_.Reset(opacity);
++  open_animation_.SetSlideDuration(
++      gfx::Animation::RichAnimationDuration(helium::kFloatingSidebarHideDuration) /
++      opacity);
++  open_animation_.SetTweenType(helium::kFloatingSidebarHideTween);
++  open_animation_.Hide();
++}
++
+ bool HeliumSidebarMenuView::ContainsScreenPoint(
+     const gfx::Point& screen_point) const {
+   if (!shown_) {
+@@ -132,6 +164,9 @@
+ void HeliumSidebarMenuView::SetShown(bool shown) {
+   shown_ = shown;
+   if (shown) {
++    // Levels VisibilityChanged() left for its task are gone by now in
++    // practice; opening stays self-contained either way (idempotent).
++    CloseSubmenusFrom(0);
+     SetVisible(true);
+     UpdateBounds();
+     // Escape and the outside click, both only while up -- an accelerator
+@@ -142,6 +177,10 @@
+           this, widget->GetNativeWindow(),
+           {ui::EventType::kMousePressed, ui::EventType::kTouchPressed});
+     }
++    // The panel's own pace, in case the last leg was a fold-paced Hide.
++    fold_paced_hide_ = false;
++    open_animation_.SetSlideDuration(helium::kSidebarMenuDuration);
++    open_animation_.SetTweenType(gfx::Tween::EASE_OUT);
+     open_animation_.Show();
+   } else {
+     ResetAccelerators();
+@@ -254,20 +293,60 @@
+ 
+ void HeliumSidebarMenuView::VisibilityChanged(views::View* starting_from,
+                                               bool is_visible) {
+-  if (!is_visible && shown_) {
+-    // Hidden from above (the sidebar folded away, the window changed
+-    // shape): drop the dismissal hooks without animating.
+-    shown_ = false;
+-    ResetAccelerators();
+-    event_monitor_.reset();
++  if (is_visible || !shown_) {
++    return;
++  }
++  // Hidden from above (the window ordered out, the sidebar folded away):
++  // drop the dismissal hooks without animating.
++  shown_ = false;
++  ResetAccelerators();
++  event_monitor_.reset();
++  submenu_action_.reset();
++  data_->CancelAll();
++  open_animation_.Reset(0.0);
++  layer()->SetOpacity(0.0f);
++  if (shadow_frame_) {
++    shadow_frame_->SetVisible(false);
++  }
++  if (starting_from == this) {
++    // Our own SetVisible(false): the only child list locked is ours, so
++    // the parent's can be edited.
+     CloseSubmenusFrom(0);
+-    submenu_action_.reset();
+-    data_->CancelAll();
+-    open_animation_.Reset(0.0);
+-    layer()->SetOpacity(0.0f);
+-    if (shadow_frame_) {
+-      shadow_frame_->SetVisible(false);
++    return;
++  }
++  // helium-fork T025 (T024 cluster B): the notification came down from an
++  // ancestor, so this runs inside View::PropagateVisibilityNotifications
++  // with the parent's ScopedChildrenLock held -- and the submenus are the
++  // parent's children. RemoveChildViewT here is CHECK(!iterating_) (five
++  // user crash reports, out/Rel included, all under -[NSWindow orderOut:]).
++  // Hide the levels now (SetVisible never touches children_) and drop them
++  // once the traversal is over; the WeakPtr covers the window going away
++  // first, in which case the parent deletes them with itself.
++  for (const SubmenuLevel& level : submenus_) {
++    if (level.view) {
++      level.view->SetVisible(false);
+     }
++    if (level.shadow) {
++      level.shadow->SetVisible(false);
++    }
++  }
++  // The panel itself too: the animation was just stopped, so AnimationEnded
++  // (which hides it on the animated path) never runs, and a panel that is
++  // merely transparent still hit-tests -- after ⌘H and back, a click on
++  // where its rows were would run them. Re-enters VisibilityChanged with
++  // starting_from == this and shown_ already false: a no-op.
++  SetVisible(false);
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&HeliumSidebarMenuView::DropSubmenusIfStillHidden,
++                                weak_factory_.GetWeakPtr()));
++}
++
++void HeliumSidebarMenuView::DropSubmenusIfStillHidden() {
++  // Reopened before this ran (an input task can overtake the default queue):
++  // SetShown(true) already dropped the levels that were left behind, and
++  // whatever is in submenus_ now is the new panel's.
++  if (!shown_) {
++    CloseSubmenusFrom(0);
+   }
+ }
+ 
+Index: src/chrome/browser/ui/views/frame/helium_sidebar_menu_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/helium_sidebar_menu_view.h
++++ src/chrome/browser/ui/views/frame/helium_sidebar_menu_view.h
+@@ -80,6 +80,15 @@
+   void Toggle(const gfx::Rect& anchor_in_parent);
+   void Show(const gfx::Rect& anchor_in_parent);
+   void Hide();
++  // T062: Hide() at the sidebar fold's pace -- whatever of the panel is on
++  // screen fades out over the fold's own slide leg (helium::
++  // kFloatingSidebarHideDuration and tween, reduce-motion aware like
++  // BrowserView::SlideZenSideChrome), so the panel and the sidebar leave
++  // together: a Hide() at the panel's own 200ms outlived the 120ms slide by
++  // ~80ms, and a fade already in flight (Escape, or an opening cut short)
++  // kept its own pace (reviewers r0/r1, 2026-09-15). The next Show() puts
++  // the panel's own pace back. A no-op when the panel is down.
++  void HideForSidebarFold();
+   bool IsShowing() const { return shown_; }
+ 
+   // Whether |screen_point| is on the panel or any open submenu (the
+@@ -127,6 +136,10 @@
+                    std::vector<HeliumSidebarMenuItem> items,
+                    size_t parent_row = 0);
+   void CloseSubmenusFrom(int depth);
++  // The deferred half of a hide-from-above (VisibilityChanged): drops the
++  // levels unless the panel has been reopened since, in which case
++  // SetShown(true) already did and the current levels are new.
++  void DropSubmenusIfStillHidden();
+   void PositionSubmenus();
+   // The panel row that carries |action| (the row a depth-0 submenu aligns
+   // its first row with).
+@@ -141,6 +154,10 @@
+   std::vector<Action> row_actions_;
+   gfx::Rect anchor_in_parent_;
+   bool shown_ = false;
++  // A fold-paced hide is on screen (HideForSidebarFold): the fold notifies
++  // twice (kCollapsing at once, kCollapsed on the next frame) and the
++  // second call must not restart the leg. Cleared by the next Show().
++  bool fold_paced_hide_ = false;
+   gfx::SlideAnimation open_animation_{this};
+   std::unique_ptr<views::EventMonitor> event_monitor_;
+ 
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -1947,6 +1947,23 @@
+   // the collapsing state.
+   bool collapsed = state != tabs::VerticalTabStripCollapseState::kExpanded;
+ 
++  // helium-fork T062: the "⌄" panel is the sidebar's, but it is a BrowserView
++  // child (it runs out over the page), so the fold reaches it through no
++  // visibility notification -- Cmd+S left it, submenu and all, standing over
++  // the page where the sidebar had been (user 2026-09-15). kCollapsing lands
++  // here on the same call as the request (the choreography starts the slide
++  // synchronously), from the state controller's callback list -- never inside
++  // a View traversal, so the panel may drop its submenus at once (T025 ①).
++  // The fold-paced Hide: the panel fades on the sidebar's own hide leg
++  // (120ms, reduce-motion aware) so both are gone in the same frame -- its
++  // own 200ms outlived the slide by ~80ms (both reviewers, 2026-09-15). A
++  // no-op when it is down, which is also every call from the constructor.
++  if (collapsed && browser_view()) {
++    if (HeliumSidebarMenuView* const menu = browser_view()->helium_sidebar_menu()) {
++      menu->HideForSidebarFold();
++    }
++  }
++
+   UpdateResizeAreaVisibility();
+ 
+   resize_area_width_ = collapsed ? kCollapsedResizeAreaWidth : kResizeAreaWidth;
