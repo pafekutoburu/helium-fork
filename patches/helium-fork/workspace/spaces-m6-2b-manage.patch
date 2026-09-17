@@ -1,0 +1,2623 @@
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -12233,6 +12233,18 @@
+         <message name="IDS_HELIUM_WS_SPACE_MENU_CHANGE_ICON" desc="The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that opens the emoji / icon picker for the space's icon.">
+           Change Space Icon…
+         </message>
++        <message name="IDS_HELIUM_WS_SPACE_MENU_MANAGE" desc="The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that opens the in-sidebar sheet listing every space for reordering.">
++          Manage Spaces…
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MANAGE_TITLE" desc="Title of the in-sidebar sheet that lists every sidebar space so the user can drag them into a new order.">
++          Manage Spaces
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MANAGE_DONE" desc="The text button at the bottom of the Manage Spaces sheet that closes it.">
++          Done
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MANAGE_HANDLE" desc="Accessible name of the drag handle at the right end of a row in the Manage Spaces sheet; dragging it reorders the space.">
++          Reorder space
++        </message>
+         <message name="IDS_HELIUM_WS_SPACE_FORM_TITLE" desc="Title of the in-sidebar form that creates a new sidebar space.">
+           Create a Space
+         </message>
+@@ -12532,6 +12544,18 @@
+         <message name="IDS_HELIUM_WS_SPACE_MENU_CHANGE_ICON" desc="In Title Case: The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that opens the emoji / icon picker for the space's icon.">
+           Change Space Icon…
+         </message>
++        <message name="IDS_HELIUM_WS_SPACE_MENU_MANAGE" desc="In Title Case: The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that opens the in-sidebar sheet listing every space for reordering.">
++          Manage Spaces…
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MANAGE_TITLE" desc="In Title Case: Title of the in-sidebar sheet that lists every sidebar space so the user can drag them into a new order.">
++          Manage Spaces
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MANAGE_DONE" desc="In Title Case: The text button at the bottom of the Manage Spaces sheet that closes it.">
++          Done
++        </message>
++        <message name="IDS_HELIUM_WS_SPACE_MANAGE_HANDLE" desc="In Title Case: Accessible name of the drag handle at the right end of a row in the Manage Spaces sheet; dragging it reorders the space.">
++          Reorder space
++        </message>
+         <message name="IDS_HELIUM_WS_SPACE_FORM_TITLE" desc="In Title Case: Title of the in-sidebar form that creates a new sidebar space.">
+           Create a Space
+         </message>
+Index: src/chrome/app/vector_icons/BUILD.gn
+===================================================================
+--- src.orig/chrome/app/vector_icons/BUILD.gn
++++ src/chrome/app/vector_icons/BUILD.gn
+@@ -161,6 +161,7 @@
+     "hardware_computer_old.icon",
+     "hardware_computer_small_custom.icon",
+     "hardware_smartphone_old.icon",
++    "helium_drag_handle.icon",
+     "helium_space_bandage.icon",
+     "helium_space_basketball.icon",
+     "helium_space_bed.icon",
+Index: src/chrome/app/vector_icons/helium_drag_handle.icon
+===================================================================
+--- /dev/null
++++ src/chrome/app/vector_icons/helium_drag_handle.icon
+@@ -0,0 +1,16 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++//
++// helium-fork M6 轮2 2b: the drag handle on a Manage Spaces row -- a
++// two-by-three dot grip (the mac build ships no such glyph; Arc's Library
++// cards use a four-way arrow, decisions.md 「M6 轮2」§3 g23). 16dp.
++
++CANVAS_DIMENSIONS, 16,
++FILL_RULE_NONZERO,
++CIRCLE, 5.5, 3.5, 1.5,
++CIRCLE, 10.5, 3.5, 1.5,
++CIRCLE, 5.5, 8, 1.5,
++CIRCLE, 10.5, 8, 1.5,
++CIRCLE, 5.5, 12.5, 1.5,
++CIRCLE, 10.5, 12.5, 1.5
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -4101,6 +4101,8 @@
+       "views/frame/helium_space_icon_picker_view.h",
+       "views/tabs/vertical/helium_space_create_form_view.cc",
+       "views/tabs/vertical/helium_space_create_form_view.h",
++      "views/tabs/vertical/helium_space_manage_view.cc",
++      "views/tabs/vertical/helium_space_manage_view.h",
+       "views/frame/helium_sidebar_submenu_view.cc",
+       "views/frame/helium_sidebar_submenu_view.h",
+       "views/frame/web_contents_close_handler.cc",
+@@ -5887,6 +5889,8 @@
+     "helium/arc_sidebar_surface_unittest.cc",
+     "helium/arc_space_form.h",
+     "helium/arc_space_form_unittest.cc",
++    "helium/arc_space_manage.h",
++    "helium/arc_space_manage_unittest.cc",
+     "helium/arc_space_icon_picker.h",
+     "helium/arc_space_icon_picker_unittest.cc",
+     "helium/arc_toolbar_host.h",
+Index: src/chrome/browser/ui/helium/arc_space_manage.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_space_manage.h
+@@ -0,0 +1,214 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_SPACE_MANAGE_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_SPACE_MANAGE_H_
++
++#include <algorithm>
++#include <cstddef>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++
++// helium-fork M6 轮2 2b: the "Manage Spaces" sheet. Arc's Manage Spaces… is
++// its Library, a whole-window overlay with one tall card per space and a
++// drag handle at the card's foot (decisions.md 「M6 轮2」§3 g23, 2026-09-04).
++// We have no Library; the user's ruling (2026-09-04, §1) is the minimal
++// form: the same in-sidebar sheet slot the Create form uses, listing one
++// 34pt row per space (icon, name, "···", a drag handle) that the user drags
++// to reorder, then MoveSpace on release. Nothing here is an Arc measurement
++// -- the numbers are ours, aligned with the Create form's column
++// (arc_space_form.h: side inset 15, Done / Cancel where its Create Space /
++// Cancel sit -- user 2026-09-17). The drag itself is the pinned rows'
++// (arc_sidebar_surface.h kSidebarDrag*, same date).
++//
++// Offsets are from the sheet's own top and bottom (the sheet ends 8pt above
++// the space bar's slot, like the Create form's).
++//
++// Header-only and free of //ui/views on purpose, like every other arc_*.h:
++// asserted in helium_workspace_unittests.
++namespace helium {
++
++// Every rounded rect in the shell is 12 (user rule 2026-09-03). Literal, so
++// this header stays free of //ui/views.
++inline constexpr int kSpaceManageCornerRadius = 12;
++
++// The Create form's column: x 15 to width - 15.
++inline constexpr int kSpaceManageSideInset = 15;
++// "Manage Spaces": the form's title font, 16 below the sheet's top (no
++// illustration above it here).
++inline constexpr int kSpaceManageTitleTop = 16;
++inline constexpr int kSpaceManageTitleHeight = 24;
++inline constexpr int kSpaceManageTitleFontSize = 18;
++// The list starts 16 under the title.
++inline constexpr int kSpaceManageListTop =
++    kSpaceManageTitleTop + kSpaceManageTitleHeight + 16;
++// One sidebar row per space: LayoutConstant::kVerticalTabHeight, which the
++// view DCHECKs against. Rows touch (the pinned list's spacing).
++inline constexpr int kSpaceManageRowHeight = 34;
++// "+ New Space" is one more row, 8 under the list.
++inline constexpr int kSpaceManageNewSpaceGap = 8;
++// ... and the list + that row end at least 16 above "Done".
++inline constexpr int kSpaceManageListBottomGap = 16;
++// The footer is the Create form's (user 2026-09-17): "Done" is its "Create
++// Space" -- the same capsule in the same place -- and "Cancel" its Cancel,
++// plain text under it. The numbers repeat arc_space_form.h's, asserted
++// equal in the unit test.
++inline constexpr int kSpaceManageDoneHeight = 38;
++inline constexpr int kSpaceManageDoneBottomInset = 44;
++inline constexpr int kSpaceManageDoneFontSize = 13;
++inline constexpr int kSpaceManageCancelGap = 12;
++inline constexpr int kSpaceManageCancelHeight = 20;
++inline constexpr int kSpaceManageCancelFontSize = 12;
++
++// Inside a row: 16pt glyphs (the space icon, "···", the drag handle), each
++// as far from the row's top as the icon is from its left ((34 - 16) / 2 =
++// 9: the user's equal-margins rule for something set into a capsule's
++// edge), 8 between neighbours. The handle's band (where the pointer turns
++// into a hand) is wider than its glyph and as tall as the row; the whole
++// row starts a drag, like a pinned row.
++inline constexpr int kSpaceManageGlyphSize = 16;
++inline constexpr int kSpaceManageRowLeadingInset =
++    (kSpaceManageRowHeight - kSpaceManageGlyphSize) / 2;
++inline constexpr int kSpaceManageGlyphGap = 8;
++inline constexpr int kSpaceManageHandleHitWidth = 24;
++// An icon-less space shows the bar's 8pt dot in the icon slot.
++inline constexpr int kSpaceManageDotSize = 8;
++// Apple Color Emoji draws wider than its point size (the head row puts a
++// 16pt emoji in a 20pt slot): the emoji label gets the icon slot outset by
++// this much on every side, or a 16x16 label elides the glyph to "…"
++// (probe 2026-09-17).
++inline constexpr int kSpaceManageEmojiSlop = 4;
++
++// The sheet's rectangles for |size| and |row_count| spaces. |list| is the
++// viewport: as tall as the rows until they would push "+ New Space" and
++// "Done" off the bottom, then it stops growing and |scrolls| is set (the
++// view puts the rows in a ScrollView). The stretch between "+ New Space"
++// and "Done" absorbs the rest of the height.
++struct SpaceManageLayout {
++  gfx::Rect title;
++  gfx::Rect list;
++  gfx::Rect new_space_row;
++  gfx::Rect done;
++  gfx::Rect cancel;
++  bool scrolls = false;
++};
++
++inline SpaceManageLayout ComputeSpaceManageLayout(const gfx::Size& size,
++                                                  size_t row_count) {
++  SpaceManageLayout out;
++  const int w = std::max(size.width(), 0);
++  const int h = std::max(size.height(), 0);
++  out.title = gfx::Rect(0, kSpaceManageTitleTop, w, kSpaceManageTitleHeight);
++  const int inner_w = std::max(w - 2 * kSpaceManageSideInset, 0);
++  const int done_bottom = std::max(h - kSpaceManageDoneBottomInset, 0);
++  out.done = gfx::Rect(kSpaceManageSideInset,
++                       std::max(done_bottom - kSpaceManageDoneHeight, 0),
++                       inner_w, kSpaceManageDoneHeight);
++  out.cancel = gfx::Rect(0, done_bottom + kSpaceManageCancelGap, w,
++                         kSpaceManageCancelHeight);
++  const int content_h = static_cast<int>(row_count) * kSpaceManageRowHeight;
++  const int avail = std::max(out.done.y() - kSpaceManageListBottomGap -
++                                 kSpaceManageRowHeight - kSpaceManageNewSpaceGap -
++                                 kSpaceManageListTop,
++                             0);
++  out.scrolls = content_h > avail;
++  out.list = gfx::Rect(kSpaceManageSideInset, kSpaceManageListTop, inner_w,
++                       std::min(content_h, avail));
++  out.new_space_row =
++      gfx::Rect(kSpaceManageSideInset, out.list.bottom() + kSpaceManageNewSpaceGap,
++                inner_w, kSpaceManageRowHeight);
++  return out;
++}
++
++// One row's columns for a row |width| wide (rows are kSpaceManageRowHeight
++// tall). Left to right: the icon slot, the name (which always ends clear of
++// the "···" so hovering never shifts the text), the "···" menu button, the
++// drag handle at the right edge. |handle_hit| is where the pointer wears
++// the hand: the glyph's band widened to kSpaceManageHandleHitWidth, full
++// row height.
++struct SpaceManageRowLayout {
++  gfx::Rect icon;
++  gfx::Rect name;
++  gfx::Rect menu;
++  gfx::Rect handle;
++  gfx::Rect handle_hit;
++};
++
++inline SpaceManageRowLayout ComputeSpaceManageRowLayout(int width) {
++  SpaceManageRowLayout out;
++  const int w = std::max(width, 0);
++  const int y = kSpaceManageRowLeadingInset;
++  out.icon = gfx::Rect(kSpaceManageRowLeadingInset, y, kSpaceManageGlyphSize,
++                       kSpaceManageGlyphSize);
++  out.handle = gfx::Rect(
++      std::max(w - kSpaceManageRowLeadingInset - kSpaceManageGlyphSize, 0), y,
++      kSpaceManageGlyphSize, kSpaceManageGlyphSize);
++  out.menu = gfx::Rect(
++      std::max(out.handle.x() - kSpaceManageGlyphGap - kSpaceManageGlyphSize, 0),
++      y, kSpaceManageGlyphSize, kSpaceManageGlyphSize);
++  const int name_x = out.icon.right() + kSpaceManageGlyphGap;
++  out.name = gfx::Rect(name_x, 0,
++                       std::max(out.menu.x() - kSpaceManageGlyphGap - name_x, 0),
++                       kSpaceManageRowHeight);
++  out.handle_hit = gfx::Rect(
++      out.handle.x() - (kSpaceManageHandleHitWidth - kSpaceManageGlyphSize) / 2,
++      0, kSpaceManageHandleHitWidth, kSpaceManageRowHeight);
++  return out;
++}
++
++// The slot the lifted row would land in -- the pinned rows' rule
++// (WorkspaceSidebarView::UpdateDragPlan): how many of the other rows have
++// their *target* centre above the pointer, measured against the layout the
++// user is looking at -- the gap at |current_insert|, or closed up when the
++// drag has no slot (the pointer is off the sheet). Measuring against the
++// live layout is what gives the rule its hysteresis, and makes the answer a
++// fixpoint: asking again right after the rows yield gives the same slot. It
++// is also MoveSpace's target index (the moved space already removed).
++// |pointer_y| is in the list's coordinates and unbounded, so the first and
++// the last slot are both reachable (probe 2026-09-17: fed a centre clamped
++// to the list, 0 -> 2 of three rows landed on 1).
++inline size_t SpaceManageInsertIndex(int pointer_y,
++                                     size_t row_count,
++                                     std::optional<size_t> current_insert) {
++  size_t index = 0;
++  for (size_t k = 0; k + 1 < row_count; ++k) {
++    const size_t slot = !current_insert || k < *current_insert ? k : k + 1;
++    const int center = static_cast<int>(slot) * kSpaceManageRowHeight +
++                       kSpaceManageRowHeight / 2;
++    if (pointer_y > center) {
++      ++index;
++    }
++  }
++  return index;
++}
++
++// The order Cancel puts back (user 2026-09-17: Cancel keeps nothing): the
++// ids the sheet opened with that still exist, in that order, then whatever
++// another window added since, in its current order. Element i is the space
++// MoveSpace(id, i) has to land at slot i, applied front to back.
++inline std::vector<std::string> SpaceManageRestoredOrder(
++    const std::vector<std::string>& opened_with,
++    const std::vector<std::string>& current) {
++  std::vector<std::string> out;
++  out.reserve(current.size());
++  for (const std::string& id : opened_with) {
++    if (std::ranges::find(current, id) != current.end()) {
++      out.push_back(id);
++    }
++  }
++  for (const std::string& id : current) {
++    if (std::ranges::find(opened_with, id) == opened_with.end()) {
++      out.push_back(id);
++    }
++  }
++  return out;
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_SPACE_MANAGE_H_
+Index: src/chrome/browser/ui/helium/arc_space_manage_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_space_manage_unittest.cc
+@@ -0,0 +1,158 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_space_manage.h"
++
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "chrome/browser/ui/helium/arc_space_form.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++// The Create form's test sheet: Arc's 257.5pt sidebar, top row to bar slot.
++constexpr gfx::Size kSheet(257, 1003);
++
++TEST(ArcSpaceManageTest, RowsStackUnderTheTitleAndTheFooterIsTheCreateForms) {
++  const SpaceManageLayout l = ComputeSpaceManageLayout(kSheet, 3);
++  EXPECT_EQ(16, l.title.y());
++  EXPECT_EQ(kSheet.width(), l.title.width());
++  EXPECT_EQ(l.title.bottom() + 16, l.list.y());
++  // The column is the Create form's: x 15, width - 30.
++  EXPECT_EQ(15, l.list.x());
++  EXPECT_EQ(kSheet.width() - 30, l.list.width());
++  EXPECT_EQ(3 * 34, l.list.height());
++  EXPECT_FALSE(l.scrolls);
++  EXPECT_EQ(l.list.bottom() + 8, l.new_space_row.y());
++  EXPECT_EQ(l.list.x(), l.new_space_row.x());
++  EXPECT_EQ(l.list.width(), l.new_space_row.width());
++  EXPECT_EQ(34, l.new_space_row.height());
++  // "Done" is the Create form's "Create Space" capsule and "Cancel" its
++  // Cancel, rect for rect (user 2026-09-17).
++  const SpaceFormLayout form = ComputeSpaceFormLayout(kSheet);
++  EXPECT_EQ(form.create_button.ToString(), l.done.ToString());
++  EXPECT_EQ(form.cancel.ToString(), l.cancel.ToString());
++  EXPECT_EQ(kSpaceFormCreateFontSize, kSpaceManageDoneFontSize);
++  EXPECT_EQ(kSpaceFormCancelFontSize, kSpaceManageCancelFontSize);
++  EXPECT_EQ(kSpaceFormCornerRadius, kSpaceManageCornerRadius);
++  EXPECT_LE(l.new_space_row.bottom() + 16, l.done.y());
++}
++
++TEST(ArcSpaceManageTest, TooManyRowsScrollAndTheFooterStaysPinned) {
++  const SpaceManageLayout few = ComputeSpaceManageLayout(kSheet, 3);
++  const SpaceManageLayout many = ComputeSpaceManageLayout(kSheet, 100);
++  EXPECT_TRUE(many.scrolls);
++  // The viewport stops exactly where "+ New Space" and "Done" still fit.
++  EXPECT_EQ(many.done.y() - 16 - 34 - 8, many.list.bottom());
++  EXPECT_LT(many.list.height(), 100 * 34);
++  EXPECT_EQ(many.list.bottom() + 8, many.new_space_row.y());
++  EXPECT_EQ(few.done.ToString(), many.done.ToString());
++  EXPECT_EQ(few.cancel.ToString(), many.cancel.ToString());
++  EXPECT_EQ(few.title.ToString(), many.title.ToString());
++  // A taller sheet only moves the footer (and lets more rows show).
++  const SpaceManageLayout tall =
++      ComputeSpaceManageLayout(gfx::Size(kSheet.width(), kSheet.height() + 200), 3);
++  EXPECT_EQ(few.done.y() + 200, tall.done.y());
++  EXPECT_EQ(few.cancel.y() + 200, tall.cancel.y());
++  EXPECT_EQ(few.list.ToString(), tall.list.ToString());
++}
++
++TEST(ArcSpaceManageTest, RowColumnsLeftToRightWithEqualMargins) {
++  const int w = kSheet.width() - 30;
++  const SpaceManageRowLayout r = ComputeSpaceManageRowLayout(w);
++  // The icon is as far from the row's left as from its top: (34 - 16) / 2.
++  EXPECT_EQ(9, r.icon.x());
++  EXPECT_EQ(r.icon.x(), r.icon.y());
++  EXPECT_EQ(16, r.icon.width());
++  EXPECT_EQ(16, r.icon.height());
++  // The handle hugs the right edge by the same margin; "···" is 8 left of
++  // it; the name ends 8 before "···" whether or not "···" is showing.
++  EXPECT_EQ(w - 9, r.handle.right());
++  EXPECT_EQ(r.handle.y(), r.icon.y());
++  EXPECT_EQ(r.handle.x() - 8, r.menu.right());
++  EXPECT_EQ(r.menu.x() - 8, r.name.right());
++  EXPECT_EQ(r.icon.right() + 8, r.name.x());
++  EXPECT_EQ(0, r.name.y());
++  EXPECT_EQ(34, r.name.height());
++  // The hand-cursor band contains the glyph and spans the row's height.
++  EXPECT_TRUE(r.handle_hit.Contains(r.handle));
++  EXPECT_EQ(0, r.handle_hit.y());
++  EXPECT_EQ(34, r.handle_hit.height());
++  EXPECT_EQ(24, r.handle_hit.width());
++  EXPECT_EQ(r.handle.CenterPoint().x(), r.handle_hit.CenterPoint().x());
++}
++
++// Three rows (centres 17 / 51 / 85), the first one lifted and dragged down:
++// the pinned rows' midpoint rule on the pointer.
++TEST(ArcSpaceManageTest, InsertIndexFollowsThePointerAgainstTheLiveLayout) {
++  // At rest and until the pointer passes the next row's centre.
++  EXPECT_EQ(0u, SpaceManageInsertIndex(17, 3, 0));
++  EXPECT_EQ(0u, SpaceManageInsertIndex(51, 3, 0));
++  EXPECT_EQ(1u, SpaceManageInsertIndex(52, 3, 0));
++  // A fixpoint: once the rows have yielded (gap at 1) the answer holds.
++  EXPECT_EQ(1u, SpaceManageInsertIndex(52, 3, 1));
++  // The last slot is one point past the last row's centre, and everything
++  // below the list still means "last" (probe 2026-09-17: a centre clamped
++  // to the list never got there).
++  EXPECT_EQ(1u, SpaceManageInsertIndex(85, 3, 1));
++  EXPECT_EQ(2u, SpaceManageInsertIndex(86, 3, 1));
++  EXPECT_EQ(2u, SpaceManageInsertIndex(86, 3, 2));
++  EXPECT_EQ(2u, SpaceManageInsertIndex(400, 3, 2));
++  // And back up to the first slot, from the last.
++  EXPECT_EQ(1u, SpaceManageInsertIndex(50, 3, 2));
++  EXPECT_EQ(0u, SpaceManageInsertIndex(16, 3, 1));
++  EXPECT_EQ(0u, SpaceManageInsertIndex(-40, 3, 0));
++  // One row: nowhere to go.
++  EXPECT_EQ(0u, SpaceManageInsertIndex(300, 1, 0));
++  EXPECT_EQ(0u, SpaceManageInsertIndex(300, 0, 0));
++}
++
++// Coming back onto the sheet after the hole closed: the other two rows sit
++// closed up (centres 17 / 51), whatever slot the drag had before.
++TEST(ArcSpaceManageTest, InsertIndexWithNoSlotMeasuresTheClosedUpRows) {
++  EXPECT_EQ(0u, SpaceManageInsertIndex(17, 3, std::nullopt));
++  EXPECT_EQ(1u, SpaceManageInsertIndex(18, 3, std::nullopt));
++  EXPECT_EQ(1u, SpaceManageInsertIndex(51, 3, std::nullopt));
++  EXPECT_EQ(2u, SpaceManageInsertIndex(52, 3, std::nullopt));
++  EXPECT_EQ(0u, SpaceManageInsertIndex(300, 1, std::nullopt));
++}
++
++TEST(ArcSpaceManageTest, CancelRestoresTheOrderTheSheetOpenedWith) {
++  using Ids = std::vector<std::string>;
++  // Untouched, and a plain reorder.
++  EXPECT_EQ((Ids{"a", "b", "c"}),
++            SpaceManageRestoredOrder({"a", "b", "c"}, {"a", "b", "c"}));
++  EXPECT_EQ((Ids{"a", "b", "c"}),
++            SpaceManageRestoredOrder({"a", "b", "c"}, {"c", "a", "b"}));
++  // Another window deleted one and added one meanwhile: the survivors go
++  // back in their old order, the newcomer stays after them.
++  EXPECT_EQ((Ids{"a", "c", "n"}),
++            SpaceManageRestoredOrder({"a", "b", "c"}, {"n", "c", "a"}));
++  EXPECT_EQ((Ids{"n"}), SpaceManageRestoredOrder({"a"}, {"n"}));
++  EXPECT_TRUE(SpaceManageRestoredOrder({"a"}, {}).empty());
++}
++
++TEST(ArcSpaceManageTest, DegenerateSizesNeverGoNegative) {
++  const SpaceManageLayout l = ComputeSpaceManageLayout(gfx::Size(), 0);
++  EXPECT_GE(l.list.width(), 0);
++  EXPECT_GE(l.list.height(), 0);
++  EXPECT_EQ(0, l.list.height());
++  EXPECT_GE(l.done.y(), 0);
++  EXPECT_GE(l.done.width(), 0);
++  EXPECT_GE(l.cancel.y(), 0);
++  EXPECT_GE(l.new_space_row.width(), 0);
++  const SpaceManageRowLayout r = ComputeSpaceManageRowLayout(0);
++  EXPECT_GE(r.name.width(), 0);
++  EXPECT_GE(r.menu.x(), 0);
++  EXPECT_GE(r.handle.x(), 0);
++  const SpaceManageLayout narrow = ComputeSpaceManageLayout(gfx::Size(20, 40), 5);
++  EXPECT_GE(narrow.list.width(), 0);
++  EXPECT_TRUE(narrow.scrolls);
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+@@ -8,6 +8,7 @@
+ #include <set>
+ #include <string>
+ 
++#include "base/scoped_observation.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/test/task_environment.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+@@ -874,6 +875,76 @@
+   EXPECT_THAT(SpaceShape(*service_), ElementsAre(c, kDefaultSpaceId, b, a));
+ }
+ 
++// M6 轮2 2b: the Manage Spaces sheet's drag hands MoveSpace the slot among
++// the *other* spaces (the moved one already removed) -- the contract the
++// sheet's RowInsertIndex answers in -- and leans on these edges.
++class SpacesChangedCounter : public WorkspaceService::Observer {
++ public:
++  explicit SpacesChangedCounter(WorkspaceService* service) {
++    observation_.Observe(service);
++  }
++  int count() const { return count_; }
++  void OnWorkspaceSpacesChanged() override { ++count_; }
++
++ private:
++  int count_ = 0;
++  base::ScopedObservation<WorkspaceService, WorkspaceService::Observer>
++      observation_{this};
++};
++
++TEST_F(WorkspaceServiceTest, MoveSpaceClampsBeyondTheEnd) {
++  const std::string a = service_->AddSpace(u"A", "", kDefaultSpaceId);
++  const std::string b = service_->AddSpace(u"B", "", a);
++  ASSERT_THAT(SpaceShape(*service_), ElementsAre(kDefaultSpaceId, a, b));
++  ASSERT_TRUE(service_->MoveSpace(kDefaultSpaceId, 99));
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(a, b, kDefaultSpaceId));
++  // The last slot among the remaining two is exactly 2.
++  ASSERT_TRUE(service_->MoveSpace(a, 2));
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(b, kDefaultSpaceId, a));
++}
++
++TEST_F(WorkspaceServiceTest, MoveSpaceToItsOwnSlotKeepsTheOrder) {
++  const std::string a = service_->AddSpace(u"A", "", kDefaultSpaceId);
++  const std::string b = service_->AddSpace(u"B", "", a);
++  SpacesChangedCounter counter(service_.get());
++  ASSERT_TRUE(service_->MoveSpace(a, 1));
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(kDefaultSpaceId, a, b));
++  ASSERT_TRUE(service_->MoveSpace(kDefaultSpaceId, 0));
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(kDefaultSpaceId, a, b));
++  // Each call is one notification, order change or not.
++  EXPECT_EQ(2, counter.count());
++}
++
++TEST_F(WorkspaceServiceTest, MoveSpaceUnknownIdIsRefusedSilently) {
++  const std::string a = service_->AddSpace(u"A", "", kDefaultSpaceId);
++  SpacesChangedCounter counter(service_.get());
++  EXPECT_FALSE(service_->MoveSpace("no-such-space", 0));
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(kDefaultSpaceId, a));
++  EXPECT_EQ(0, counter.count());
++}
++
++TEST_F(WorkspaceServiceTest, MoveSpaceKeepsPositionsDenseAndPersists) {
++  const std::string a = service_->AddSpace(u"A", "", kDefaultSpaceId);
++  const std::string b = service_->AddSpace(u"B", "", a);
++  const std::string c = service_->AddSpace(u"C", "", b);
++  SpacesChangedCounter counter(service_.get());
++  ASSERT_TRUE(service_->MoveSpace(c, 0));
++  ASSERT_TRUE(service_->MoveSpace(kDefaultSpaceId, 3));
++  ASSERT_TRUE(service_->MoveSpace(b, 1));
++  EXPECT_EQ(3, counter.count());
++  EXPECT_THAT(SpaceShape(*service_), ElementsAre(c, b, a, kDefaultSpaceId));
++  for (size_t i = 0; i < service_->spaces().size(); ++i) {
++    EXPECT_EQ(static_cast<int>(i), service_->spaces()[i].position);
++  }
++  service_->Shutdown();
++
++  WorkspaceService reloaded(&prefs_, u"Personal");
++  EXPECT_THAT(SpaceShape(reloaded), ElementsAre(c, b, a, kDefaultSpaceId));
++  for (size_t i = 0; i < reloaded.spaces().size(); ++i) {
++    EXPECT_EQ(static_cast<int>(i), reloaded.spaces()[i].position);
++  }
++}
++
+ TEST_F(WorkspaceServiceTest, SpacesRoundTripThroughPrefs) {
+   const std::string work = service_->AddSpace(u"Work", "🎨", kDefaultSpaceId);
+   ASSERT_TRUE(service_->RenameSpace(work, u"Job"));
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -541,6 +541,16 @@
+   }
+ }
+ 
++void WorkspaceTabController::ShowManageSpacesFromMenu() {
++  if (BrowserView* const browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_window_)) {
++    if (VerticalTabStripRegionView* const region =
++            browser_view->vertical_tab_strip_region_view()) {
++      region->ShowSpaceManageSheet();
++    }
++  }
++}
++
+ void WorkspaceTabController::CreateSpaceFromForm(const std::u16string& name,
+                                                  const std::string& icon) {
+   if (!service_) {
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -179,6 +179,10 @@
+   // IDC_HELIUM_WS_NEW_SPACE and the sidebar menu's row: opens Arc's Create
+   // a Space form in the sidebar (M6 轮2, Arc 轮0 g2b/g2c and 轮2 g18).
+   void NewSpaceFromMenu();
++  // The space menu's Manage Spaces…: opens the Manage Spaces sheet in the
++  // sidebar, in the same slot (M6 轮2 2b; Arc's Library is not replicated,
++  // decisions 「M6 轮2」§1).
++  void ShowManageSpacesFromMenu();
+   // The form's Create Space: a space with |name| and |icon| inserted right
+   // of the current one and switched to (Arc g20 f_02016). An empty name
+   // gets the default one.
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -5,10 +5,12 @@
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ 
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "chrome/browser/ui/helium/arc_space_form.h"
+ #include "chrome/browser/ui/helium/arc_space_icon_picker.h"
+ #include "chrome/browser/ui/views/frame/helium_space_icon_picker_view.h"
+ #include "chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.h"
++#include "chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h"
+ 
+ #include <algorithm>
+ #include <optional>
+@@ -931,6 +933,13 @@
+   // slide (its label's subpixel text goes greyscale for those 180ms: a
+   // non-opaque layer cannot carry LCD text, label.cc). Set up before the
+   // strip starts so the first frame's transform reaches it too.
++  // M6 轮2 2b (reviewer 2026-09-16): no slide while a sheet is up -- the
++  // lists are hidden, OnCurrentSpaceWillChange took no snapshot, and a
++  // slide started here would still be mid-transform if the sheet closed
++  // within its 180ms (the close only snaps the two vertical layouts).
++  if (sheet_) {
++    return;
++  }
+   if (TabStripView* const strip = tab_strip_view()) {
+     if (const auto* controller = helium_workspace::WorkspaceTabController::From(
+             browser_view()->browser())) {
+@@ -1106,12 +1115,39 @@
+                           base::Unretained(this)),
+       base::BindRepeating(&VerticalTabStripRegionView::OnCreateFormPickIcon,
+                           base::Unretained(this)));
+-  create_form_ = form.get();
+-  ShowSidebarSheet(std::move(form));
++  // Assigned after the show: ShowSidebarSheet closes whatever sheet is up
++  // first, and CloseSidebarSheet clears both typed pointers -- assigning
++  // before it left |create_form_| null under a live form when the Manage
++  // sheet's "+ New Space" swapped to it (reviewer 2026-09-16).
++  HeliumSpaceCreateFormView* const raw = form.get();
++  ShowSidebarSheet(std::move(form), SidebarSheetKind::kCreateForm);
++  create_form_ = raw;
++}
++
++void VerticalTabStripRegionView::ShowSpaceManageSheet() {
++  if (manage_view_) {
++    return;
++  }
++  auto sheet = std::make_unique<HeliumSpaceManageView>(
++      browser_view()->browser(),
++      base::BindRepeating(&VerticalTabStripRegionView::OnManageSheetDone,
++                          base::Unretained(this)),
++      base::BindRepeating(&VerticalTabStripRegionView::OnManageSheetNewSpace,
++                          base::Unretained(this)),
++      base::BindRepeating(&VerticalTabStripRegionView::OnManageSheetCommand,
++                          base::Unretained(this)),
++      base::BindRepeating(&VerticalTabStripRegionView::OnManageSheetPickIcon,
++                          base::Unretained(this)));
++  // Same order as ShowSpaceCreateForm: the show closes the previous sheet
++  // (a Create form, from the bar icon's menu) and that clears the pointers.
++  HeliumSpaceManageView* const raw = sheet.get();
++  ShowSidebarSheet(std::move(sheet), SidebarSheetKind::kManage);
++  manage_view_ = raw;
+ }
+ 
+ void VerticalTabStripRegionView::ShowSidebarSheet(
+-    std::unique_ptr<views::View> sheet) {
++    std::unique_ptr<views::View> sheet,
++    SidebarSheetKind kind) {
+   CloseSidebarSheet();
+   // Right after the address row, before the tab strip: the flex layout
+   // runs children in order, and the sheet takes all the height the hidden
+@@ -1127,7 +1163,7 @@
+       views::kFlexBehaviorKey,
+       views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
+                                views::MaximumFlexSizeRule::kUnbounded));
+-  ApplySheetVisibility(/*sheet_shown=*/true);
++  ApplySheetVisibility(kind);
+   InvalidateLayout();
+ }
+ 
+@@ -1141,12 +1177,14 @@
+   views::View* const sheet = sheet_;
+   sheet_ = nullptr;
+   create_form_ = nullptr;
++  manage_view_ = nullptr;
+   RemoveChildViewT(sheet);
+-  ApplySheetVisibility(/*sheet_shown=*/false);
++  ApplySheetVisibility(SidebarSheetKind::kNone);
+   InvalidateLayout();
+ }
+ 
+-void VerticalTabStripRegionView::ApplySheetVisibility(bool sheet_shown) {
++void VerticalTabStripRegionView::ApplySheetVisibility(SidebarSheetKind kind) {
++  const bool sheet_shown = kind != SidebarSheetKind::kNone;
+   // Arc g18: everything below the top row goes -- the address row, the
+   // favorites, the head row, the lists, New Tab -- and the bar changes
+   // shape. SetVisible rather than a cover: an invisible child is neither
+@@ -1170,7 +1208,13 @@
+     undo_bar_->Dismiss();
+   }
+   if (space_bar_) {
+-    space_bar_->SetFormMode(sheet_shown);
++    // The Create form gets the pending space's dot; Manage does not.
++    space_bar_->SetFormMode(
++        kind == SidebarSheetKind::kCreateForm
++            ? WorkspaceSpaceBarView::FormMode::kCreate
++            : kind == SidebarSheetKind::kManage
++                  ? WorkspaceSpaceBarView::FormMode::kManage
++                  : WorkspaceSpaceBarView::FormMode::kNone);
+   }
+   UpdateMediaStripVisibility();
+   if (shown && tab_strip_view()) {
+@@ -1210,6 +1254,84 @@
+   CloseSidebarSheet();
+ }
+ 
++void VerticalTabStripRegionView::OnManageSheetDone() {
++  CloseSidebarSheet();
++}
++
++void VerticalTabStripRegionView::OnManageSheetNewSpace() {
++  // In place: ShowSidebarSheet closes the Manage sheet first. From the
++  // sheet's own button callback, like the form's Cancel above.
++  ShowSpaceCreateForm();
++}
++
++void VerticalTabStripRegionView::OnManageSheetCommand(
++    const std::string& space_id,
++    WorkspaceSpaceMenuCommand command) {
++  // Deferred: this arrives from the sheet's menu model inside its
++  // ExecuteCommand, and closing the sheet destroys that model. The
++  // arguments are copied into the task.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(&VerticalTabStripRegionView::RunManageSheetCommand,
++                     sheet_weak_factory_.GetWeakPtr(), space_id, command));
++}
++
++void VerticalTabStripRegionView::RunManageSheetCommand(
++    const std::string& space_id,
++    WorkspaceSpaceMenuCommand command) {
++  // Rename / New Folder / Delete act on the sidebar underneath (the head
++  // row's field, the current space's list, the undo bar -- all suppressed
++  // while a sheet is up), so the sheet goes first; then the command runs
++  // exactly as from the bar icon's own menu.
++  CloseSidebarSheet();
++  if (space_bar_) {
++    space_bar_->RunSpaceMenuCommand(space_id, command);
++  }
++}
++
++void VerticalTabStripRegionView::OnManageSheetPickIcon(
++    views::View* anchor,
++    const std::string& space_id,
++    const std::string& current_icon) {
++  BrowserView* const view = browser_view();
++  if (!view || !anchor || !anchor->parent() || !manage_view_) {
++    return;
++  }
++  const gfx::Rect anchor_in_view =
++      views::View::ConvertRectToTarget(anchor, view, anchor->GetLocalBounds());
++  const gfx::Rect row_in_view = views::View::ConvertRectToTarget(
++      anchor->parent(), view, anchor->parent()->GetLocalBounds());
++  const gfx::Rect region_in_view =
++      views::View::ConvertRectToTarget(this, view, GetLocalBounds());
++  // The head row's placement (Arc g21b): the card's top 17 below the row's
++  // bottom, its tail at the icon, its left 13 in from the sidebar's edge.
++  view->ShowHeliumSpaceIconPicker(
++      anchor_in_view, helium::SpaceIconPickerPlacement::kBelowAnchor,
++      row_in_view.bottom() + helium::kSpaceIconPickerGapBelowHeadRow,
++      region_in_view.x(), current_icon,
++      base::BindRepeating(&VerticalTabStripRegionView::OnManageSheetIconPicked,
++                          sheet_weak_factory_.GetWeakPtr(), space_id),
++      base::BindRepeating(&VerticalTabStripRegionView::OnManageSheetPickerClosed,
++                          sheet_weak_factory_.GetWeakPtr()));
++}
++
++void VerticalTabStripRegionView::OnManageSheetIconPicked(
++    const std::string& space_id,
++    const std::string& icon) {
++  if (manage_view_) {
++    manage_view_->OnIconPicked(space_id, icon);
++  }
++}
++
++void VerticalTabStripRegionView::OnManageSheetPickerClosed() {
++  // Dismissed without a pick: the picker cleared the focus on its way out
++  // (never advanced -- advancing lands on the page); the sheet takes it
++  // back so Escape and Return keep working.
++  if (manage_view_) {
++    manage_view_->RequestFocus();
++  }
++}
++
+ void VerticalTabStripRegionView::OnCreateFormPickIcon(views::View* anchor,
+                                                       const std::string& icon) {
+   BrowserView* const view = browser_view();
+@@ -1962,6 +2084,16 @@
+     if (HeliumSidebarMenuView* const menu = browser_view()->helium_sidebar_menu()) {
+       menu->HideForSidebarFold();
+     }
++    // M6 轮2 2b (reviewer 2026-09-16): the space icon picker is the same
++    // kind of BrowserView child -- opened from a head row, the Create form
++    // or a Manage row, it too stood over the page after Cmd+S. Plain Hide:
++    // it has no fold leg of its own.
++    browser_view()->HideHeliumSpaceIconPicker();
++  }
++  // 2b-r1: a Manage row in the air flies over the page like those two; the
++  // sheet itself folds with the sidebar and stays up.
++  if (collapsed && manage_view_) {
++    manage_view_->AbortDrag();
+   }
+ 
+   UpdateResizeAreaVisibility();
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -42,6 +42,8 @@
+ class VerticalTabStripBottomContainer;
+ class HeliumCardShadowView;
+ class HeliumSpaceCreateFormView;
++class HeliumSpaceManageView;
++enum class WorkspaceSpaceMenuCommand;
+ class HeliumViewSnapshotLayer;
+ class WorkspaceEntryDragOverlay;
+ class ShadowFrameView;
+@@ -100,6 +102,9 @@
+   // the top row stays (⛔ ←/→/⟳) and the bottom bar changes shape.
+   // CloseSidebarSheet puts everything back.
+   void ShowSpaceCreateForm();
++  // M6 轮2 2b: the Manage Spaces sheet (helium/arc_space_manage.h) in the
++  // same slot -- one row per space, dragged by its handle to reorder.
++  void ShowSpaceManageSheet();
+   void CloseSidebarSheet();
+   bool HasSidebarSheet() const { return sheet_ != nullptr; }
+   // Whether the space carousel is mid-slide (an anchor taken through
+@@ -347,6 +352,7 @@
+   // M6 轮2: the sheet in the lists' place, and the form when it is one.
+   raw_ptr<views::View> sheet_ = nullptr;
+   raw_ptr<HeliumSpaceCreateFormView> create_form_ = nullptr;
++  raw_ptr<HeliumSpaceManageView> manage_view_ = nullptr;
+   raw_ptr<HeliumMediaStripView> media_strip_ = nullptr;
+   raw_ptr<HeliumMediaStripExpandedView> media_strip_panel_ = nullptr;
+   // The strip's and the panel's floating-card shadows: sibling
+@@ -397,9 +403,25 @@
+ 
+   void OnMediaStripModelChanged();
+   void UpdateMediaStripVisibility();
+-  // M6 轮2: the sheet slot (see ShowSpaceCreateForm).
+-  void ShowSidebarSheet(std::unique_ptr<views::View> sheet);
+-  void ApplySheetVisibility(bool sheet_shown);
++  // M6 轮2: the sheet slot (see ShowSpaceCreateForm). The kind tells the
++  // bottom bar which shape to take (WorkspaceSpaceBarView::FormMode).
++  enum class SidebarSheetKind { kNone, kCreateForm, kManage };
++  void ShowSidebarSheet(std::unique_ptr<views::View> sheet,
++                        SidebarSheetKind kind);
++  void ApplySheetVisibility(SidebarSheetKind kind);
++  // M6 轮2 2b: the Manage Spaces sheet's callbacks.
++  void OnManageSheetDone();
++  void OnManageSheetNewSpace();
++  void OnManageSheetCommand(const std::string& space_id,
++                            WorkspaceSpaceMenuCommand command);
++  void RunManageSheetCommand(const std::string& space_id,
++                             WorkspaceSpaceMenuCommand command);
++  void OnManageSheetPickIcon(views::View* anchor,
++                             const std::string& space_id,
++                             const std::string& current_icon);
++  void OnManageSheetIconPicked(const std::string& space_id,
++                               const std::string& icon);
++  void OnManageSheetPickerClosed();
+   void OnCreateFormCreate(const std::u16string& name, const std::string& icon);
+   void OnCreateFormCancel();
+   void OnCreateFormPickIcon(views::View* anchor, const std::string& icon);
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -648,6 +648,15 @@
+   StartSpaceIconPick(space_id);
+ }
+ 
++void WorkspaceSidebarView::OnManageSpacesRequested() {
++  // The controller reaches the region's sheet slot the same way New Space
++  // does (M6 轮2 2b).
++  if (auto* controller =
++          helium_workspace::WorkspaceTabController::From(GetBrowserWindow())) {
++    controller->ShowManageSpacesFromMenu();
++  }
++}
++
+ void WorkspaceSidebarView::StartSpaceIconPick(const std::string& space_id) {
+   pending_icon_pick_space_id_ = space_id;
+   RefreshCurrentSpaceId();
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -277,6 +277,7 @@
+   void OnSpaceNewFolderRequested(const std::string& space_id) override;
+   void OnSpaceDeleteRequested(const std::string& space_id) override;
+   void OnSpaceChangeIconRequested(const std::string& space_id) override;
++  void OnManageSpacesRequested() override;
+ 
+   // Same deal as StartFolderRename for the space head row: now if the head
+   // already shows |space_id| (NewSpaceFromMenu switches first), else on the
+Index: src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
+@@ -471,7 +471,7 @@
+       delegate_->OnSpaceChangeIconRequested(space_id_);
+       break;
+     case WorkspaceSpaceMenuCommand::kManageSpaces:
+-      // Not in the model yet: wired in M6 轮2 2b.
++      delegate_->OnManageSpacesRequested();
+       break;
+   }
+ }
+Index: src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.h
+@@ -71,6 +71,9 @@
+     // The menu's Change Space Icon…: the delegate opens the picker at this
+     // row's icon slot (M6 轮2).
+     virtual void OnSpaceChangeIconRequested(const std::string& space_id) = 0;
++    // The menu's Manage Spaces…: the delegate opens the Manage Spaces sheet
++    // in the sidebar (M6 轮2 2b).
++    virtual void OnManageSpacesRequested() = 0;
+ 
+    protected:
+     virtual ~Delegate() = default;
+Index: src/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.cc
+@@ -8,11 +8,12 @@
+ 
+ #include "chrome/grit/generated_resources.h"
+ 
+-WorkspaceSpaceMenuModel::WorkspaceSpaceMenuModel(CommandCallback on_command)
++WorkspaceSpaceMenuModel::WorkspaceSpaceMenuModel(CommandCallback on_command,
++                                                 Host host)
+     : ui::SimpleMenuModel(this), on_command_(std::move(on_command)) {
+   // Arc 轮0 g3 / 轮2 g21b's order with the items we have: Change Space
+-  // Icon… / Rename Space… | New Folder | Delete Space. Manage Spaces… gets
+-  // its own group before Delete in 2b.
++  // Icon… / Rename Space… | New Folder | Manage Spaces… | Delete Space
++  // (Manage Spaces… in a group of its own before Delete, M6 轮2 2b).
+   AddItemWithStringId(static_cast<int>(WorkspaceSpaceMenuCommand::kChangeIcon),
+                       IDS_HELIUM_WS_SPACE_MENU_CHANGE_ICON);
+   AddItemWithStringId(static_cast<int>(WorkspaceSpaceMenuCommand::kRename),
+@@ -21,6 +22,12 @@
+   AddItemWithStringId(static_cast<int>(WorkspaceSpaceMenuCommand::kNewFolder),
+                       IDS_HELIUM_WS_NEW_FOLDER);
+   AddSeparator(ui::NORMAL_SEPARATOR);
++  if (host == Host::kSpaceRow) {
++    AddItemWithStringId(
++        static_cast<int>(WorkspaceSpaceMenuCommand::kManageSpaces),
++        IDS_HELIUM_WS_SPACE_MENU_MANAGE);
++    AddSeparator(ui::NORMAL_SEPARATOR);
++  }
+   AddItemWithStringId(static_cast<int>(WorkspaceSpaceMenuCommand::kDelete),
+                       IDS_HELIUM_WS_SPACE_MENU_DELETE);
+ }
+Index: src/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.h
+@@ -30,7 +30,13 @@
+   using CommandCallback =
+       base::RepeatingCallback<void(WorkspaceSpaceMenuCommand)>;
+ 
+-  explicit WorkspaceSpaceMenuModel(CommandCallback on_command);
++  // Who shows the menu. A space row (the head row, the bar icon) gets the
++  // whole menu; the Manage Spaces sheet's rows leave out Manage Spaces…
++  // (M6 轮2 2b) -- it is where the user already is.
++  enum class Host { kSpaceRow, kManageSheet };
++
++  explicit WorkspaceSpaceMenuModel(CommandCallback on_command,
++                                   Host host = Host::kSpaceRow);
+   WorkspaceSpaceMenuModel(const WorkspaceSpaceMenuModel&) = delete;
+   WorkspaceSpaceMenuModel& operator=(const WorkspaceSpaceMenuModel&) = delete;
+   ~WorkspaceSpaceMenuModel() override;
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
+@@ -0,0 +1,1239 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h"
++
++#include <algorithm>
++#include <memory>
++#include <utility>
++#include <vector>
++
++#include "base/auto_reset.h"
++#include "base/check_op.h"
++#include "base/functional/bind.h"
++#include "base/numerics/safe_conversions.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/sequenced_task_runner.h"
++#include "cc/paint/paint_flags.h"
++#include "chrome/app/vector_icons/vector_icons.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
++#include "chrome/browser/ui/helium/arc_space_form.h"
++#include "chrome/browser/ui/helium/arc_space_manage.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
++#include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h"
++#include "chrome/grit/generated_resources.h"
++#include "ui/accessibility/ax_enums.mojom.h"
++#include "ui/base/cursor/cursor.h"
++#include "ui/base/cursor/mojom/cursor_type.mojom.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/base/models/image_model.h"
++#include "ui/base/mojom/menu_source_type.mojom.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/compositor/layer.h"
++#include "ui/events/event.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/font_list.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/transform.h"
++#include "ui/gfx/vector_icon_types.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/animation/ink_drop.h"
++#include "ui/views/context_menu_controller.h"
++#include "ui/views/controls/button/button.h"
++#include "ui/views/controls/button/image_button.h"
++#include "ui/views/controls/button/image_button_factory.h"
++#include "ui/views/controls/button/label_button.h"
++#include "ui/views/controls/image_view.h"
++#include "ui/views/controls/label.h"
++#include "ui/views/controls/menu/menu_runner.h"
++#include "ui/views/controls/scroll_view.h"
++#include "ui/views/style/typography.h"
++#include "ui/views/widget/widget.h"
++
++namespace {
++
++gfx::FontList FontOfSize(int size, gfx::Font::Weight weight) {
++  return gfx::FontList()
++      .DeriveWithSizeDelta(size - gfx::FontList().GetFontSize())
++      .DeriveWithWeight(weight);
++}
++
++// The hovered-row capsule: the head row's recipe (workspace_space_head_row_
++// view.cc), instant like every sidebar hover. Under the native material the
++// toolbar colour is not a pixel colour, so that branch paints an overlay.
++SkColor HoverFillFor(const views::View* view, const ui::ColorProvider* colors) {
++  const SkColor sidebar = colors->GetColor(kColorToolbar);
++  return helium::ShouldUseNativeFrameMaterials(view)
++             ? helium::GetSidebarHoverSurfaceOverlay(sidebar)
++             : helium::GetSidebarHoverSurfaceColor(sidebar);
++}
++
++int CornerRadius() {
++  return GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius);
++}
++
++}  // namespace
++
++// ---------------------------------------------------------------------------
++// Row: one space. Icon slot (emoji / vector glyph / 8pt dot), the name, the
++// "···" under the pointer, the drag handle at the right edge. The same class
++// is the floating card (MakeGhost), so the card is the row to the pixel.
++
++class HeliumSpaceManageView::Row : public views::View,
++                                   public views::ContextMenuController {
++  METADATA_HEADER(Row, views::View)
++
++ public:
++  explicit Row(HeliumSpaceManageView* sheet) : sheet_(sheet) {
++    SetNotifyEnterExitOnChild(true);
++    GetViewAccessibility().SetRole(ax::mojom::Role::kListItem);
++
++    icon_label_ = AddChildView(std::make_unique<views::Label>());
++    icon_label_->SetCanProcessEventsWithinSubtree(false);
++    icon_label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
++    icon_label_->SetAutoColorReadabilityEnabled(false);
++    // ⛔ The list's contents sit on a non-opaque layer (composited scrolling)
++    // and the floating card gets one of its own: a Label DCHECKs subpixel
++    // text there (label.cc). An emoji has none to lose; the name below is
++    // set the same way.
++    icon_label_->SetSubpixelRenderingEnabled(false);
++    icon_label_->SetFontList(icon_label_->font_list().DeriveWithSizeDelta(
++        helium::kSpaceManageGlyphSize - icon_label_->font_list().GetFontSize()));
++    // The slot is laid out wider than the glyph size (Layout); never "…".
++    icon_label_->SetElideBehavior(gfx::NO_ELIDE);
++
++    icon_image_ = AddChildView(std::make_unique<views::ImageView>());
++    icon_image_->SetCanProcessEventsWithinSubtree(false);
++    icon_image_->SetVisible(false);
++
++    name_ = AddChildView(std::make_unique<views::Label>(
++        std::u16string(), views::style::CONTEXT_LABEL,
++        views::style::STYLE_PRIMARY));
++    name_->SetCanProcessEventsWithinSubtree(false);
++    name_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    name_->SetElideBehavior(gfx::ELIDE_TAIL);
++    name_->SetAutoColorReadabilityEnabled(false);
++    name_->SetSkipSubpixelRenderingOpacityCheck(true);
++    name_->SetSubpixelRenderingEnabled(false);
++
++    auto menu_button = views::CreateVectorImageButtonWithNativeTheme(
++        base::BindRepeating(&Row::OnMenuPressed, base::Unretained(this)),
++        kMoreVertIcon, helium::kSpaceManageGlyphSize);
++    menu_button->SetTooltipText(
++        l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_MENU_BUTTON));
++    menu_button->GetViewAccessibility().SetName(
++        l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_MENU_BUTTON));
++    menu_button->SetVisible(false);
++    menu_button_ = AddChildView(std::move(menu_button));
++
++    // The handle is a picture: the press lands on the row, which drags from
++    // anywhere; the glyph only says so (and turns the pointer into a hand).
++    handle_ = AddChildView(std::make_unique<views::ImageView>());
++    handle_->SetCanProcessEventsWithinSubtree(false);
++    handle_->SetImage(ui::ImageModel::FromVectorIcon(
++        kHeliumDragHandleIcon, ui::kColorLabelForegroundSecondary,
++        helium::kSpaceManageGlyphSize));
++    handle_->GetViewAccessibility().SetName(
++        l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_MANAGE_HANDLE));
++
++    // The row's right-click is the same menu as its "···" (the head row's
++    // and the bar icon's contract). ⛔ Only rows carry a controller, never
++    // the sheet or the list (M4-r2: a controller on a sidebar container
++    // replaces the window menu on its blank).
++    set_context_menu_controller(this);
++  }
++  Row(const Row&) = delete;
++  Row& operator=(const Row&) = delete;
++  ~Row() override = default;
++
++  // The floating card: this row's picture on the card's fill, inert.
++  void MakeGhost() {
++    ghost_ = true;
++    SetCanProcessEventsWithinSubtree(false);
++    set_context_menu_controller(nullptr);
++    GetViewAccessibility().SetIsIgnored(true);
++    GetViewAccessibility().SetIsLeaf(true);
++  }
++
++  const std::string& space_id() const { return space_id_; }
++  views::View* icon_anchor() { return icon_label_; }
++  base::WeakPtr<Row> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
++
++  void SetSpace(const helium_workspace::WorkspaceSpace& space) {
++    space_id_ = space.id;
++    if (icon_ != space.icon) {
++      icon_ = space.icon;
++      if (helium_workspace::IsVectorIconRef(icon_)) {
++        const gfx::VectorIcon* vector = FindSpaceVectorIcon(
++            helium_workspace::VectorIconRefName(icon_));
++        icon_image_->SetImage(
++            vector ? ui::ImageModel::FromVectorIcon(
++                         *vector, ui::kColorLabelForegroundSecondary,
++                         helium::kSpaceManageGlyphSize)
++                   : ui::ImageModel());
++        icon_label_->SetText(std::u16string());
++      } else {
++        icon_image_->SetImage(ui::ImageModel());
++        icon_label_->SetText(base::UTF8ToUTF16(icon_));
++      }
++      icon_image_->SetVisible(helium_workspace::IsVectorIconRef(icon_));
++      icon_label_->SetVisible(!icon_.empty() &&
++                              !helium_workspace::IsVectorIconRef(icon_));
++      SchedulePaint();
++    }
++    if (name_->GetText() != space.name) {
++      name_->SetText(space.name);
++      // ⛔ An empty accessible name aborts under DCHECKs; a space with no
++      // name reads as the default one.
++      GetViewAccessibility().SetName(
++          space.name.empty()
++              ? l10n_util::GetStringUTF16(IDS_HELIUM_WS_NEW_SPACE_DEFAULT_NAME)
++              : space.name);
++    }
++  }
++
++  // The sheet's hooks around a drag. While its card is in the air the row
++  // paints nothing, but stays where it is, a visible child of the list: it
++  // is RootView's pressed handler, and hiding or reparenting it would drop
++  // the rest of the gesture.
++  void SetAway(bool away) {
++    if (away_ == away) {
++      return;
++    }
++    away_ = away;
++    // No exit arrives during the press: the "···" a hover had shown must go
++    // now (reviewer 2026-09-16).
++    UpdateMenuButtonVisibility();
++    SchedulePaint();
++  }
++  // The sheet ended the gesture from outside (Escape, a settle): what is
++  // left of the press is not a drag any more.
++  void Disarm() { armed_ = false; }
++  // After a drag the rows have moved under a pointer that sent no exits.
++  // Only ever clears (M3.11-r1): lighting is the synthesized move's job.
++  void ClearStaleHover() {
++    if (hovered_ && !IsMouseHovered()) {
++      hovered_ = false;
++      UpdateMenuButtonVisibility();
++      SchedulePaint();
++    }
++  }
++
++  void SetMenuOpen(bool open) {
++    if (menu_open_ == open) {
++      return;
++    }
++    menu_open_ = open;
++    UpdateMenuButtonVisibility();
++    SchedulePaint();
++  }
++
++  // views::View:
++  void Layout(PassKey) override {
++    const helium::SpaceManageRowLayout l =
++        helium::ComputeSpaceManageRowLayout(width());
++    gfx::Rect emoji = l.icon;
++    emoji.Outset(helium::kSpaceManageEmojiSlop);
++    icon_label_->SetBoundsRect(emoji);
++    icon_image_->SetBoundsRect(l.icon);
++    name_->SetBoundsRect(l.name);
++    menu_button_->SetBoundsRect(l.menu);
++    handle_->SetBoundsRect(l.handle);
++  }
++
++  void PaintChildren(const views::PaintInfo& info) override {
++    if (!away_) {
++      views::View::PaintChildren(info);
++    }
++  }
++
++  void OnPaint(gfx::Canvas* canvas) override {
++    views::View::OnPaint(canvas);
++    const ui::ColorProvider* colors = GetColorProvider();
++    if (!colors || away_) {
++      return;
++    }
++    if (ghost_) {
++      // In the air: the floating card every sidebar card wears when it
++      // leaves its row (the undo bar, the picker, the dragged entry).
++      cc::PaintFlags fill;
++      fill.setStyle(cc::PaintFlags::kFill_Style);
++      fill.setAntiAlias(true);
++      fill.setColor(helium::GetSidebarFloatingCardColor(
++          colors->GetColor(kColorToolbar)));
++      canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), CornerRadius(), fill);
++    } else if (hovered_ || menu_open_) {
++      cc::PaintFlags fill;
++      fill.setStyle(cc::PaintFlags::kFill_Style);
++      fill.setAntiAlias(true);
++      fill.setColor(HoverFillFor(this, colors));
++      canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), CornerRadius(), fill);
++    }
++    if (icon_.empty()) {
++      // No icon: the bar's 8pt dot, centred in the slot.
++      const helium::SpaceManageRowLayout l =
++          helium::ComputeSpaceManageRowLayout(width());
++      cc::PaintFlags dot;
++      dot.setStyle(cc::PaintFlags::kFill_Style);
++      dot.setAntiAlias(true);
++      dot.setColor(colors->GetColor(ui::kColorLabelForegroundSecondary));
++      canvas->DrawCircle(gfx::PointF(l.icon.CenterPoint()),
++                         helium::kSpaceManageDotSize / 2.0f, dot);
++    }
++  }
++
++  void OnMouseEntered(const ui::MouseEvent& event) override {
++    hovered_ = true;
++    UpdateMenuButtonVisibility();
++    SchedulePaint();
++  }
++
++  void OnMouseExited(const ui::MouseEvent& event) override {
++    // An exit is final (T042): with SetNotifyEnterExitOnChild the only
++    // exits that arrive are RootView's own.
++    hovered_ = false;
++    UpdateMenuButtonVisibility();
++    SchedulePaint();
++  }
++
++  bool OnMousePressed(const ui::MouseEvent& event) override {
++    if (!event.IsOnlyLeftMouseButton()) {
++      return false;
++    }
++    // Anywhere on the row, like a pinned row (user 2026-09-17); the "···"
++    // is a child button and takes its own presses. Claiming the press makes
++    // this row RootView's handler for the drag and the release that follow,
++    // wherever the pointer goes. A press that never moves does nothing.
++    press_ = event.location();
++    armed_ = true;
++    return true;
++  }
++
++  bool OnMouseDragged(const ui::MouseEvent& event) override {
++    if (!armed_) {
++      return false;
++    }
++    // Row coordinates throughout: the row does not move while it is away.
++    if (!away_) {
++      if (!views::View::ExceededDragThreshold(event.location() - press_)) {
++        return true;
++      }
++      sheet_->BeginRowDrag(this, press_, event.location());
++      return true;
++    }
++    sheet_->UpdateRowDrag(event.location());
++    return true;
++  }
++
++  void OnMouseReleased(const ui::MouseEvent& event) override {
++    if (!armed_) {
++      return;
++    }
++    armed_ = false;
++    if (away_) {
++      // The sheet may write to the service from here; it copies what it
++      // needs first and this row touches nothing afterwards.
++      sheet_->EndRowDrag(/*commit=*/true);
++    }
++  }
++
++  void OnMouseCaptureLost() override {
++    if (!armed_) {
++      return;
++    }
++    armed_ = false;
++    if (away_) {
++      sheet_->EndRowDrag(/*commit=*/false);
++    }
++  }
++
++  ui::Cursor GetCursor(const ui::MouseEvent& event) override {
++    // Arc g23: a hand over the handle, a closed hand while the card flies.
++    if (away_) {
++      return ui::Cursor(ui::mojom::CursorType::kGrabbing);
++    }
++    const helium::SpaceManageRowLayout l =
++        helium::ComputeSpaceManageRowLayout(width());
++    if (l.handle_hit.Contains(event.location())) {
++      return ui::Cursor(ui::mojom::CursorType::kGrab);
++    }
++    return views::View::GetCursor(event);
++  }
++
++  // views::ContextMenuController:
++  void ShowContextMenuForViewImpl(
++      views::View* source,
++      const gfx::Point& point,
++      ui::mojom::MenuSourceType source_type) override {
++    if (away_) {
++      return;
++    }
++    sheet_->ShowRowMenu(this, gfx::Rect(point, gfx::Size()),
++                        views::MenuRunner::HAS_MNEMONICS |
++                            views::MenuRunner::CONTEXT_MENU,
++                        source_type);
++  }
++
++ private:
++  void OnMenuPressed() {
++    if (away_) {
++      return;
++    }
++    sheet_->ShowRowMenu(this, menu_button_->GetBoundsInScreen(),
++                        views::MenuRunner::HAS_MNEMONICS,
++                        ui::mojom::MenuSourceType::kMouse);
++  }
++
++  void UpdateMenuButtonVisibility() {
++    // Arc: the "···" exists only under the pointer (and while its menu is
++    // up); never while the row is in the air, never on the card.
++    menu_button_->SetVisible((hovered_ || menu_open_) && !away_ && !ghost_);
++  }
++
++  const raw_ptr<HeliumSpaceManageView> sheet_;
++  std::string space_id_;
++  std::string icon_;
++  raw_ptr<views::Label> icon_label_ = nullptr;
++  raw_ptr<views::ImageView> icon_image_ = nullptr;
++  raw_ptr<views::Label> name_ = nullptr;
++  raw_ptr<views::ImageButton> menu_button_ = nullptr;
++  raw_ptr<views::ImageView> handle_ = nullptr;
++  bool hovered_ = false;
++  bool menu_open_ = false;
++  bool ghost_ = false;
++  bool away_ = false;
++  // Between a press on the row and its release.
++  bool armed_ = false;
++  // Where the button went down, in this row's coordinates.
++  gfx::Point press_;
++  base::WeakPtrFactory<Row> weak_factory_{this};
++};
++
++BEGIN_METADATA(HeliumSpaceManageView, Row)
++END_METADATA
++
++// ---------------------------------------------------------------------------
++// RowList: the ScrollView's contents. Its layout is the sheet's
++// PositionRows(), so a size change mid-drag keeps the gap.
++
++class HeliumSpaceManageView::RowList : public views::View {
++  METADATA_HEADER(RowList, views::View)
++
++ public:
++  explicit RowList(HeliumSpaceManageView* sheet) : sheet_(sheet) {}
++  RowList(const RowList&) = delete;
++  RowList& operator=(const RowList&) = delete;
++  ~RowList() override = default;
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override {
++    // The width is the viewport's (the ScrollView has no horizontal bar);
++    // the height is the rows', which is what the ScrollView scrolls.
++    const int width =
++        available_size.width().is_bounded() ? available_size.width().value()
++                                            : 0;
++    return gfx::Size(width, static_cast<int>(sheet_->rows_.size()) *
++                                helium::kSpaceManageRowHeight);
++  }
++  void Layout(PassKey) override { sheet_->PositionRows(); }
++
++ private:
++  const raw_ptr<HeliumSpaceManageView> sheet_;
++};
++
++BEGIN_METADATA(HeliumSpaceManageView, RowList)
++END_METADATA
++
++// ---------------------------------------------------------------------------
++// "+ New Space": a row-shaped button under the list.
++
++class HeliumSpaceManageView::NewSpaceRow : public views::Button {
++  METADATA_HEADER(NewSpaceRow, views::Button)
++
++ public:
++  explicit NewSpaceRow(PressedCallback callback)
++      : views::Button(std::move(callback)) {
++    SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
++    GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
++    GetViewAccessibility().SetName(
++        l10n_util::GetStringUTF16(IDS_HELIUM_WS_NEW_SPACE));
++    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
++
++    plus_ = AddChildView(std::make_unique<views::ImageView>());
++    plus_->SetCanProcessEventsWithinSubtree(false);
++    plus_->SetImage(ui::ImageModel::FromVectorIcon(
++        kAddIcon, ui::kColorLabelForegroundSecondary,
++        helium::kSpaceManageGlyphSize));
++
++    label_ = AddChildView(std::make_unique<views::Label>(
++        l10n_util::GetStringUTF16(IDS_HELIUM_WS_NEW_SPACE),
++        views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY));
++    label_->SetCanProcessEventsWithinSubtree(false);
++    label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
++    label_->SetElideBehavior(gfx::ELIDE_TAIL);
++    label_->SetAutoColorReadabilityEnabled(false);
++    label_->SetSkipSubpixelRenderingOpacityCheck(true);
++    label_->SetSubpixelRenderingEnabled(false);
++  }
++  NewSpaceRow(const NewSpaceRow&) = delete;
++  NewSpaceRow& operator=(const NewSpaceRow&) = delete;
++  ~NewSpaceRow() override = default;
++
++  // views::Button:
++  void Layout(PassKey) override {
++    const helium::SpaceManageRowLayout l =
++        helium::ComputeSpaceManageRowLayout(width());
++    plus_->SetBoundsRect(l.icon);
++    // The label may run to the row's end: this row has no "···" or handle.
++    label_->SetBounds(l.name.x(), 0,
++                      std::max(width() - l.name.x() - helium::kSpaceManageGlyphGap,
++                               0),
++                      height());
++  }
++
++  void PaintButtonContents(gfx::Canvas* canvas) override {
++    const ui::ColorProvider* colors = GetColorProvider();
++    if (!colors) {
++      return;
++    }
++    if (GetState() == STATE_HOVERED || GetState() == STATE_PRESSED) {
++      cc::PaintFlags fill;
++      fill.setStyle(cc::PaintFlags::kFill_Style);
++      fill.setAntiAlias(true);
++      fill.setColor(HoverFillFor(this, colors));
++      canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), CornerRadius(), fill);
++    }
++  }
++
++ private:
++  raw_ptr<views::ImageView> plus_ = nullptr;
++  raw_ptr<views::Label> label_ = nullptr;
++};
++
++BEGIN_METADATA(HeliumSpaceManageView, NewSpaceRow)
++END_METADATA
++
++// ---------------------------------------------------------------------------
++// The footer is the Create form's (user 2026-09-17; the two classes there
++// are private to helium_space_create_form_view.cc). "Done": its "Create
++// Space" capsule -- Arc's (32,42,254), white text, the shell's radius --
++// never disabled here.
++
++class HeliumSpaceManageView::DoneButton : public views::Button {
++  METADATA_HEADER(DoneButton, views::Button)
++
++ public:
++  explicit DoneButton(PressedCallback callback)
++      : views::Button(std::move(callback)) {
++    GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
++    GetViewAccessibility().SetName(
++        l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_MANAGE_DONE));
++    font_ = FontOfSize(helium::kSpaceManageDoneFontSize,
++                       gfx::Font::Weight::SEMIBOLD);
++  }
++  DoneButton(const DoneButton&) = delete;
++  DoneButton& operator=(const DoneButton&) = delete;
++  ~DoneButton() override = default;
++
++  // views::Button:
++  void PaintButtonContents(gfx::Canvas* canvas) override {
++    cc::PaintFlags fill;
++    fill.setStyle(cc::PaintFlags::kFill_Style);
++    fill.setAntiAlias(true);
++    fill.setColor(SkColorSetRGB(helium::kSpaceFormCreateR,
++                                helium::kSpaceFormCreateG,
++                                helium::kSpaceFormCreateB));
++    canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), CornerRadius(), fill);
++    canvas->DrawStringRectWithFlags(
++        l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_MANAGE_DONE), font_,
++        SK_ColorWHITE, GetLocalBounds(), gfx::Canvas::TEXT_ALIGN_CENTER);
++  }
++
++ private:
++  gfx::FontList font_;
++};
++
++BEGIN_METADATA(HeliumSpaceManageView, DoneButton)
++END_METADATA
++
++// "Cancel": the form's Cancel -- plain 12pt text, no border, no ink drop. A
++// LabelButton subclass only because the label's font is a protected reach.
++
++class HeliumSpaceManageView::CancelButton : public views::LabelButton {
++  METADATA_HEADER(CancelButton, views::LabelButton)
++
++ public:
++  explicit CancelButton(PressedCallback callback)
++      : views::LabelButton(
++            std::move(callback),
++            l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_FORM_CANCEL)) {
++    SetBorder(nullptr);
++    SetHorizontalAlignment(gfx::ALIGN_CENTER);
++    SetLabelStyle(views::style::STYLE_SECONDARY);
++    label()->SetFontList(FontOfSize(helium::kSpaceManageCancelFontSize,
++                                    gfx::Font::Weight::SEMIBOLD));
++    label()->SetSkipSubpixelRenderingOpacityCheck(true);
++    label()->SetSubpixelRenderingEnabled(false);
++    views::InkDrop::Get(this)->SetMode(views::InkDropHost::InkDropMode::OFF);
++  }
++  CancelButton(const CancelButton&) = delete;
++  CancelButton& operator=(const CancelButton&) = delete;
++  ~CancelButton() override = default;
++};
++
++BEGIN_METADATA(HeliumSpaceManageView, CancelButton)
++END_METADATA
++
++// ---------------------------------------------------------------------------
++
++HeliumSpaceManageView::HeliumSpaceManageView(BrowserWindowInterface* browser,
++                                             base::RepeatingClosure on_close,
++                                             base::RepeatingClosure on_new_space,
++                                             CommandCallback on_command,
++                                             PickIconCallback on_pick_icon)
++    : views::AnimationDelegateViews(this),
++      browser_(browser),
++      on_close_(std::move(on_close)),
++      on_new_space_(std::move(on_new_space)),
++      on_command_(std::move(on_command)),
++      on_pick_icon_(std::move(on_pick_icon)) {
++  DCHECK_EQ(helium::kSpaceManageRowHeight,
++            GetLayoutConstant(LayoutConstant::kVerticalTabHeight));
++
++  title_ = AddChildView(std::make_unique<views::Label>(
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_MANAGE_TITLE)));
++  title_->SetFontList(FontOfSize(helium::kSpaceManageTitleFontSize,
++                                 gfx::Font::Weight::BOLD));
++  title_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
++  title_->SetAutoColorReadabilityEnabled(false);
++  title_->SetSkipSubpixelRenderingOpacityCheck(true);
++  title_->SetSubpixelRenderingEnabled(false);
++
++  // The rows scroll when there are more than fit (no auto-scroll while
++  // dragging this round). ⛔ The viewport owns a layer that masks to bounds
++  // (composited scrolling is on by default on macOS): anything that has to
++  // be seen past the list -- the floating card, its shadow -- cannot live in
++  // here (user 2026-09-17: the shadow was cut off at the row's own edges).
++  auto scroll = std::make_unique<views::ScrollView>();
++  // Default is the dialog background; the rows sit on the sidebar.
++  scroll->SetBackgroundColor(std::nullopt);
++  scroll->SetHorizontalScrollBarMode(views::ScrollView::ScrollBarMode::kDisabled);
++  scroll->SetVerticalScrollBarMode(
++      views::ScrollView::ScrollBarMode::kHiddenButEnabled);
++  scroll->SetDrawOverflowIndicator(false);
++  // ⛔ Off by default: without it the ScrollView keeps the contents at their
++  // own size (never set here, so the viewport's), the rows past the viewport
++  // cannot be scrolled to and RowList::CalculatePreferredSize is dead code
++  // (reviewer 2026-09-17; probe managescroll: 19 of 24 rows, wheel inert).
++  scroll->SetUseContentsPreferredSize(true);
++  auto row_list = std::make_unique<RowList>(this);
++  row_list_ = row_list.get();
++  scroll->SetContents(std::move(row_list));
++  scroll_ = AddChildView(std::move(scroll));
++
++  new_space_ = AddChildView(std::make_unique<NewSpaceRow>(base::BindRepeating(
++      &HeliumSpaceManageView::OnNewSpacePressed, base::Unretained(this))));
++  done_ = AddChildView(std::make_unique<DoneButton>(base::BindRepeating(
++      &HeliumSpaceManageView::OnDonePressed, base::Unretained(this))));
++  cancel_ = AddChildView(std::make_unique<CancelButton>(base::BindRepeating(
++      &HeliumSpaceManageView::OnCancelPressed, base::Unretained(this))));
++
++  // The floating card and its shadow, last so they paint above the rest
++  // (shadow first: layered siblings paint in child order). The pinned rows'
++  // pair lives on the region for the same reason these live out here: every
++  // layer below masks to bounds. Hidden until a row lifts, and layerless
++  // too (M3.10-r1: no resting layers) -- the shadow view is born with one,
++  // so it goes here and comes back for the flight, as the pinned overlay
++  // does with its own (reviewer 2026-09-17).
++  shadow_ = AddChildView(std::make_unique<HeliumCardShadowView>());
++  shadow_->SetShadowCornerRadius(CornerRadius());
++  shadow_->SetVisible(false);
++  shadow_->DestroyLayer();
++  ghost_ = AddChildView(std::make_unique<Row>(this));
++  ghost_->MakeGhost();
++  ghost_->SetVisible(false);
++
++  // The pinned rows' motion (arc_sidebar_surface.h, fitted to Dia).
++  yield_animation_.SetSlideDuration(helium::kSidebarDragYieldDuration);
++  yield_animation_.SetTweenType(helium::kSidebarDragYieldTween);
++  settle_animation_.SetSlideDuration(helium::kSidebarDragSettleDuration);
++  settle_animation_.SetTweenType(helium::kSidebarDragSettleTween);
++
++  GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
++  GetViewAccessibility().SetName(
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_SPACE_MANAGE_TITLE));
++  // The sheet holds the focus while it is up, so Escape and Return reach
++  // OnKeyPressed (an accelerator alone is not enough once the focus is in
++  // the page -- pitfalls 「M6 轮2 2a」#3); nothing inside it is focusable.
++  SetFocusBehavior(FocusBehavior::ALWAYS);
++}
++
++HeliumSpaceManageView::~HeliumSpaceManageView() = default;
++
++void HeliumSpaceManageView::OnIconPicked(const std::string& space_id,
++                                         const std::string& icon) {
++  if (service_) {
++    service_->SetSpaceIcon(space_id, icon);
++  }
++  RequestFocus();
++}
++
++void HeliumSpaceManageView::Layout(PassKey) {
++  const helium::SpaceManageLayout l =
++      helium::ComputeSpaceManageLayout(size(), rows_.size());
++  title_->SetBoundsRect(l.title);
++  scroll_->SetBoundsRect(l.list);
++  new_space_->SetBoundsRect(l.new_space_row);
++  done_->SetBoundsRect(l.done);
++  cancel_->SetBoundsRect(l.cancel);
++  // The card and its shadow are not laid out: SetCardRect places them.
++}
++
++void HeliumSpaceManageView::OnThemeChanged() {
++  views::View::OnThemeChanged();
++  const ui::ColorProvider* colors = GetColorProvider();
++  if (!colors) {
++    return;
++  }
++  title_->SetEnabledColor(colors->GetColor(ui::kColorLabelForeground));
++  SchedulePaint();
++}
++
++bool HeliumSpaceManageView::AcceleratorPressed(
++    const ui::Accelerator& accelerator) {
++  if (accelerator.key_code() != ui::VKEY_ESCAPE) {
++    return false;
++  }
++  // Mid-drag, Escape flies the row home (and while a card is already
++  // gliding it does nothing); otherwise it is Cancel, like the form's.
++  if (gesture_) {
++    EndRowDrag(/*commit=*/false);
++  } else {
++    OnCancelPressed();
++  }
++  return true;
++}
++
++bool HeliumSpaceManageView::OnKeyPressed(const ui::KeyEvent& event) {
++  if (event.key_code() == ui::VKEY_ESCAPE) {
++    if (gesture_) {
++      EndRowDrag(/*commit=*/false);
++    } else {
++      OnCancelPressed();
++    }
++    return true;
++  }
++  if (event.key_code() == ui::VKEY_RETURN) {
++    // Return is Done; swallowed while a row is in the air.
++    if (!gesture_) {
++      OnDonePressed();
++    }
++    return true;
++  }
++  return false;
++}
++
++void HeliumSpaceManageView::AddedToWidget() {
++  views::View::AddedToWidget();
++  service_ = helium_workspace::WorkspaceServiceFactory::GetForProfile(
++      browser_->GetProfile());
++  opened_with_.clear();
++  if (service_) {
++    service_observation_.Observe(service_);
++    // What Cancel goes back to: everything this sheet can change.
++    for (const helium_workspace::WorkspaceSpace& space : service_->spaces()) {
++      opened_with_.push_back({space.id, space.icon});
++    }
++  }
++  Rebuild();
++  // Escape cancels (the sheet, or the drag) wherever the focus is.
++  AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
++  RequestFocus();
++}
++
++void HeliumSpaceManageView::RemovedFromWidget() {
++  FinishRowDrag();
++  service_observation_.Reset();
++  service_ = nullptr;
++  views::View::RemovedFromWidget();
++}
++
++void HeliumSpaceManageView::OnWorkspaceSpacesChanged() {
++  if (suppress_rebuild_) {
++    rebuild_pending_ = true;
++    return;
++  }
++  Sync();
++}
++
++void HeliumSpaceManageView::Sync() {
++  rebuild_pending_ = false;
++  if (!service_) {
++    return;
++  }
++  const std::vector<helium_workspace::WorkspaceSpace>& spaces =
++      service_->spaces();
++  bool same_order = spaces.size() == rows_.size();
++  for (size_t i = 0; same_order && i < spaces.size(); ++i) {
++    same_order = rows_[i]->space_id() == spaces[i].id;
++  }
++  if (same_order) {
++    // A rename, an icon change, a collapse: the rows stay, and so does a
++    // drag in progress -- whose card is that row's picture too.
++    for (size_t i = 0; i < spaces.size(); ++i) {
++      rows_[i]->SetSpace(spaces[i]);
++      if (gesture_ && gesture_->row == rows_[i]) {
++        ghost_->SetSpace(spaces[i]);
++      }
++    }
++    return;
++  }
++  // Something else changed the list (another window added, removed or
++  // reordered a space): the gesture's indices mean nothing any more, and
++  // its row is about to be deleted -- no glide, end it here.
++  FinishRowDrag();
++  Rebuild();
++}
++
++void HeliumSpaceManageView::Rebuild() {
++  DCHECK(!gesture_);
++  // The tween's snapshot is parallel to the rows being replaced.
++  yield_animation_.Reset(0.0);
++  yield_from_y_.clear();
++  for (Row* row : rows_) {
++    row_list_->RemoveChildViewT(row);
++  }
++  rows_.clear();
++  if (service_) {
++    for (const helium_workspace::WorkspaceSpace& space : service_->spaces()) {
++      Row* row = row_list_->AddChildView(std::make_unique<Row>(this));
++      row->SetSpace(space);
++      rows_.push_back(row);
++    }
++  }
++  // The only layout invalidation on this path: the row count changed, so
++  // the viewport, "+ New Space" and the scroll extent move.
++  PositionRows();
++  InvalidateLayout();
++}
++
++int HeliumSpaceManageView::TargetRowY(size_t k) const {
++  const int h = helium::kSpaceManageRowHeight;
++  if (!gesture_ || gesture_->settling) {
++    // Settling: rows_ is already in its final order, the lifted row's slot
++    // included -- the card is gliding to exactly this.
++    return static_cast<int>(k) * h;
++  }
++  // Mid-drag: the other rows fill every slot but the insert slot, in order
++  // (closed up when there is none). The lifted row is not shown; it waits
++  // where it was.
++  const size_t from = gesture_->from_index;
++  if (k == from) {
++    return static_cast<int>(from) * h;
++  }
++  const size_t remaining = k < from ? k : k - 1;
++  const std::optional<size_t>& insert = gesture_->insert_index;
++  const size_t slot = !insert || remaining < *insert ? remaining : remaining + 1;
++  return static_cast<int>(slot) * h;
++}
++
++void HeliumSpaceManageView::PositionRows() {
++  const int w = row_list_->width();
++  const int h = helium::kSpaceManageRowHeight;
++  const bool gliding = yield_animation_.is_animating() &&
++                       yield_from_y_.size() == rows_.size();
++  const double t = gliding ? yield_animation_.GetCurrentValue() : 1.0;
++  for (size_t k = 0; k < rows_.size(); ++k) {
++    int y = TargetRowY(k);
++    // The lifted row snaps: its motion belongs to the card, not the rows.
++    if (gliding && !(gesture_ && gesture_->row == rows_[k])) {
++      y = yield_from_y_[k] + base::ClampRound((y - yield_from_y_[k]) * t);
++    }
++    rows_[k]->SetBoundsRect(gfx::Rect(0, y, w, h));
++  }
++}
++
++void HeliumSpaceManageView::RetargetYield() {
++  // What is on screen *before* the plan flips (M3.10-r1), then one glide to
++  // the new targets -- the pinned rows' RetargetDragYield.
++  yield_from_y_.clear();
++  yield_from_y_.reserve(rows_.size());
++  for (Row* row : rows_) {
++    yield_from_y_.push_back(row->y());
++  }
++  yield_animation_.Reset(0.0);
++  yield_animation_.Show();
++}
++
++void HeliumSpaceManageView::AnimationProgressed(
++    const gfx::Animation* animation) {
++  if (animation == &yield_animation_) {
++    // ⛔ Positions only, never InvalidateLayout(): views invalidates up, and
++    // a per-frame invalidation re-lays-out the whole window (M3.11 轮3-r4).
++    PositionRows();
++    return;
++  }
++  if (animation == &settle_animation_ && gesture_) {
++    const double t = settle_animation_.GetCurrentValue();
++    SetCardRect(gfx::Rect(
++        settle_from_.x() + base::ClampRound((settle_to_.x() - settle_from_.x()) * t),
++        settle_from_.y() + base::ClampRound((settle_to_.y() - settle_from_.y()) * t),
++        settle_to_.width(), settle_to_.height()));
++  }
++}
++
++void HeliumSpaceManageView::AnimationEnded(const gfx::Animation* animation) {
++  if (animation == &yield_animation_) {
++    PositionRows();
++    return;
++  }
++  if (animation == &settle_animation_) {
++    FinishRowDrag();
++  }
++}
++
++void HeliumSpaceManageView::BeginRowDrag(Row* row,
++                                         const gfx::Point& press,
++                                         const gfx::Point& point) {
++  // Not while the previous card is still gliding home.
++  if (gesture_ || !service_) {
++    return;
++  }
++  const auto it = std::find(rows_.begin(), rows_.end(), row);
++  const helium_workspace::WorkspaceSpace* const space =
++      service_->FindSpaceById(row->space_id());
++  if (it == rows_.end() || !space || row->size().IsEmpty()) {
++    return;
++  }
++  const size_t from = static_cast<size_t>(it - rows_.begin());
++  // The session opens with the hole in the row's own slot: picking a row up
++  // changes nothing but the row itself floating (Dia). The grip is where the
++  // press landed, not where the threshold was crossed (probe 2026-09-17), so
++  // the card's first frame catches up with the pointer.
++  gesture_ = Gesture{
++      row, row->space_id(), from, from,
++      gfx::Vector2dF(static_cast<float>(press.x()) / row->width(),
++                     static_cast<float>(press.y()) / row->height())};
++  row->SetAway(true);
++  ghost_->SetSpace(*space);
++  // Size through bounds once, position through the transform from here on
++  // (SetCardRect). A layer only while in the air, non-opaque so the sidebar
++  // shows through the card's corners.
++  ghost_->SetBoundsRect(gfx::Rect(row->size()));
++  ghost_->SetPaintToLayer();
++  ghost_->layer()->SetFillsBoundsOpaquely(false);
++  ghost_->SetVisible(true);
++  const int radius = CornerRadius();
++  shadow_->SetShadowCornerRadius(radius);
++  shadow_->SetPaintToLayer();
++  shadow_->layer()->SetFillsBoundsOpaquely(false);
++  shadow_->SetVisible(
++      helium::CanShowCardShadow(row->width(), row->height(), radius));
++  UpdateRowDrag(point);
++}
++
++void HeliumSpaceManageView::UpdateRowDrag(const gfx::Point& point) {
++  if (!gesture_ || gesture_->settling) {
++    return;
++  }
++  Gesture& g = *gesture_;
++  gfx::Point in_sheet = point;
++  views::View::ConvertPointToTarget(g.row, this, &in_sheet);
++  // ⛔ The per-frame path: one transform on the card, one on its shadow.
++  // Nothing here invalidates a layout.
++  SetCardRect(gfx::Rect(
++      in_sheet.x() - base::ClampRound(g.grab.x() * ghost_->width()),
++      in_sheet.y() - base::ClampRound(g.grab.y() * ghost_->height()),
++      ghost_->width(), ghost_->height()));
++  // The slot, by the pinned rows' rule: the pointer against the rows where
++  // they are drawn -- and none at all once the pointer leaves the sheet.
++  std::optional<size_t> slot;
++  if (GetLocalBounds().Contains(in_sheet)) {
++    gfx::Point in_list = point;
++    // Through the ScrollView: the list's coordinates carry the scroll offset.
++    views::View::ConvertPointToTarget(g.row, row_list_, &in_list);
++    // Only rows on screen can be passed: beyond the viewport's ends (over
++    // "+ New Space", the footer, the title) the pointer reads as just past
++    // the last row showing, not as deep into the rows scrolled out of sight.
++    // With everything showing this changes nothing.
++    int y = in_list.y();
++    if (const gfx::Rect visible = row_list_->GetVisibleBounds();
++        !visible.IsEmpty()) {
++      y = std::clamp(y, visible.y() - 1, visible.bottom());
++    }
++    slot = helium::SpaceManageInsertIndex(y, rows_.size(), g.insert_index);
++  }
++  if (slot != g.insert_index) {
++    RetargetYield();
++    g.insert_index = slot;
++  }
++}
++
++void HeliumSpaceManageView::EndRowDrag(bool commit) {
++  if (!gesture_ || gesture_->settling) {
++    return;
++  }
++  Gesture& g = *gesture_;
++  g.row->Disarm();
++  // Let the rows glide from wherever the preview left them to the final
++  // order: after a drop they are already there, after a cancel it is the
++  // fold-back.
++  RetargetYield();
++  g.settling = true;
++  const bool moved =
++      commit && g.insert_index && *g.insert_index != g.from_index;
++  // Copies first: the service write below re-enters this view.
++  const std::string space_id = g.space_id;
++  const size_t target = moved ? *g.insert_index : g.from_index;
++  if (moved) {
++    // The order the service is about to have; the snapshot above is per
++    // row, so it moves with them.
++    Row* const row = g.row;
++    const int row_from_y = yield_from_y_[g.from_index];
++    rows_.erase(rows_.begin() + static_cast<long>(g.from_index));
++    rows_.insert(rows_.begin() + static_cast<long>(target), row);
++    yield_from_y_.erase(yield_from_y_.begin() +
++                        static_cast<long>(g.from_index));
++    yield_from_y_.insert(yield_from_y_.begin() + static_cast<long>(target),
++                         row_from_y);
++  }
++  PositionRows();
++  // The card glides to the row's slot -- one motion for a drop and for a
++  // cancel (Dia measures the same curve for both).
++  settle_from_ = card_rect_;
++  settle_to_ = views::View::ConvertRectToTarget(
++      row_list_, this,
++      gfx::Rect(0, static_cast<int>(target) * helium::kSpaceManageRowHeight,
++                ghost_->width(), ghost_->height()));
++  if (moved && service_) {
++    // Our own change: the synchronous notification must not rebuild the
++    // rows under the releasing Row's frame. They already sit in the new
++    // order; the deferred Sync() re-syncs them in place.
++    {
++      base::AutoReset<bool> suppress(&suppress_rebuild_, true);
++      service_->MoveSpace(space_id, target);
++    }
++    if (rebuild_pending_) {
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, base::BindOnce(&HeliumSpaceManageView::Sync,
++                                    weak_factory_.GetWeakPtr()));
++    }
++  }
++  if (!gesture_) {
++    return;  // The write came back as a different list and ended it.
++  }
++  if (settle_from_ == settle_to_) {
++    FinishRowDrag();
++    return;
++  }
++  settle_animation_.Reset(0.0);
++  settle_animation_.Show();
++}
++
++void HeliumSpaceManageView::FinishRowDrag() {
++  if (!gesture_) {
++    return;
++  }
++  // Taken down first: the resets below may call back into this view.
++  Row* const row = gesture_->row;
++  gesture_.reset();
++  settle_animation_.Reset(0.0);
++  yield_animation_.Reset(0.0);
++  yield_from_y_.clear();
++  row->Disarm();
++  row->SetAway(false);
++  // Identity first, then the layer goes: SetTransform is what holds a layer
++  // for the transform, and DestroyLayer should not race it.
++  ghost_->SetTransform(gfx::Transform());
++  ghost_->DestroyLayer();
++  ghost_->SetVisible(false);
++  shadow_->SetVisible(false);
++  shadow_->SetTransform(gfx::Transform());
++  shadow_->DestroyLayer();
++  card_rect_ = gfx::Rect();
++  PositionRows();
++  // The rows moved under a pointer that sent no exits. One turn later, not
++  // from inside whatever frame ended the gesture (a Row's release, a
++  // removal): the resync dispatches a mouse event of its own.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&HeliumSpaceManageView::ResyncHover,
++                                weak_factory_.GetWeakPtr()));
++}
++
++void HeliumSpaceManageView::ResyncHover() {
++  // The pinned rows' ResyncHoverFromCursor: clear what is stale, then one
++  // synthesized move lights whatever the pointer *is* on.
++  for (Row* row : rows_) {
++    row->ClearStaleHover();
++  }
++  if (views::Widget* const widget = GetWidget()) {
++    widget->SynthesizeMouseMoveEvent();
++  }
++}
++
++void HeliumSpaceManageView::SetCardRect(const gfx::Rect& rect) {
++  card_rect_ = rect;
++  ghost_->SetTransform(gfx::Transform::MakeTranslation(
++      static_cast<float>(rect.x()), static_cast<float>(rect.y())));
++  shadow_->SetCardBoundsByTransform(rect);
++  StackCardLayersOnTop();
++}
++
++void HeliumSpaceManageView::StackCardLayersOnTop() {
++  // The card has to clear everything it can be dragged over -- the bar, the
++  // media strip -- and those own layers later in the region's child order.
++  // ⛔ Only when the order is wrong (after the first frame it never is):
++  // every restack is a full layer-tree sync of the whole window
++  // (WorkspaceEntryDragOverlay::StackLayersOnTop, user 2026-08-25).
++  ui::Layer* const card = ghost_->layer();
++  ui::Layer* const shadow = shadow_->layer();
++  ui::Layer* const parent = card ? card->parent() : nullptr;
++  if (!parent || !shadow || shadow->parent() != parent) {
++    return;
++  }
++  const auto& children = parent->children();
++  const size_t n = children.size();
++  if (n >= 2 && children[n - 1] == card && children[n - 2] == shadow) {
++    return;
++  }
++  parent->StackAtTop(shadow);
++  parent->StackAtTop(card);
++}
++
++void HeliumSpaceManageView::RestoreOpenedState() {
++  if (!service_) {
++    return;
++  }
++  // Our own writes, and the sheet is on its way out: no rebuilds.
++  base::AutoReset<bool> suppress(&suppress_rebuild_, true);
++  std::vector<std::string> opened_ids;
++  for (const OpenedSpace& opened : opened_with_) {
++    opened_ids.push_back(opened.id);
++    const helium_workspace::WorkspaceSpace* const space =
++        service_->FindSpaceById(opened.id);
++    if (space && space->icon != opened.icon) {
++      service_->SetSpaceIcon(opened.id, opened.icon);
++    }
++  }
++  std::vector<std::string> current_ids;
++  for (const helium_workspace::WorkspaceSpace& space : service_->spaces()) {
++    current_ids.push_back(space.id);
++  }
++  const std::vector<std::string> order =
++      helium::SpaceManageRestoredOrder(opened_ids, current_ids);
++  // Front to back, each space to its own slot; untouched ones cost nothing.
++  for (size_t i = 0; i < order.size() && i < service_->spaces().size(); ++i) {
++    if (service_->spaces()[i].id != order[i]) {
++      service_->MoveSpace(order[i], i);
++    }
++  }
++}
++
++void HeliumSpaceManageView::ShowRowMenu(Row* row,
++                                        const gfx::Rect& anchor,
++                                        int run_types,
++                                        ui::mojom::MenuSourceType source_type) {
++  if (gesture_) {
++    return;
++  }
++  menu_space_id_ = row->space_id();
++  // The sheet's own copy of the menu: Manage Spaces… is where the user
++  // already is, so that item is left out (WorkspaceSpaceMenuModel::Host).
++  menu_model_ = std::make_unique<WorkspaceSpaceMenuModel>(
++      base::BindRepeating(&HeliumSpaceManageView::RunRowMenuCommand,
++                          base::Unretained(this)),
++      WorkspaceSpaceMenuModel::Host::kManageSheet);
++  menu_runner_ = std::make_unique<views::MenuRunner>(
++      menu_model_.get(), run_types,
++      base::BindRepeating(&HeliumSpaceManageView::OnRowMenuClosed,
++                          weak_factory_.GetWeakPtr()));
++  // The row keeps its capsule and "···" while the menu is up (T042 latch);
++  // held weakly, a re-sync may replace the rows under an open menu.
++  menu_row_ = row->GetWeakPtr();
++  row->SetMenuOpen(true);
++  const base::WeakPtr<HeliumSpaceManageView> alive = weak_factory_.GetWeakPtr();
++  menu_runner_->RunMenuAt(GetWidget(), nullptr, anchor,
++                          views::MenuAnchorPosition::kTopLeft, source_type);
++  // T042 M1: RunMenuAt's two early returns never call the closed callback.
++  if (!alive) {
++    return;
++  }
++  if (menu_row_ && !menu_runner_->IsRunning()) {
++    OnRowMenuClosed();
++  }
++}
++
++void HeliumSpaceManageView::RunRowMenuCommand(WorkspaceSpaceMenuCommand command) {
++  const std::string space_id = menu_space_id_;
++  switch (command) {
++    case WorkspaceSpaceMenuCommand::kChangeIcon: {
++      // The picker over this row's icon; the sheet stays up and the row
++      // re-syncs from the service when the pick lands.
++      Row* anchor_row = nullptr;
++      for (Row* row : rows_) {
++        if (row->space_id() == space_id) {
++          anchor_row = row;
++        }
++      }
++      if (anchor_row) {
++        const helium_workspace::WorkspaceSpace* space =
++            service_ ? service_->FindSpaceById(space_id) : nullptr;
++        on_pick_icon_.Run(anchor_row->icon_anchor(), space_id,
++                          space ? space->icon : std::string());
++      }
++      break;
++    }
++    case WorkspaceSpaceMenuCommand::kManageSpaces:
++      // Not in this host's model.
++      break;
++    case WorkspaceSpaceMenuCommand::kRename:
++    case WorkspaceSpaceMenuCommand::kNewFolder:
++    case WorkspaceSpaceMenuCommand::kDelete:
++      // These act on the sidebar underneath: the host closes this sheet
++      // first (deferred -- the menu model is mid-ExecuteCommand).
++      on_command_.Run(space_id, command);
++      break;
++  }
++}
++
++void HeliumSpaceManageView::OnRowMenuClosed() {
++  if (menu_row_) {
++    menu_row_->SetMenuOpen(false);
++  }
++  menu_row_ = nullptr;
++}
++
++void HeliumSpaceManageView::OnDonePressed() {
++  // A card still gliding has already been committed (or cancelled).
++  FinishRowDrag();
++  on_close_.Run();
++}
++
++void HeliumSpaceManageView::OnCancelPressed() {
++  FinishRowDrag();
++  // Nothing this sheet changed is kept (user 2026-09-17). The changes were
++  // live -- the bar followed every drop and every icon -- so they are put
++  // back rather than never written.
++  RestoreOpenedState();
++  on_close_.Run();
++}
++
++void HeliumSpaceManageView::OnNewSpacePressed() {
++  // Swapping to the Create form keeps what was done here, like Done.
++  FinishRowDrag();
++  on_new_space_.Run();
++}
++
++BEGIN_METADATA(HeliumSpaceManageView)
++END_METADATA
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h
+@@ -0,0 +1,258 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_SPACE_MANAGE_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_SPACE_MANAGE_VIEW_H_
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_observation.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_space_menu_model.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/animation/slide_animation.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/vector2d_f.h"
++#include "ui/views/animation/animation_delegate_views.h"
++#include "ui/views/view.h"
++
++class BrowserWindowInterface;
++class HeliumCardShadowView;
++
++namespace gfx {
++class Point;
++}  // namespace gfx
++
++namespace views {
++class Button;
++class Label;
++class MenuRunner;
++class ScrollView;
++}  // namespace views
++
++// helium-fork M6 轮2 2b: the "Manage Spaces" sheet (geometry in
++// helium/arc_space_manage.h). Arc's Manage Spaces… is its Library, a
++// whole-window overlay of one card per space with a drag handle at the
++// foot (decisions.md 「M6 轮2」§3 g23); the user's ruling (2026-09-04 §1) is
++// the minimal form in the sidebar's own sheet slot
++// (VerticalTabStripRegionView::ShowSidebarSheet): one 34pt row per space --
++// icon, name, "···" (the space menu), a drag handle -- which the user drags
++// to reorder. Release commits once through WorkspaceService::MoveSpace;
++// Arc's bottom bar then shows the new order, ours does the same the moment
++// the model changes.
++//
++// Below the rows: "+ New Space" (swaps this sheet for the Create form), then
++// the Create form's footer (user 2026-09-17): "Done", its capsule, keeps
++// what was changed; "Cancel", plain text under it, puts the order and the
++// icons back to what the sheet opened with. Return is Done, Escape is
++// Cancel -- or, mid-drag, cancels the drag.
++//
++// The drag feels like a pinned row's (user 2026-09-17; M3.11, constants in
++// arc_sidebar_surface.h): the whole row picks up, a floating card with the
++// full card shadow follows the pointer by its grab point wherever it goes,
++// the other rows glide aside (200ms) as the pointer crosses their centres,
++// leaving the sheet closes the hole and a release there is a cancel, and
++// the card glides into its slot -- or home -- over 140ms. The transport is
++// not the pinned rows' though: this is the row's own press / drag / release,
++// not a views DnD session -- nothing leaves this list, and the OS session's
++// ESC-vs-release ambiguity on macOS is not wanted here. The card is a second
++// Row outside the ScrollView (whose viewport layer would clip it and its
++// shadow); the pressed Row stays where it is, unpainted, because it is
++// RootView's pressed handler and must neither move parents nor hide.
++class HeliumSpaceManageView : public views::View,
++                              public views::AnimationDelegateViews,
++                              public helium_workspace::WorkspaceService::Observer {
++  METADATA_HEADER(HeliumSpaceManageView, views::View)
++
++ public:
++  // A row's "···" command other than Change Space Icon… (those the host runs
++  // after closing this sheet: they act on the sidebar underneath).
++  using CommandCallback =
++      base::RepeatingCallback<void(const std::string& space_id,
++                                   WorkspaceSpaceMenuCommand command)>;
++  // Change Space Icon…: |anchor| is the row's icon slot (the picker's tail
++  // points at it), |current_icon| the space's icon today; the host opens
++  // the picker and hands the pick to OnIconPicked.
++  using PickIconCallback =
++      base::RepeatingCallback<void(views::View* anchor,
++                                   const std::string& space_id,
++                                   const std::string& current_icon)>;
++
++  // |on_close| takes the sheet down (Done, and Cancel once it has put
++  // things back).
++  HeliumSpaceManageView(BrowserWindowInterface* browser,
++                        base::RepeatingClosure on_close,
++                        base::RepeatingClosure on_new_space,
++                        CommandCallback on_command,
++                        PickIconCallback on_pick_icon);
++  HeliumSpaceManageView(const HeliumSpaceManageView&) = delete;
++  HeliumSpaceManageView& operator=(const HeliumSpaceManageView&) = delete;
++  ~HeliumSpaceManageView() override;
++
++  // Whether a row is in the air (or gliding to its slot).
++  bool IsDragging() const { return gesture_.has_value(); }
++  // Ends a drag here and now, uncommitted unless it was already released:
++  // the sidebar is folding away under it (Cmd+S with the button still down
++  // removes nothing, so no RemovedFromWidget comes -- reviewer 2026-09-17).
++  void AbortDrag() { FinishRowDrag(); }
++
++  // The picker's answer for |space_id|: written to the service (the row
++  // re-syncs from there) and the focus comes back here -- the picker
++  // clears it on its way out and a pick runs no closed callback, so
++  // without this Return would no longer close the sheet (reviewer
++  // 2026-09-16).
++  void OnIconPicked(const std::string& space_id, const std::string& icon);
++
++  // views::View:
++  void Layout(PassKey) override;
++  void OnThemeChanged() override;
++  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
++  bool OnKeyPressed(const ui::KeyEvent& event) override;
++  void AddedToWidget() override;
++  void RemovedFromWidget() override;
++
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
++  // helium_workspace::WorkspaceService::Observer:
++  void OnWorkspaceSpacesChanged() override;
++
++ private:
++  class Row;
++  class RowList;
++  class NewSpaceRow;
++  class DoneButton;
++  class CancelButton;
++
++  // One drag, from the press that crossed the threshold to the card landing.
++  struct Gesture {
++    raw_ptr<Row> row;
++    std::string space_id;
++    size_t from_index;
++    // The slot the row would land in now: the number of *other* rows above
++    // it, i.e. MoveSpace's target index. None while the pointer is off the
++    // sheet -- the hole closes and a release there cancels (the pinned
++    // rows' contract).
++    std::optional<size_t> insert_index;
++    // Where in the row the button went down, as a fraction of its size: the
++    // card keeps that point under the pointer (taken at the press, not where
++    // the threshold was crossed -- probe 2026-09-17).
++    gfx::Vector2dF grab;
++    // Released (or cancelled): the rows are in their final order and the
++    // card is gliding to its slot. Nothing can change the outcome any more.
++    bool settling = false;
++  };
++
++  // What Cancel puts back.
++  struct OpenedSpace {
++    std::string id;
++    std::string icon;
++  };
++
++  // Rebuilds or re-syncs the rows from the service.
++  void Sync();
++  void Rebuild();
++  // Where rows_[k] belongs: compact, or -- mid-drag -- with a gap at the
++  // insert slot. The lifted row's own answer is its landing slot.
++  int TargetRowY(size_t k) const;
++  // Puts the rows where they are *shown*: their targets, or on the way
++  // there while the yield tween runs. Positions only -- never a layout
++  // invalidation (this runs per animation frame).
++  void PositionRows();
++  // Snapshots what is on screen, then glides to the new targets.
++  void RetargetYield();
++
++  // The drag, called by the Row that owns the press; points are in that
++  // row's coordinates. |press| is where the button went down.
++  void BeginRowDrag(Row* row, const gfx::Point& press, const gfx::Point& point);
++  void UpdateRowDrag(const gfx::Point& point);
++  // The release (|commit|) or a cancel: writes the move if there is one,
++  // then glides the card to the row's slot and finishes there.
++  void EndRowDrag(bool commit);
++  // Ends the gesture now, wherever the card is. Safe to call at any point
++  // and more than once.
++  void FinishRowDrag();
++  void ResyncHover();
++  // Moves the card (and its shadow) to |rect|, in this view's coordinates.
++  // ⛔ The per-pointer-frame path: two transforms, nothing else.
++  void SetCardRect(const gfx::Rect& rect);
++  void StackCardLayersOnTop();
++
++  // Cancel: the order and the icons go back to |opened_with_|.
++  void RestoreOpenedState();
++
++  // The row's "···" / right-click menu: one model and runner for the whole
++  // sheet (the bar's pattern), so a re-sync never destroys the runner's
++  // owner while the menu is up.
++  void ShowRowMenu(Row* row,
++                   const gfx::Rect& anchor,
++                   int run_types,
++                   ui::mojom::MenuSourceType source_type);
++  void RunRowMenuCommand(WorkspaceSpaceMenuCommand command);
++  void OnRowMenuClosed();
++
++  void OnDonePressed();
++  void OnCancelPressed();
++  void OnNewSpacePressed();
++
++  const raw_ptr<BrowserWindowInterface> browser_;
++  const base::RepeatingClosure on_close_;
++  const base::RepeatingClosure on_new_space_;
++  const CommandCallback on_command_;
++  const PickIconCallback on_pick_icon_;
++
++  raw_ptr<helium_workspace::WorkspaceService> service_ = nullptr;
++  base::ScopedObservation<helium_workspace::WorkspaceService,
++                          helium_workspace::WorkspaceService::Observer>
++      service_observation_{this};
++
++  raw_ptr<views::Label> title_ = nullptr;
++  raw_ptr<views::ScrollView> scroll_ = nullptr;
++  raw_ptr<RowList> row_list_ = nullptr;
++  std::vector<raw_ptr<Row>> rows_;
++  raw_ptr<NewSpaceRow> new_space_ = nullptr;
++  raw_ptr<views::Button> done_ = nullptr;
++  raw_ptr<views::Button> cancel_ = nullptr;
++  // The floating card and its shadow: this view's last two children (shadow
++  // first), outside the ScrollView so nothing clips them, hidden and -- the
++  // card -- layerless until a row lifts. Not laid out: SetCardRect places
++  // them.
++  raw_ptr<HeliumCardShadowView> shadow_ = nullptr;
++  raw_ptr<Row> ghost_ = nullptr;
++
++  std::optional<Gesture> gesture_;
++  // The card's rect in this view's coordinates (its bounds sit at the
++  // origin; the offset rides on the layer transform).
++  gfx::Rect card_rect_;
++  gfx::Rect settle_from_;
++  gfx::Rect settle_to_;
++  gfx::SlideAnimation settle_animation_{this};
++  // The yield: each row's y when the plan last changed, parallel to rows_.
++  std::vector<int> yield_from_y_;
++  gfx::SlideAnimation yield_animation_{this};
++
++  std::vector<OpenedSpace> opened_with_;
++  // Set around our own MoveSpace: the synchronous OnWorkspaceSpacesChanged
++  // it fires must not rebuild the rows while the releasing Row's frame is
++  // still on the stack. The rows already sit in the new order, so the
++  // deferred Sync() is a no-op re-sync.
++  bool suppress_rebuild_ = false;
++  bool rebuild_pending_ = false;
++
++  std::unique_ptr<WorkspaceSpaceMenuModel> menu_model_;
++  std::unique_ptr<views::MenuRunner> menu_runner_;
++  std::string menu_space_id_;
++  base::WeakPtr<Row> menu_row_;
++
++  base::WeakPtrFactory<HeliumSpaceManageView> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_HELIUM_SPACE_MANAGE_VIEW_H_
+Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
++++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
+@@ -370,13 +370,13 @@
+ 
+ WorkspaceSpaceBarView::~WorkspaceSpaceBarView() = default;
+ 
+-void WorkspaceSpaceBarView::SetFormMode(bool form_mode) {
+-  if (form_mode_ == form_mode) {
++void WorkspaceSpaceBarView::SetFormMode(FormMode mode) {
++  if (form_mode_ == mode) {
+     return;
+   }
+-  form_mode_ = form_mode;
++  form_mode_ = mode;
+   for (SpaceButton* button : buttons_) {
+-    button->SetDimmed(form_mode_);
++    button->SetDimmed(form_mode_ != FormMode::kNone);
+   }
+   InvalidateLayout();
+   SchedulePaint();
+@@ -412,27 +412,30 @@
+   // all of them (the 42pt collapsed width) shows what fits -- the current
+   // space first, see Rebuild.
+   const int menu_x = std::max(0, width() - kIconSlot);
+-  menu_button_->SetVisible(!form_mode_);
++  const bool sheet_up = form_mode_ != FormMode::kNone;
++  menu_button_->SetVisible(!sheet_up);
+   menu_button_->SetBounds(menu_x, 0, kIconSlot, kIconSlot);
+   // Form mode (Arc g18): no "⌄", the icons alone centred on the whole bar,
+   // the pending space's dot right after the current one (g23 put it at the
+-  // end once -- Arc's rule is unsettled, see decisions 「M6 轮2」§3).
+-  const int right_limit = form_mode_ ? width() : menu_x;
++  // end once -- Arc's rule is unsettled, see decisions 「M6 轮2」§3). The
++  // Manage sheet has nothing pending: no dot.
++  const bool pending_dot = form_mode_ == FormMode::kCreate;
++  const int right_limit = sheet_up ? width() : menu_x;
+   std::vector<views::View*> row;
+   const std::string current =
+       controller_ ? controller_->current_space_id() : std::string();
+   bool placed = false;
+   for (SpaceButton* button : buttons_) {
+     row.push_back(button);
+-    if (form_mode_ && !placed && button->space_id() == current) {
++    if (pending_dot && !placed && button->space_id() == current) {
+       row.push_back(placeholder_);
+       placed = true;
+     }
+   }
+-  if (form_mode_ && !placed) {
++  if (pending_dot && !placed) {
+     row.push_back(placeholder_);
+   }
+-  if (!form_mode_) {
++  if (!pending_dot) {
+     placeholder_->SetVisible(false);
+   }
+   const int group_width = static_cast<int>(row.size()) * kIconSlot;
+@@ -500,7 +503,7 @@
+         base::BindRepeating(&WorkspaceSpaceBarView::ShowSpaceMenu,
+                             base::Unretained(this))));
+     button->SetSpace(spaces[i], i);
+-    button->SetDimmed(form_mode_);
++    button->SetDimmed(form_mode_ != FormMode::kNone);
+     buttons_.push_back(button);
+   }
+   UpdateCurrent();
+@@ -609,7 +612,7 @@
+       ShowIconPickerForSpace(space_id);
+       break;
+     case WorkspaceSpaceMenuCommand::kManageSpaces:
+-      // Not in the model yet: wired in M6 轮2 2b.
++      controller_->ShowManageSpacesFromMenu();
+       break;
+   }
+ }
+Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
++++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
+@@ -77,10 +77,20 @@
+   // downloads button no longer shows anywhere -- user ruling 2026-09-02).
+   void SetDownloadIndicator(bool shown);
+ 
+-  // M6 轮2: the bar while the Create a Space form is up (Arc g18 f_00408):
+-  // no "⌄", the icons alone centred, every icon desaturated, and the
+-  // pending space's dot right after the current one.
+-  void SetFormMode(bool form_mode);
++  // M6 轮2: the bar while a sheet is up in the sidebar. The Create a Space
++  // form (Arc g18 f_00408): no "⌄", the icons alone centred, every icon
++  // desaturated, and the pending space's dot right after the current one.
++  // The Manage Spaces sheet (2b): the same, minus the dot -- nothing is
++  // pending, and the icons re-order live as rows are dragged.
++  enum class FormMode { kNone, kCreate, kManage };
++  void SetFormMode(FormMode mode);
++
++  // Runs one space-menu command for |space_id| the way the icon's own menu
++  // would (M6 轮2 2b: the Manage Spaces sheet's rows hand theirs here once
++  // the sheet has closed, so Rename / New Folder / Delete act on the
++  // sidebar underneath exactly as from the bar).
++  void RunSpaceMenuCommand(const std::string& space_id,
++                           WorkspaceSpaceMenuCommand command);
+ 
+   // views::View:
+   gfx::Size CalculatePreferredSize(
+@@ -109,8 +119,6 @@
+   void ShowSpaceMenu(const std::string& space_id,
+                      const gfx::Point& point,
+                      ui::mojom::MenuSourceType source_type);
+-  void RunSpaceMenuCommand(const std::string& space_id,
+-                           WorkspaceSpaceMenuCommand command);
+   // T053: the icon menu is gone -- drop the square it was keeping.
+   void OnSpaceMenuClosed();
+   // Change Space Icon… from the bar: the picker above |space_id|'s icon.
+@@ -127,7 +135,7 @@
+   std::vector<raw_ptr<SpaceButton>> buttons_;
+   raw_ptr<views::ImageButton> menu_button_ = nullptr;
+   raw_ptr<PlaceholderDot> placeholder_ = nullptr;
+-  bool form_mode_ = false;
++  FormMode form_mode_ = FormMode::kNone;
+   bool download_indicator_ = false;
+   std::unique_ptr<WorkspaceSpaceMenuModel> space_menu_model_;
+   std::unique_ptr<views::MenuRunner> space_menu_runner_;
