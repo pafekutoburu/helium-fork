@@ -1,0 +1,1710 @@
+Index: src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
+===================================================================
+--- src.orig/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
++++ src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
+@@ -634,8 +634,13 @@
+       service->entries();
+   for (const helium_workspace::WorkspaceOmniboxMatch& hit :
+        helium_workspace::MatchWorkspaceEntries(entries, input_text)) {
+-    candidates.push_back({.url = entries[hit.index].url,
+-                          .title = entries[hit.index].title});
++    const helium_workspace::WorkspaceEntry& entry = entries[hit.index];
++    // M6 轮3 3b: a renamed entry is listed under the name the user gave it,
++    // the one the sidebar shows (user 2026-09-22).
++    candidates.push_back(
++        {.url = entry.url,
++         .title = entry.custom_title.empty() ? entry.title
++                                             : entry.custom_title});
+   }
+   return candidates;
+ }
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -5874,6 +5874,8 @@
+     "helium/arc_card_layout_unittest.cc",
+     "helium/arc_composer.h",
+     "helium/arc_composer_unittest.cc",
++    "helium/arc_entry_label.h",
++    "helium/arc_entry_label_unittest.cc",
+     "helium/arc_entry_menu.h",
+     "helium/arc_entry_menu_unittest.cc",
+     "helium/arc_favorite_accent.h",
+Index: src/chrome/browser/ui/helium/arc_entry_label.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_entry_label.h
+@@ -0,0 +1,74 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_ENTRY_LABEL_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_ENTRY_LABEL_H_
++
++#include <string>
++#include <string_view>
++
++#include "base/strings/string_util.h"
++
++// helium-fork M6 轮3 3b: what a sidebar entry's title reads, and what a
++// Rename... edit does when it ends -- as plain functions over plain state,
++// asserted in helium_workspace_unittests like every other arc_*.h.
++//
++// Arc (decisions.md 「M6 轮3 3b」①, user recording 2026-09-22): a renamed
++// row keeps its name whatever the page does -- it stayed "zzz" after the tab
++// navigated to another page and drifted (g34-1) -- and emptying the name
++// brings the page's title back (g34-2). So the name the user gave wins over
++// everything, and "empty" means "no name of our own".
++namespace helium {
++
++// The row's text: the user's name for it; else, while a tab is bound and has
++// a title, the live title (M3.10: a drifted row shows the page it is on);
++// else the pinned page's stored title. A bound tab that has no title yet
++// (still loading) keeps the stored one rather than flashing blank.
++inline const std::u16string& EffectiveEntryTitle(
++    const std::u16string& custom_title,
++    bool bound,
++    const std::u16string& live_title,
++    const std::u16string& stored_title) {
++  if (!custom_title.empty()) {
++    return custom_title;
++  }
++  return bound && !live_title.empty() ? live_title : stored_title;
++}
++
++enum class RenameOutcome {
++  kNoChange,  // write nothing
++  kSet,       // store |text| as the entry's own name
++  kClear,     // drop the entry's own name: the page's title shows again
++};
++
++struct RenameResult {
++  RenameOutcome outcome = RenameOutcome::kNoChange;
++  // kSet only: the entered text with the surrounding whitespace trimmed.
++  std::u16string text;
++};
++
++// |entered| is the field's text when the edit ends (Return or focus loss),
++// |shown_before| what the row read when the edit began, |has_custom_title|
++// whether the entry already had a name of its own. Whitespace alone counts as
++// empty. Pressing Return on the text as it was writes nothing -- otherwise a
++// Rename... that is merely confirmed would freeze the page's current title
++// into a custom name that no longer follows the page.
++inline RenameResult ResolveRename(std::u16string_view entered,
++                                  std::u16string_view shown_before,
++                                  bool has_custom_title) {
++  const std::u16string_view trimmed =
++      base::TrimWhitespace(entered, base::TRIM_ALL);
++  if (trimmed.empty()) {
++    return {has_custom_title ? RenameOutcome::kClear
++                             : RenameOutcome::kNoChange};
++  }
++  if (trimmed == base::TrimWhitespace(shown_before, base::TRIM_ALL)) {
++    return {RenameOutcome::kNoChange};
++  }
++  return {RenameOutcome::kSet, std::u16string(trimmed)};
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_ENTRY_LABEL_H_
+Index: src/chrome/browser/ui/helium/arc_entry_label_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_entry_label_unittest.cc
+@@ -0,0 +1,65 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_entry_label.h"
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++TEST(ArcEntryLabelTest, TheUsersNameWinsInEveryState) {
++  // Arc g34-1: "zzz" stayed "zzz" after the tab drifted to another page.
++  const std::u16string custom = u"zzz";
++  EXPECT_EQ(u"zzz", EffectiveEntryTitle(custom, /*bound=*/false, u"",
++                                        u"Films.Dance"));
++  EXPECT_EQ(u"zzz", EffectiveEntryTitle(custom, /*bound=*/true, u"Films.Dance",
++                                        u"Films.Dance"));
++  EXPECT_EQ(u"zzz", EffectiveEntryTitle(custom, /*bound=*/true,
++                                        u"About — Films.Dance", u"Films.Dance"));
++}
++
++TEST(ArcEntryLabelTest, WithoutANameTheOldRuleHolds) {
++  const std::u16string none;
++  // Unbound: the pinned page's stored title.
++  EXPECT_EQ(u"Stored", EffectiveEntryTitle(none, false, u"Live", u"Stored"));
++  // Bound: the live title (a drifted row shows the page it is on).
++  EXPECT_EQ(u"Live", EffectiveEntryTitle(none, true, u"Live", u"Stored"));
++  // Bound but still loading: the stored title, not a blank row.
++  EXPECT_EQ(u"Stored", EffectiveEntryTitle(none, true, u"", u"Stored"));
++}
++
++TEST(ArcEntryLabelTest, RenameSetsTrimmedText) {
++  const RenameResult r = ResolveRename(u"  zzz  ", u"Films.Dance", false);
++  EXPECT_EQ(RenameOutcome::kSet, r.outcome);
++  EXPECT_EQ(u"zzz", r.text);
++}
++
++TEST(ArcEntryLabelTest, ConfirmingTheShownTextWritesNothing) {
++  // Return on the untouched field must not freeze the page title into a
++  // custom name that would stop following the page.
++  EXPECT_EQ(RenameOutcome::kNoChange,
++            ResolveRename(u"Films.Dance", u"Films.Dance", false).outcome);
++  EXPECT_EQ(RenameOutcome::kNoChange,
++            ResolveRename(u"zzz ", u"zzz", true).outcome);
++}
++
++TEST(ArcEntryLabelTest, EmptyClearsANameOrDoesNothing) {
++  // Arc g34-2: emptying a custom name brings back the page's title.
++  EXPECT_EQ(RenameOutcome::kClear, ResolveRename(u"", u"zzz", true).outcome);
++  EXPECT_EQ(RenameOutcome::kClear,
++            ResolveRename(u" \t ", u"zzz", true).outcome);
++  // Nothing to clear.
++  EXPECT_EQ(RenameOutcome::kNoChange,
++            ResolveRename(u"", u"Films.Dance", false).outcome);
++}
++
++TEST(ArcEntryLabelTest, RenamingARenamedEntrySetsTheNewName) {
++  const RenameResult r = ResolveRename(u"代码", u"zzz", true);
++  EXPECT_EQ(RenameOutcome::kSet, r.outcome);
++  EXPECT_EQ(u"代码", r.text);
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/helium/arc_entry_menu.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_entry_menu.h
++++ src/chrome/browser/ui/helium/arc_entry_menu.h
+@@ -24,7 +24,8 @@
+ // own and stay (decisions.md 「M6 轮3」③): Open takes the Split View slot,
+ // Back to Pinned URL (user 2026-08-23) sits next to its inverse, Replace,
+ // and the Favorites toggle closes the third group. Change Icon... and
+-// Rename... arrive with 3b; |include_3b| reserves their slots.
++// Rename... arrive with 3b (|include_3b|): a row gets both, a tile only
++// Change Icon..., a folder head row neither new one (user 2026-09-22).
+ //
+ // Header-only and free of //ui/views and grit on purpose, like every other
+ // arc_*.h: asserted in helium_workspace_unittests. The views side
+@@ -156,7 +157,11 @@
+   const size_t second_group = items.size();
+   if (s.include_3b) {
+     add(EntryMenuItemId::kChangeIcon, EntryMenuLabel::kChangeIcon);
+-    add(EntryMenuItemId::kRename, EntryMenuLabel::kRename);
++    // A tile draws no name, and the user left Rename off it for good
++    // (2026-09-22: "收藏夹不需要 rename。Change icon可以保留。").
++    if (!s.is_tile) {
++      add(EntryMenuItemId::kRename, EntryMenuLabel::kRename);
++    }
+   }
+   // Arc greys Mute on a silent page (g17) and flips it to Unmute (g16).
+   add(EntryMenuItemId::kToggleMute,
+Index: src/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
++++ src/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
+@@ -191,6 +191,19 @@
+   EXPECT_FALSE(menu[3].separator_before);
+ }
+ 
++TEST(ArcEntryMenuTest, ATileGetsChangeIconButNeverRename) {
++  // User 2026-09-22: 「收藏夹不需要 rename。Change icon可以保留。」
++  EntryMenuState s = Row();
++  s.is_tile = true;
++  s.include_3b = true;
++  const std::vector<EntryMenuItem> menu = BuildEntryMenu(s);
++  ASSERT_GE(menu.size(), 3u);
++  EXPECT_EQ(Id::kChangeIcon, menu[1].id);
++  EXPECT_TRUE(menu[1].separator_before);
++  EXPECT_EQ(Id::kToggleMute, menu[2].id);
++  EXPECT_EQ(nullptr, Find(menu, Id::kRename));
++}
++
+ TEST(ArcEntryMenuTest, FolderShape) {
+   const std::vector<EntryMenuItem> menu =
+       BuildFolderMenu(/*has_children=*/true, /*include_3b=*/false, {"a", "b"},
+Index: src/chrome/browser/ui/helium/arc_space_icon_picker.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_space_icon_picker.h
++++ src/chrome/browser/ui/helium/arc_space_icon_picker.h
+@@ -71,6 +71,10 @@
+ inline constexpr int kSpaceIconPickerGapBelowHeadRow = 17;
+ inline constexpr int kSpaceIconPickerGapBelowFormRow = 5;
+ inline constexpr int kSpaceIconPickerGapAboveBarSlot = 12;
++// M6 轮3 3b: under a pinned row or a favorite tile (Change Icon...), Arc puts
++// the card's top 7 below the row's white card (g35 f_00400: card 241-277,
++// picker top 284), the tail's tip 4 up into the row under the favicon.
++inline constexpr int kSpaceIconPickerGapBelowEntryRow = 7;
+ 
+ // Which side of the anchor the card is on. Below: the tail rises from the
+ // card's top edge to the anchor. Above: it drops from the bottom edge.
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_entry.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_entry.cc
+@@ -21,6 +21,8 @@
+ constexpr char kKeyFolderId[] = "folder_id";
+ constexpr char kKeyCollapsed[] = "collapsed";
+ constexpr char kKeyFavicon[] = "favicon";
++constexpr char kKeyCustomTitle[] = "custom_title";
++constexpr char kKeyIcon[] = "icon";
+ constexpr char kKeyVersion[] = "version";
+ 
+ }  // namespace
+@@ -52,6 +54,13 @@
+   if (!favicon_png.empty()) {
+     dict.Set(kKeyFavicon, base::Base64Encode(favicon_png));
+   }
++  // v3 keys, written only when set -- same rule as the folder keys.
++  if (!custom_title.empty()) {
++    dict.Set(kKeyCustomTitle, custom_title);
++  }
++  if (!icon.empty()) {
++    dict.Set(kKeyIcon, icon);
++  }
+   dict.Set(kKeyVersion, version);
+   return dict;
+ }
+@@ -128,6 +137,17 @@
+       entry.favicon_png.assign(bytes->begin(), bytes->end());
+     }
+   }
++  // v3: optional, and a value of the wrong type is simply absent -- never a
++  // reason to drop the entry. Folders carry neither (a folder's name is its
++  // |title|, and folders have no icon of their own).
++  if (entry.kind == Kind::kSite) {
++    if (const std::string* custom_title = dict.FindString(kKeyCustomTitle)) {
++      entry.custom_title = base::UTF8ToUTF16(*custom_title);
++    }
++    if (const std::string* icon = dict.FindString(kKeyIcon)) {
++      entry.icon = *icon;
++    }
++  }
+   entry.version = dict.FindInt(kKeyVersion).value_or(kCurrentVersion);
+   return entry;
+ }
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_entry.h
++++ src/chrome/browser/ui/helium_workspace/workspace_entry.h
+@@ -42,8 +42,10 @@
+   ~WorkspaceEntry();
+ 
+   // Serialization schema version this code writes. v2 added |favicon_png|;
+-  // v1 entries load unchanged and simply carry no icon.
+-  static constexpr int kCurrentVersion = 2;
++  // v1 entries load unchanged and simply carry no icon. v3 (M6 轮3 3b) added
++  // |custom_title| and |icon|; an entry keeps the version it was loaded with
++  // until one of those is set on it, so untouched entries stay byte-identical.
++  static constexpr int kCurrentVersion = 3;
+ 
+   base::DictValue ToValue() const;
+ 
+@@ -75,6 +77,17 @@
+   // start would show nothing but placeholders until something is clicked.
+   // Empty means "fall back to the favicon service, then to the default".
+   std::string favicon_png;
++  // M6 轮3 3b: the name the user gave the entry (Rename...). Empty = none;
++  // the row then shows |title| (or the live tab's title while it is away
++  // from home), which keeps being written back as before -- so clearing this
++  // brings back the page's latest title (Arc g34, decisions.md 「M6 轮3 3b」).
++  // Folders keep their name in |title| and never use this.
++  std::u16string custom_title;
++  // M6 轮3 3b: the icon the user picked (Change Icon...), in the space icon's
++  // format -- one emoji (UTF-8) or a "vi:<name>" vector icon reference
++  // (workspace_space.h). Empty = none: the favicon chain draws as before
++  // (Arc g35: the trash brings the site's favicon back). Sites only.
++  std::string icon;
+   int version = kCurrentVersion;
+ };
+ 
+Index: src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
+@@ -212,6 +212,65 @@
+   EXPECT_FALSE(WorkspaceEntry::FromValue(site).has_value());
+ }
+ 
++// M6 轮3 3b (schema v3): a site's own name and icon.
++TEST(WorkspaceEntryTest, CustomTitleAndIconRoundTrip) {
++  WorkspaceEntry original = MakeEntry();
++  original.custom_title = u"代码 zzz";
++  original.icon = "\xF0\x9F\x91\xA4";  // 👤
++  const std::optional<WorkspaceEntry> decoded =
++      WorkspaceEntry::FromValue(original.ToValue());
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ(decoded->custom_title, original.custom_title);
++  EXPECT_EQ(decoded->icon, original.icon);
++  // The page's own title is a separate field and survives untouched.
++  EXPECT_EQ(decoded->title, original.title);
++
++  WorkspaceEntry vector_icon = MakeEntry();
++  vector_icon.icon = "vi:star";
++  const std::optional<WorkspaceEntry> decoded_vector =
++      WorkspaceEntry::FromValue(vector_icon.ToValue());
++  ASSERT_TRUE(decoded_vector.has_value());
++  EXPECT_EQ(decoded_vector->icon, "vi:star");
++}
++
++TEST(WorkspaceEntryTest, CustomKeysWrittenOnlyWhenSet) {
++  // An entry that never used the feature writes neither key, and the one it
++  // loaded with -- version and all -- comes back out unchanged.
++  const base::DictValue plain = MakeEntry().ToValue();
++  EXPECT_FALSE(plain.contains("custom_title"));
++  EXPECT_FALSE(plain.contains("icon"));
++
++  base::DictValue v2 = MakeEntry().ToValue();
++  v2.Set("version", 2);
++  const std::optional<WorkspaceEntry> decoded = WorkspaceEntry::FromValue(v2);
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_EQ(decoded->version, 2);
++  EXPECT_EQ(decoded->ToValue(), v2);
++}
++
++TEST(WorkspaceEntryTest, CustomKeysOfTheWrongTypeAreIgnored) {
++  base::DictValue dict = MakeEntry().ToValue();
++  dict.Set("custom_title", 7);
++  dict.Set("icon", true);
++  const std::optional<WorkspaceEntry> decoded = WorkspaceEntry::FromValue(dict);
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_TRUE(decoded->custom_title.empty());
++  EXPECT_TRUE(decoded->icon.empty());
++}
++
++TEST(WorkspaceEntryTest, FoldersNeverCarryCustomKeys) {
++  // A folder's name lives in |title| and it has no icon of its own; stray
++  // keys from some other build are dropped on load.
++  base::DictValue dict = MakeFolder().ToValue();
++  dict.Set("custom_title", "Renamed");
++  dict.Set("icon", "vi:star");
++  const std::optional<WorkspaceEntry> decoded = WorkspaceEntry::FromValue(dict);
++  ASSERT_TRUE(decoded.has_value());
++  EXPECT_TRUE(decoded->custom_title.empty());
++  EXPECT_TRUE(decoded->icon.empty());
++  EXPECT_EQ(decoded->title, u"Untitled");
++}
++
+ // Expands a plan into the per-row column counts for readability.
+ std::vector<int> RowsFor(int count, int per_row_max = 4) {
+   const FavoritesGridPlan plan = PlanFavoritesGrid(count, per_row_max);
+Index: src/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
++++ src/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
+@@ -27,8 +27,9 @@
+ // dependency-free so helium_workspace_unittests can pin the rule.
+ //
+ // Rule: split the input on whitespace and fold case; every term must be a
+-// prefix of some whitespace-separated word of the title, or a substring of the
+-// URL haystack (spec without scheme and without a leading "www."). A term is
++// prefix of some whitespace-separated word of the title -- the user's own name
++// for the entry (M6 轮3 3b) or the page's -- or a substring of the URL
++// haystack (spec without scheme and without a leading "www."). A term is
+ // normalised the same way the haystack is -- a leading "http://", "https://"
+ // or "www." is dropped -- so typing the URL the way the omnibox shows it
+ // ("www.you", "https://you") still finds the entry. Output keeps the order of
+@@ -92,10 +93,20 @@
+       continue;
+     }
+     const std::u16string haystack = WorkspaceUrlHaystack(entry.url);
++    // A renamed entry is the same row under a new name, so it is found by
++    // that name (user 2026-09-22: "它是需要出现在搜索列表里面的") -- and still
++    // by the page's title and its URL, which have not stopped being true.
+     const std::u16string lower_title = base::i18n::ToLower(entry.title);
+-    const std::vector<std::u16string_view> title_words =
++    const std::u16string lower_custom =
++        base::i18n::ToLower(entry.custom_title);
++    std::vector<std::u16string_view> title_words =
+         base::SplitStringPiece(lower_title, base::kWhitespaceUTF16,
+                                base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++    for (std::u16string_view word : base::SplitStringPiece(
++             lower_custom, base::kWhitespaceUTF16, base::TRIM_WHITESPACE,
++             base::SPLIT_WANT_NONEMPTY)) {
++      title_words.push_back(word);
++    }
+ 
+     bool all_terms_hit = true;
+     for (std::u16string_view term : terms) {
+Index: src/chrome/browser/ui/helium_workspace/workspace_omnibox_match_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_omnibox_match_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_omnibox_match_unittest.cc
+@@ -168,5 +168,31 @@
+   EXPECT_EQ(WorkspaceUrlHaystack(GURL("not a url")), u"");
+ }
+ 
++// M6 轮3 3b (user 2026-09-22): a renamed entry is found by its new name, and
++// still by the page's title and its URL.
++TEST(WorkspaceOmniboxMatchTest, RenamedEntryMatchesItsOwnNameToo) {
++  std::vector<WorkspaceEntry> entries = Entries();
++  WorkspaceEntry renamed = MakeEntry(WorkspaceEntry::Section::kPinned,
++                                     "https://github.com/", u"GitHub");
++  renamed.custom_title = u"代码 Vault";
++  entries.push_back(renamed);
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"代码")),
++            (std::vector<size_t>{3}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"代")),
++            (std::vector<size_t>{3}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"VAU")),
++            (std::vector<size_t>{3}));
++  // The page title and the URL still find it.
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"GitH")),
++            (std::vector<size_t>{3}));
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"github.com")),
++            (std::vector<size_t>{3}));
++  // Terms may split across the two names.
++  EXPECT_EQ(Indices(MatchWorkspaceEntries(entries, u"代码 git")),
++            (std::vector<size_t>{3}));
++  // Nobody else gained a match from it.
++  EXPECT_TRUE(MatchWorkspaceEntries(Entries(), u"代码").empty());
++}
++
+ }  // namespace
+ }  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
+@@ -184,6 +184,46 @@
+   return false;
+ }
+ 
++bool WorkspaceService::SetEntryCustomTitle(const std::string& id,
++                                           const std::u16string& custom_title) {
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.id != id) {
++      continue;
++    }
++    if (entry.is_folder()) {
++      return false;  // a folder's name is its |title| (SetEntryTitle)
++    }
++    if (entry.custom_title != custom_title) {
++      entry.custom_title = custom_title;
++      entry.version = WorkspaceEntry::kCurrentVersion;
++      SchedulePersist();
++      NotifyChanged();
++    }
++    return true;
++  }
++  return false;
++}
++
++bool WorkspaceService::SetEntryIcon(const std::string& id,
++                                    const std::string& icon) {
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.id != id) {
++      continue;
++    }
++    if (entry.is_folder()) {
++      return false;  // folders keep their own glyph (user 2026-09-22)
++    }
++    if (entry.icon != icon) {
++      entry.icon = icon;
++      entry.version = WorkspaceEntry::kCurrentVersion;
++      SchedulePersist();
++      NotifyChanged();
++    }
++    return true;
++  }
++  return false;
++}
++
+ bool WorkspaceService::SetEntrySection(const std::string& id,
+                                        WorkspaceEntry::Section section,
+                                        const std::string& space_id) {
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.h
++++ src/chrome/browser/ui/helium_workspace/workspace_service.h
+@@ -126,6 +126,14 @@
+   // Raw PNG bytes; empty clears the icon. Persisted so a cold start can draw
+   // entries that have no tab.
+   bool SetEntryFavicon(const std::string& id, std::string png_bytes);
++  // M6 轮3 3b: the name the user gave a site (Rename...) and the icon they
++  // picked (Change Icon...; an emoji or a "vi:<name>" reference). Empty
++  // clears either one, which brings back the page's title / the favicon
++  // chain. Sites only: false for a folder or an unknown id. Setting a value
++  // marks the entry as schema v3 (WorkspaceEntry::kCurrentVersion).
++  bool SetEntryCustomTitle(const std::string& id,
++                           const std::u16string& custom_title);
++  bool SetEntryIcon(const std::string& id, const std::string& icon);
+   // Moves an entry between the Favorites and Pinned sections. Promoting to
+   // Favorites fails (returns false) when the cap is reached. A demotion to
+   // Pinned lands in |space_id| when that names a space (the one the user is
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+@@ -1284,6 +1284,58 @@
+   reloaded.Shutdown();
+ }
+ 
++// ---- M6 轮3 3b: Rename... / Change Icon... ----
++
++TEST_F(WorkspaceServiceTest, CustomTitleAndIconSetClearAndSurviveAReload) {
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  ASSERT_TRUE(service_->SetEntryCustomTitle(a, u"zzz"));
++  ASSERT_TRUE(service_->SetEntryIcon(a, "vi:star"));
++  EXPECT_EQ(u"zzz", service_->FindEntryById(a)->custom_title);
++  EXPECT_EQ("vi:star", service_->FindEntryById(a)->icon);
++  // The page title is its own field: the write-back keeps working under a
++  // custom name, so clearing the name later brings back the latest title.
++  ASSERT_TRUE(service_->SetEntryTitle(a, u"A (new)"));
++  EXPECT_EQ(u"zzz", service_->FindEntryById(a)->custom_title);
++  service_->Shutdown();
++
++  WorkspaceService reloaded(&prefs_, u"Personal");
++  const WorkspaceEntry* entry = reloaded.FindEntryById(a);
++  ASSERT_TRUE(entry);
++  EXPECT_EQ(u"zzz", entry->custom_title);
++  EXPECT_EQ("vi:star", entry->icon);
++  EXPECT_EQ(u"A (new)", entry->title);
++  EXPECT_EQ(WorkspaceEntry::kCurrentVersion, entry->version);
++
++  ASSERT_TRUE(reloaded.SetEntryCustomTitle(a, u""));
++  ASSERT_TRUE(reloaded.SetEntryIcon(a, ""));
++  EXPECT_TRUE(reloaded.FindEntryById(a)->custom_title.empty());
++  EXPECT_TRUE(reloaded.FindEntryById(a)->icon.empty());
++  reloaded.Shutdown();
++}
++
++TEST_F(WorkspaceServiceTest, CustomTitleAndIconAreForSitesOnly) {
++  const std::string folder = service_->AddFolder(u"F", kDefaultSpaceId);
++  EXPECT_FALSE(service_->SetEntryCustomTitle(folder, u"G"));
++  EXPECT_FALSE(service_->SetEntryIcon(folder, "vi:star"));
++  EXPECT_EQ(u"F", service_->FindEntryById(folder)->title);
++  EXPECT_TRUE(service_->FindEntryById(folder)->icon.empty());
++  EXPECT_FALSE(service_->SetEntryCustomTitle("no-such-id", u"G"));
++  EXPECT_FALSE(service_->SetEntryIcon("no-such-id", "vi:star"));
++}
++
++TEST_F(WorkspaceServiceTest, DuplicateCarriesCustomTitleAndIcon) {
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  ASSERT_TRUE(service_->SetEntryCustomTitle(a, u"zzz"));
++  ASSERT_TRUE(service_->SetEntryIcon(a, "\xF0\x9F\x91\xA4"));
++  const std::string copy = service_->DuplicateEntry(a);
++  const WorkspaceEntry* entry = service_->FindEntryById(copy);
++  ASSERT_TRUE(entry);
++  EXPECT_EQ(u"zzz", entry->custom_title);
++  EXPECT_EQ("\xF0\x9F\x91\xA4", entry->icon);
++}
++
+ // ---- M6 轮3 3a: Move to ----
+ 
+ // Arc g9: the moved row lands at the end of the target space's pinned area.
+Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
+===================================================================
+--- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
++++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
+@@ -77,6 +77,7 @@
+ #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+ #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h"
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "chrome/browser/ui/views/omnibox/omnibox_popup_closer.h"
+ #include "chrome/browser/ui/views/search_engines/dse_reset_dialog.h"
+@@ -128,6 +129,7 @@
+ #include "ui/gfx/image/image_skia_operations.h"
+ #include "ui/gfx/paint_vector_icon.h"
+ #include "ui/gfx/vector_icon_types.h"
++#include "ui/native_theme/native_theme.h"
+ #include "url/gurl.h"
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS)
+@@ -748,8 +750,51 @@
+   // factory returns null for incognito / guest profiles.
+   if (helium_workspace::WorkspaceService* service =
+           helium_workspace::WorkspaceServiceFactory::GetForProfile(profile_)) {
++    // The list asks by URL alone; when several entries share one (Duplicate)
++    // it cannot tell which row a match is for, so their own icons stay out
++    // and the site's favicon speaks for all of them (reviewer diff r0 #5).
++    const size_t sharing_url = static_cast<size_t>(std::ranges::count_if(
++        service->entries(),
++        [&page_url](const helium_workspace::WorkspaceEntry& e) {
++          return e.url == page_url;
++        }));
+     for (const helium_workspace::WorkspaceEntry& entry : service->entries()) {
+-      if (entry.url != page_url || entry.favicon_png.empty()) {
++      if (entry.url != page_url) {
++        continue;
++      }
++      // M6 轮3 3b: the icon the user picked for the entry, when this build
++      // can draw it -- the rule above, "the list and the sidebar agree",
++      // taken one step further. A vector icon wears the grey the Move to
++      // menu draws space icons in (workspace_move_to_space_menu_model.cc).
++      if (!entry.icon.empty() && sharing_url == 1) {
++        auto custom = workspace_custom_icons_.find(entry.id);
++        if (custom == workspace_custom_icons_.end() ||
++            custom->second.first != entry.icon) {
++          const ui::ImageModel model = EntryCustomIconImage(
++              entry.icon, ui::NativeTheme::GetInstanceForNativeUi()
++                                  ->preferred_color_scheme() ==
++                                  ui::NativeTheme::PreferredColorScheme::kDark
++                              ? SkColorSetRGB(0xC4, 0xC7, 0xC5)
++                              : SkColorSetRGB(0x5F, 0x63, 0x68));
++          if (model.IsEmpty()) {
++            // Not drawable here (a "vi:" name this build does not know):
++            // forget the old picture and fall back to the favicon.
++            workspace_custom_icons_.erase(entry.id);
++            custom = workspace_custom_icons_.end();
++          } else {
++            custom = workspace_custom_icons_
++                         .insert_or_assign(
++                             entry.id,
++                             std::make_pair(entry.icon,
++                                            gfx::Image(model.GetImage())))
++                         .first;
++          }
++        }
++        if (custom != workspace_custom_icons_.end()) {
++          return custom->second.second;
++        }
++      }
++      if (entry.favicon_png.empty()) {
+         continue;
+       }
+       auto it = workspace_favicons_.find(entry.id);
+Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.h
+===================================================================
+--- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.h
++++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.h
+@@ -188,6 +188,10 @@
+   // helium-fork r8③: decoded sidebar-entry favicons, keyed by entry id and
+   // validated by the PNG's byte length so a re-captured icon is re-decoded.
+   std::map<std::string, std::pair<size_t, gfx::Image>> workspace_favicons_;
++  // helium-fork M6 轮3 3b: the entry's own icon drawn at favicon size, keyed
++  // by entry id and remembered with the icon string it was drawn from.
++  std::map<std::string, std::pair<std::string, gfx::Image>>
++      workspace_custom_icons_;
+ 
+   base::WeakPtrFactory<ChromeOmniboxClient> weak_factory_{this};
+ };
+Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/helium_space_icon_picker_view.cc
++++ src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.cc
+@@ -341,6 +341,13 @@
+   body_edge_in_parent_ = body_edge_in_parent;
+   left_in_parent_ = left_in_parent;
+   current_icon_ = current_icon;
++  // Escape puts back what the picker opened with -- the first Show() of this
++  // opening, not a later one: its anchor lets presses through, and the
++  // Create form's icon button calls Show() again on every press (reviewer
++  // diff r0 #4).
++  if (!shown_) {
++    initial_icon_ = current_icon;
++  }
+   on_picked_ = std::move(on_picked);
+   on_closed_ = std::move(on_closed);
+   recent_ = ReadRecent();
+@@ -702,6 +709,17 @@
+ 
+ bool HeliumSpaceIconPickerView::AcceleratorPressed(
+     const ui::Accelerator& accelerator) {
++  // Escape takes back what this opening changed: every pick was applied as
++  // it was made, so the icon the picker opened with is reported once more
++  // (not recorded as a recent -- it was not chosen now), then it closes.
++  if (current_icon_ != initial_icon_) {
++    const std::string initial = initial_icon_;
++    ShowPickAsCurrent(initial);
++    PickedCallback callback = on_picked_;
++    if (callback) {
++      callback.Run(initial);
++    }
++  }
+   Hide();
+   return true;
+ }
+@@ -949,18 +967,63 @@
+   if (!icon.empty() && !helium_workspace::IsVectorIconRef(icon)) {
+     RecordRecent(icon);
+   }
+-  // A pick is not a dismissal: the picked callback is the one that runs.
+-  on_closed_.Reset();
+-  // Hide first, then report: the callback may re-lay out the sidebar and
+-  // must not find the picker still up (M6-r2's weak-pointer rule: never
+-  // invalidate, just close).
+-  PickedCallback callback = std::move(on_picked_);
+-  Hide();
++  // User 2026-09-22: a pick is applied at once and the picker stays up for
++  // the next one; closing is a press outside (or Escape) only. So nothing is
++  // reset here -- the next pick and the eventual close must still find
++  // |on_picked_| and |on_closed_| (reviewer brief r0 #1).
++  ShowPickAsCurrent(icon);
++  // A copy runs, not the member: the callback may re-lay out the sidebar,
++  // and whatever ends up hiding the picker resets |on_picked_| while it
++  // would still be running.
++  PickedCallback callback = on_picked_;
+   if (callback) {
+     callback.Run(icon);
+   }
+ }
+ 
++void HeliumSpaceIconPickerView::ShowPickAsCurrent(const std::string& icon) {
++  current_icon_ = icon;
++  const bool has_icon = !current_icon_.empty();
++  // ⛔ The class comment's focus rule: hiding a focused view advances the
++  // focus onto the page. If the trash is about to go while it holds the
++  // focus, the tab's own content takes it first.
++  if (!has_icon && trash_->HasFocus()) {
++    if (tab_ == Tab::kEmoji) {
++      search_->RequestFocus();
++    } else {
++      icon_grid_->RequestFocus();
++    }
++  }
++  trash_->SetVisible(has_icon);
++  // Move the marks to the new current icon on both tabs without rebuilding
++  // either grid.
++  const base::span<const helium_workspace::EmojiEntry> table =
++      helium_workspace::EmojiTable();
++  std::optional<size_t> emoji_selected;
++  for (size_t k = 0; k < emoji_indices_.size(); ++k) {
++    if (has_icon && current_icon_ == table[emoji_indices_[k]].utf8) {
++      emoji_selected = k;
++      break;
++    }
++  }
++  emoji_grid_->SetSelectedIndex(emoji_selected);
++  std::optional<size_t> icon_selected;
++  const std::string_view name =
++      helium_workspace::VectorIconRefName(current_icon_);
++  const base::span<const helium_workspace::SpaceIconName> names =
++      helium_workspace::SpaceIconNames();
++  for (size_t i = 0; !name.empty() && i < names.size(); ++i) {
++    if (name == names[i].name) {
++      icon_selected = i;
++      break;
++    }
++  }
++  icon_grid_->SetSelectedIndex(icon_selected);
++  // The segment row lays out with or without the trash.
++  DeprecatedLayoutImmediately();
++  SchedulePaint();
++}
++
+ std::vector<std::string> HeliumSpaceIconPickerView::ReadRecent() const {
+   std::vector<std::string> recent;
+   if (!prefs_) {
+Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
++++ src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
+@@ -49,9 +49,13 @@
+ // (2a-r3, user 2026-09-05: Frequently Used first -- blank until something
+ // has been used, and where the picker always opens -- then Arc's eight
+ // groups; the category bar switches pages, a search shows its hits flat);
+-// Icon = a grid of monochrome icons. Picking anything closes the picker
+-// and reports it; Escape and any press outside close it and report that
+-// instead. No open/close tween (the sidebar's two animations rule).
++// Icon = a grid of monochrome icons. Picking anything applies it at once
++// and the picker STAYS UP (user 2026-09-22: one click is not necessarily the
++// final choice; Arc g35-2 keeps it up too): the current cell and the trash
++// follow each pick. Only a press outside closes it -- keeping what was picked
++// -- or Escape, which first puts back the icon it opened with (the user's
++// Esc-cancels-and-reverts rule, 2026-09-17). No open/close tween (the
++// sidebar's two animations rule).
+ //
+ // ⛔ The focus never leaves the picker while it is up: hiding the focused
+ // search field advanced the focus into the page and lit the page's
+@@ -83,8 +87,10 @@
+   // card's top lands (kBelowAnchor) or its bottom (kAboveAnchor);
+   // |left_in_parent| the sidebar's left edge (the card sits
+   // kSpaceIconPickerLeftInset right of it); all in the parent's
+-  // coordinates. |on_closed| runs when the picker goes without a pick
+-  // (Escape, a press outside).
++  // coordinates. |on_picked| runs for every pick (and once more with
++  // |current_icon| when Escape reverts); |on_closed| runs whenever the
++  // picker closes (a press outside, Escape) -- the place to put the focus
++  // back, since a pick no longer ends anything.
+   void Show(const gfx::Rect& anchor_in_parent,
+             helium::SpaceIconPickerPlacement placement,
+             int body_edge_in_parent,
+@@ -131,6 +137,9 @@
+   void OnEmojiPicked(size_t index);
+   void OnIconPicked(size_t index);
+   void OnTrashPressed();
++  // A pick stays on screen: the current cell and the trash follow |icon|,
++  // without rebuilding the grid (a rebuild scrolls back to the top).
++  void ShowPickAsCurrent(const std::string& icon);
+   void OnClearSearch();
+   void OnRecentPressed();
+   void OnCategoryPressed(int group);
+@@ -154,6 +163,8 @@
+   int body_edge_in_parent_ = 0;
+   int left_in_parent_ = 0;
+   std::string current_icon_;
++  // What the picker opened with: Escape puts it back.
++  std::string initial_icon_;
+   PickedCallback on_picked_;
+   base::RepeatingClosure on_closed_;
+   bool shown_ = false;
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -1318,9 +1318,10 @@
+ }
+ 
+ void VerticalTabStripRegionView::OnManageSheetPickerClosed() {
+-  // Dismissed without a pick: the picker cleared the focus on its way out
+-  // (never advanced -- advancing lands on the page); the sheet takes it
+-  // back so Escape and Return keep working.
++  // The picker went: it cleared the focus on its way out (never advanced --
++  // advancing lands on the page); the sheet takes it back so Escape and
++  // Return keep working. Since 3b this is the only path that does it: a
++  // pick no longer closes the picker.
+   if (manage_view_) {
+     manage_view_->RequestFocus();
+   }
+@@ -1352,8 +1353,8 @@
+ }
+ 
+ void VerticalTabStripRegionView::OnCreateFormPickerClosed() {
+-  // Dismissed without a pick (Escape, a press elsewhere): the caret goes
+-  // back to the name field all the same.
++  // The picker went (a press elsewhere, Escape): the caret goes back to the
++  // name field -- the only place that does it since picks stopped closing.
+   if (create_form_) {
+     create_form_->FocusNameField();
+   }
+@@ -1362,10 +1363,10 @@
+ void VerticalTabStripRegionView::OnCreateFormIconPicked(const std::string& icon) {
+   if (create_form_) {
+     create_form_->SetIcon(icon);
+-    // The picker cleared the focus on its way out; typing continues in the
+-    // name field (user 2026-09-05: the caret lives there while the form is
+-    // up).
+-    create_form_->FocusNameField();
++    // M6 轮3 3b: the picker stays up after a pick now (user 2026-09-22), so
++    // the focus stays in it; OnCreateFormPickerClosed hands the caret back
++    // to the name field when it goes (user 2026-09-05: the caret lives there
++    // while the form is up).
+   }
+ }
+ 
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+@@ -11,16 +11,19 @@
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/numerics/safe_conversions.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "cc/paint/paint_flags.h"
+ #include "cc/paint/paint_shader.h"
+ #include "chrome/browser/favicon/favicon_service_factory.h"
+ #include "chrome/browser/favicon/favicon_utils.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_entry_label.h"
+ #include "chrome/browser/ui/helium/arc_favorite_accent.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_favicon.h"
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/tabs/common/workspace_entry_menu_model.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_favicon_image.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_pin_semantics.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -47,6 +50,7 @@
+ #include "ui/color/color_id.h"
+ #include "ui/color/color_provider.h"
+ #include "ui/gfx/canvas.h"
++#include "ui/gfx/color_palette.h"
+ #include "ui/gfx/color_utils.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/rect_f.h"
+@@ -57,13 +61,38 @@
+ #include "ui/gfx/skia_paint_util.h"
+ #include "ui/gfx/font_list.h"
+ #include "ui/gfx/text_constants.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
+ #include "ui/views/controls/label.h"
+ #include "ui/views/controls/menu/menu_runner.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/focus/focus_manager.h"
+ #include "ui/views/accessibility/view_accessibility.h"
+ #include "ui/views/style/typography.h"
+ 
+ namespace {
+ 
++// M6 轮3 3b: the in-place rename field commits when it loses focus (Arc,
++// like the folder row's). A plain Textfield has no controller hook for that,
++// so this thin shim forwards its OnBlur.
++class EntryRenameField : public views::Textfield {
++  METADATA_HEADER(EntryRenameField, views::Textfield)
++
++ public:
++  explicit EntryRenameField(WorkspaceEntryView* owner) : owner_(owner) {}
++
++  // views::View:
++  void OnBlur() override {
++    views::Textfield::OnBlur();
++    owner_->OnRenameFieldBlurred();
++  }
++
++ private:
++  const raw_ptr<WorkspaceEntryView> owner_;
++};
++
++BEGIN_METADATA(EntryRenameField)
++END_METADATA
+ 
+ // Row metrics. The capsule/row heights and radii are the ones the tab strip
+ // already uses for pinned vertical tabs, so an entry row lines up with a
+@@ -259,6 +288,20 @@
+ 
+   title_label_ = AddChildView(std::make_unique<TabTitle>());
+ 
++  // M6 轮3 3b: Rename... edits in place. No border or background of its own
++  // -- Arc's edit state is the selected text on the unchanged row (g34-3,
++  // f_00415) -- and the title's font, so nothing moves when it swaps in.
++  auto editor = std::make_unique<EntryRenameField>(this);
++  editor->set_controller(this);
++  editor->SetVisible(false);
++  editor->SetBorder(nullptr);
++  editor->SetBackgroundEnabled(false);
++  editor->SetFontList(title_label_->font_list());
++  // A focusable view with no accessible name is a DCHECK the moment it shows.
++  editor->GetViewAccessibility().SetName(
++      l10n_util::GetStringUTF16(IDS_HELIUM_WS_FOLDER_MENU_RENAME));
++  editor_ = AddChildView(std::move(editor));
++
+   // helium-fork M3.10: "Back to Pinned URL", one size down from the title;
+   // app copy, so secondary (the sidebar's rule for everything that is not a
+   // user's own tab title, user 2026-08-21).
+@@ -321,25 +364,31 @@
+   // bind (user 2026-09-03 recording; probe: a fresh profile's seeded row).
+   const bool icon_changed = !icon_resolved_ ||
+                             favicon_png_ != entry.favicon_png ||
+-                            url_ != entry.url;
++                            url_ != entry.url || custom_icon_ != entry.icon;
+ 
+   entry_id_ = entry.id;
+   url_ = entry.url;
+   section_ = entry.section;
+ 
+-  if (title_ != entry.title) {
++  if (title_ != entry.title || custom_title_ != entry.custom_title) {
+     title_ = entry.title;
++    custom_title_ = entry.custom_title;
+     UpdateTitleText();
+     UpdateAccessibleState();
+   }
+   if (icon_changed) {
+     favicon_png_ = entry.favicon_png;
++    custom_icon_ = entry.icon;
+     icon_resolved_ = true;
+     ResolveIcon();
+   }
+   if (section_changed) {
++    // A row that became a tile has no text to edit.
++    if (editing_ && renders_as_capsule()) {
++      FinishRename(/*commit=*/true, /*clear_focus=*/true);
++    }
+     // Capsules hide their title and are a different height entirely.
+-    title_label_->SetVisible(!renders_as_capsule());
++    title_label_->SetVisible(!renders_as_capsule() && !editing_);
+     UpdateCloseButton();
+     UpdateAlertIndicator();
+     UpdateDriftMarks();
+@@ -475,6 +524,11 @@
+       (row_height - title_height) / 2 -
+       base::ClampRound(helium::kSidebarHintTitleRise * HintProgress());
+   title_label_->SetBounds(text_x, title_y, text_width, title_height);
++  if (editing_) {
++    const int editor_height = editor_->GetPreferredSize().height();
++    editor_->SetBounds(text_x, (row_height - editor_height) / 2, text_width,
++                       editor_height);
++  }
+   if (HintVisible()) {
+     // Placed by baseline rather than by stacking preferred heights: two label
+     // boxes add up to more than the 34pt row, and what Dia actually spaces is
+@@ -732,7 +786,9 @@
+ }
+ 
+ void WorkspaceEntryView::OnMouseMoved(const ui::MouseEvent& event) {
+-  SetIconHovered(drifted_ && !renders_as_capsule() &&
++  // No "Back to Pinned URL" morph under an open rename field: the title it
++  // lifts is not showing.
++  SetIconHovered(drifted_ && !renders_as_capsule() && !editing_ &&
+                  icon_->bounds().Contains(event.location()));
+ }
+ 
+@@ -779,7 +835,12 @@
+ }
+ 
+ std::u16string WorkspaceEntryView::drag_title() const {
+-  return bound_tab_ && !live_title_.empty() ? live_title_ : title_;
++  return DisplayTitle();
++}
++
++std::u16string WorkspaceEntryView::DisplayTitle() const {
++  return helium::EffectiveEntryTitle(custom_title_, !!bound_tab_, live_title_,
++                                     title_);
+ }
+ 
+ SkColor WorkspaceEntryView::drag_surface_color() const {
+@@ -800,6 +861,11 @@
+ 
+ void WorkspaceEntryView::OnThemeChanged() {
+   views::View::OnThemeChanged();
++  // A vector icon of the user's (3b) is drawn in a theme colour, and the
++  // first draw may have come before there was a colour provider.
++  if (helium_workspace::IsVectorIconRef(custom_icon_)) {
++    ResolveIcon();
++  }
+   UpdateTitleColor();
+   UpdateCloseButtonColors();
+   alert_indicator_->OnParentTabButtonColorChanged();
+@@ -830,9 +896,8 @@
+ 
+ void WorkspaceEntryView::UpdateTitleText() {
+   // A bound tab that has no title yet (still loading) keeps the entry's own
+-  // rather than flashing blank.
+-  const std::u16string& text =
+-      (bound_tab_ && !live_title_.empty()) ? live_title_ : title_;
++  // rather than flashing blank; the user's own name beats both (3b).
++  const std::u16string text = DisplayTitle();
+   if (title_label_->GetText() != text) {
+     title_label_->SetText(text);
+   }
+@@ -840,6 +905,8 @@
+ 
+ void WorkspaceEntryView::UpdateTitleColor() {
+   if (const ui::ColorProvider* const colors = GetColorProvider()) {
++    // The rename field keeps the textfield's own foreground, like the folder
++    // row's: it only exists while typing.
+     title_label_->SetEnabledColor(helium::GetSidebarRowTitleColor(
+         colors->GetColor(kColorToolbar), active_));
+   }
+@@ -848,7 +915,10 @@
+ void WorkspaceEntryView::UpdateCloseButton() {
+   // Only a row with a page to close, and only under the pointer (user
+   // 2026-08-23: 「只有被打开的标签才有这个 X」).
+-  const bool show = !renders_as_capsule() && bound_tab_ && hovered_;
++  // Hidden while renaming too: Arc's row drops its "—" in the edit state
++  // (g34-3), and the field keeps the title's full width.
++  const bool show =
++      !renders_as_capsule() && bound_tab_ && hovered_ && !editing_;
+   if (close_button_->GetVisible() != show) {
+     close_button_->SetVisible(show);
+     // The title gives up its right end to the button.
+@@ -1023,6 +1093,9 @@
+     state.space_ids.push_back(space.id);
+   }
+   state.owner_space_id = context.owner_space_id;
++  // M6 轮3 3b: Change Icon... on rows and tiles, Rename... on rows only
++  // (arc_entry_menu.h; user 2026-09-22).
++  state.include_3b = true;
+ 
+   // Unretained: |menu_model_| is ours and dies with us.
+   menu_model_ = std::make_unique<WorkspaceEntryMenuModel>(
+@@ -1082,8 +1155,14 @@
+       // Leaves any open tab alone; it simply becomes an ordinary tab again.
+       delegate_->OnEntryRemoved(entry_id_);
+       break;
++    case Id::kRename:
++      StartRename();
++      break;
++    case Id::kChangeIcon:
++      delegate_->OnEntryChangeIconRequested(entry_id_);
++      break;
+     default:
+-      // Submenu parents, the folder's items, and 3b's two.
++      // Submenu parents and the folder's items.
+       break;
+   }
+ }
+@@ -1091,6 +1170,21 @@
+ void WorkspaceEntryView::ResolveIcon() {
+   favicon_tracker_.TryCancelAll();
+ 
++  // 0. The icon the user picked (3b, Change Icon...) wins over every page's:
++  // Arc draws the emoji where the favicon was, bound or not (g35). A
++  // reference this build cannot draw falls through to the favicon chain.
++  if (!custom_icon_.empty()) {
++    const ui::ColorProvider* const colors = GetColorProvider();
++    const ui::ImageModel custom = EntryCustomIconImage(
++        custom_icon_,
++        colors ? colors->GetColor(ui::kColorLabelForegroundSecondary)
++               : gfx::kPlaceholderColor);
++    if (!custom.IsEmpty()) {
++      ApplyIcon(custom);
++      return;
++    }
++  }
++
+   // 1. The live tab, but only once it has a favicon the site actually
+   // served. A tab still loading reports the placeholder globe, and taking it
+   // here would blank out an entry that already has a perfectly good icon --
+@@ -1213,7 +1307,7 @@
+   UpdateAccentSource(favicon.IsImage() ? favicon.GetImage().AsImageSkia()
+                                        : gfx::ImageSkia());
+   tabs::TabData data;
+-  data.title = title_;
++  data.title = DisplayTitle();
+   data.favicon = favicon;
+   data.should_display_favicon = true;
+   data.network_state = tabs::TabNetworkState::kNone;
+@@ -1224,13 +1318,133 @@
+ }
+ 
+ void WorkspaceEntryView::UpdateAccessibleState() {
++  // The user's own name first (3b), else the pinned page's title.
++  const std::u16string& name = custom_title_.empty() ? title_ : custom_title_;
+   GetViewAccessibility().SetName(
+-      title_.empty() ? base::UTF8ToUTF16(url_.spec()) : title_);
++      name.empty() ? base::UTF8ToUTF16(url_.spec()) : name);
+   // A capsule draws no text at all, so the tooltip is the only way to tell
+   // one favorite from another.
+-  SetTooltipText(title_.empty()
++  SetTooltipText(name.empty()
+                      ? base::UTF8ToUTF16(url_.spec())
+-                     : title_ + u"\n" + base::UTF8ToUTF16(url_.spec()));
++                     : name + u"\n" + base::UTF8ToUTF16(url_.spec()));
++}
++
++void WorkspaceEntryView::StartRename() {
++  if (editing_ || renders_as_capsule()) {
++    return;
++  }
++  editing_ = true;
++  // The field starts with what the row reads and all of it selected (Arc
++  // g34-3); emptied, it shows the same text as a grey placeholder (g34-4).
++  rename_shown_before_ = DisplayTitle();
++  editor_->SetText(rename_shown_before_);
++  editor_->SetPlaceholderText(rename_shown_before_);
++  editor_->SetVisible(true);
++  title_label_->SetVisible(false);
++  SetIconHovered(false);
++  UpdateCloseButton();
++  DeprecatedLayoutImmediately();
++  editor_->RequestFocus();
++  editor_->SelectAll(/*reversed=*/false);
++}
++
++void WorkspaceEntryView::OnRenameFieldBlurred() {
++  // The focus went elsewhere on its own (a click away): commit, like Arc.
++  // Return and Escape end the edit before they clear the focus, so their
++  // blur finds nothing to do.
++  if (editing_) {
++    FinishRename(/*commit=*/true, /*clear_focus=*/false);
++  }
++}
++
++gfx::Rect WorkspaceEntryView::IconBounds() const {
++  return icon_->bounds();
++}
++
++bool WorkspaceEntryView::HandleKeyEvent(views::Textfield* sender,
++                                        const ui::KeyEvent& key_event) {
++  if (key_event.type() != ui::EventType::kKeyPressed || !editing_) {
++    return false;
++  }
++  // Mid-composition, Return and Escape belong to the input method (Arc g34-5:
++  // the candidates are confirmed first). The Mac's input method usually
++  // takes them before they get here; Textfield::OnKeyPressed asks the
++  // controller without looking, so this is the belt to that.
++  if (sender->IsIMEComposing()) {
++    return false;
++  }
++  // Both keys leave through the framework's own focus system (FinishRename
++  // clears it before the field hides).
++  if (key_event.key_code() == ui::VKEY_RETURN) {
++    FinishRename(/*commit=*/true, /*clear_focus=*/true);
++    return true;
++  }
++  if (key_event.key_code() == ui::VKEY_ESCAPE) {
++    FinishRename(/*commit=*/false, /*clear_focus=*/true);
++    return true;
++  }
++  return false;
++}
++
++void WorkspaceEntryView::FinishRename(bool commit, bool clear_focus) {
++  if (!editing_) {
++    return;
++  }
++  // Off first: the blur that clearing the focus sends must find the edit
++  // already over.
++  editing_ = false;
++  const std::u16string entered(editor_->GetText());
++  // ⛔ Out of the field before it hides: hiding a focused view advances the
++  // focus to the next stop, and past the sidebar that is the page (the icon
++  // picker learned it with the page's focus ring, 2a).
++  if (clear_focus) {
++    if (views::FocusManager* const focus = GetFocusManager();
++        focus && editor_->HasFocus()) {
++      focus->ClearFocus();
++    }
++  }
++  editor_->SetVisible(false);
++  title_label_->SetVisible(!renders_as_capsule());
++  UpdateTitleText();
++  // The pointer usually left long ago (the edit ends on a key or a click
++  // somewhere else), and no exit event is coming.
++  if (!IsMouseHovered()) {
++    hovered_ = false;
++  }
++  UpdateCloseButton();
++  DeprecatedLayoutImmediately();
++  SchedulePaint();
++  if (!commit || !delegate_) {
++    return;
++  }
++  const helium::RenameResult result = helium::ResolveRename(
++      entered, rename_shown_before_, !custom_title_.empty());
++  if (result.outcome == helium::RenameOutcome::kNoChange) {
++    return;
++  }
++  const std::u16string custom = result.outcome == helium::RenameOutcome::kSet
++                                    ? result.text
++                                    : std::u16string();
++  // ⛔ A finish can run inside the sidebar's own sync: a blur while the
++  // sidebar drops this very row (another window moved the entry to another
++  // space), or SetEntry turning the row into a tile under the edit. The
++  // model notifies the sidebar synchronously -- a second sync inside the
++  // first, removing views twice (reviewer diff r0 #1, r1). So every commit,
++  // Return's too, reaches the model one task later, and only if the row is
++  // still around. The row reads the new name meanwhile, its accessible name
++  // and tooltip included: the model's echo finds nothing changed (r1).
++  custom_title_ = custom;
++  UpdateTitleText();
++  UpdateAccessibleState();
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](base::WeakPtr<WorkspaceEntryView> self, std::u16string custom) {
++            if (self && self->delegate_) {
++              self->delegate_->OnEntryRenamed(self->entry_id_, custom);
++            }
++          },
++          weak_factory_.GetWeakPtr(), custom));
+ }
+ 
+ BEGIN_METADATA(WorkspaceEntryView)
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+@@ -25,6 +25,7 @@
+ #include "ui/base/accelerators/accelerator.h"
+ #include "ui/gfx/image/image_skia.h"
+ #include "ui/views/context_menu_controller.h"
++#include "ui/views/controls/textfield/textfield_controller.h"
+ #include "ui/views/view.h"
+ 
+ class Profile;
+@@ -46,6 +47,7 @@
+ namespace views {
+ class Label;
+ class MenuRunner;
++class Textfield;
+ }  // namespace views
+ 
+ // One row of the workspace sidebar. Unlike a TabView this renders a
+@@ -68,9 +70,15 @@
+ // 180ms -- the title rises, the hint and the favicon's fill come in, the "/"
+ // goes out, all on one tween (arc_sidebar_surface.h) -- while the row's
+ // height never changes. The capsule fill underneath still snaps.
++//
++// M6 轮3 3b: a row can be renamed in place (Rename...: the title swaps for a
++// field with the name selected -- Arc g14b / g34) and any entry can wear an
++// icon of the user's choosing (Change Icon...); both live in the entry
++// (WorkspaceEntry::custom_title / icon) and win over the page's own.
+ class WorkspaceEntryView : public views::View,
+                            public views::ContextMenuController,
+                            public views::AnimationDelegateViews,
++                           public views::TextfieldController,
+                            public AlertIndicatorButton::Delegate {
+   METADATA_HEADER(WorkspaceEntryView, views::View)
+ 
+@@ -109,6 +117,12 @@
+     // "Replace Pinned URL with Current" and "Edit...".
+     virtual void OnEntryReplaceUrlRequested(const std::string& entry_id) = 0;
+     virtual void OnEntryEditUrlRequested(const std::string& entry_id) = 0;
++    // M6 轮3 3b. A finished in-place rename that changes something: the
++    // entry's own name, or "" to drop it (the page's title shows again).
++    virtual void OnEntryRenamed(const std::string& entry_id,
++                                const std::u16string& custom_title) = 0;
++    // Change Icon...: the sidebar anchors the picker on IconBounds().
++    virtual void OnEntryChangeIconRequested(const std::string& entry_id) = 0;
+ 
+    protected:
+     virtual ~Delegate() = default;
+@@ -202,6 +216,23 @@
+   // The menu's chosen item. May delete |this| (Remove, Move to).
+   void OnMenuCommand(helium::EntryMenuItemId id, const std::string& space_id);
+ 
++  // M6 轮3 3b: Rename... on a row (a tile has no text to edit). The field
++  // takes the title's place with the text selected; Return and focus loss
++  // commit, Escape restores (the user's Esc rule, 2026-09-17). No-op on a
++  // tile or while already editing.
++  void StartRename();
++  bool renaming() const { return editing_; }
++  // Called by the field when it loses focus: commits unless the edit has
++  // already ended (Return / Escape clear the focus themselves).
++  void OnRenameFieldBlurred();
++  // Where the favicon (or the entry's own icon) is drawn, in this view --
++  // the icon picker's anchor.
++  gfx::Rect IconBounds() const;
++
++  // views::TextfieldController:
++  bool HandleKeyEvent(views::Textfield* sender,
++                      const ui::KeyEvent& key_event) override;
++
+   // AlertIndicatorButton::Delegate (2a-r3: the speaker a Today row wears,
+   // on a bound row -- user 2026-09-05 #7).
+   bool ShouldEnableMuteToggle(int required_width) override;
+@@ -210,8 +241,9 @@
+   void AlertStateChanged() override;
+ 
+  private:
+-  // Live tab -> stored PNG -> favicon service -> default globe. The last step
+-  // is not optional: TabIcon paints nothing for an empty ImageModel.
++  // The entry's own icon, if it has one this build can draw (3b) -> live tab
++  // -> stored PNG -> favicon service -> default globe. The last step is not
++  // optional: TabIcon paints nothing for an empty ImageModel.
+   void ResolveIcon();
+   // Whether the stored PNG is the sharper picture of the same page than the
+   // live tab's favicon: the tab is at the pinned URL, its favicon has no
+@@ -221,9 +253,15 @@
+   void ApplyIcon(const ui::ImageModel& favicon);
+   void UpdateAccessibleState();
+ 
+-  // The title label shows the live tab's title while bound, the entry's own
+-  // (pinned-page) title otherwise.
++  // The title label shows the entry's own name (3b) if it has one, else the
++  // live tab's title while bound, else the pinned page's title
++  // (helium::EffectiveEntryTitle).
++  std::u16string DisplayTitle() const;
+   void UpdateTitleText();
++  // 3b: ends an in-place rename. |commit| reports the text (through
++  // helium::ResolveRename); |clear_focus| takes the focus out of the field
++  // first -- hiding a focused view advances the focus onto the page.
++  void FinishRename(bool commit, bool clear_focus);
+   // 3a-r7: the title's ink -- the active row's, or the resting grey every
+   // other title in the sidebar wears (arc_sidebar_surface.h).
+   void UpdateTitleColor();
+@@ -270,6 +308,9 @@
+   GURL url_;
+   std::u16string title_;
+   std::string favicon_png_;
++  // 3b: the entry's own name and icon; empty = none.
++  std::u16string custom_title_;
++  std::string custom_icon_;
+   // M6-r4: SetEntry() has run ResolveIcon() at least once.
+   bool icon_resolved_ = false;
+   helium_workspace::WorkspaceEntry::Section section_ =
+@@ -303,6 +344,12 @@
+   raw_ptr<TabIcon> icon_ = nullptr;
+   raw_ptr<views::Label> slash_label_ = nullptr;
+   raw_ptr<TabTitle> title_label_ = nullptr;
++  // 3b: the in-place rename field, hidden unless editing.
++  raw_ptr<views::Textfield> editor_ = nullptr;
++  bool editing_ = false;
++  // What the row read when the edit began: the field's placeholder (Arc
++  // g34-4) and ResolveRename's "unchanged" test.
++  std::u16string rename_shown_before_;
+   raw_ptr<views::Label> hint_label_ = nullptr;
+   raw_ptr<TabCloseButton> close_button_ = nullptr;
+   // 2a-r3: audio playing / muted, after the favicon (TabView's order); a
+Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
+@@ -10,6 +10,7 @@
+ #include <vector>
+ 
+ #include "base/functional/bind.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "cc/paint/paint_flags.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+@@ -348,9 +349,31 @@
+ }
+ 
+ void WorkspaceFolderRowView::OnRenameFieldBlurred() {
+-  if (editing_) {
+-    CommitRename();
++  if (!editing_) {
++    return;
++  }
++  // ⛔ M6 轮3 3b (reviewer diff r0 #1, found on the entry row's twin): a focus
++  // loss can come from inside a view removal -- the sidebar dropping this
++  // folder because another window deleted it or moved it to another space
++  // blurs the field on the way out -- and the model notifies the sidebar
++  // synchronously, which would sync again inside that removal loop and
++  // remove this view twice. The model hears of it one task later, and only
++  // if the row is still around; the row reads the new name meanwhile.
++  const std::u16string text(editor_->GetText());
++  EndRename();
++  if (text.empty() || text == title_text_) {
++    return;
+   }
++  title_->SetText(text);
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE,
++      base::BindOnce(
++          [](base::WeakPtr<WorkspaceFolderRowView> self, std::u16string text) {
++            if (self) {
++              self->delegate_->OnFolderRenamed(self->folder_id_, text);
++            }
++          },
++          weak_factory_.GetWeakPtr(), text));
+ }
+ 
+ void WorkspaceFolderRowView::CommitRename() {
+Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
+@@ -10,6 +10,7 @@
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "chrome/browser/ui/helium/arc_entry_menu.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_space.h"
+@@ -185,6 +186,8 @@
+   ui::ImageModel current_icon_;
+   std::unique_ptr<WorkspaceEntryMenuModel> menu_model_;
+   std::unique_ptr<views::MenuRunner> menu_runner_;
++  // 3b: the blur-path commit is posted (OnRenameFieldBlurred).
++  base::WeakPtrFactory<WorkspaceFolderRowView> weak_factory_{this};
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_FOLDER_ROW_VIEW_H_
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -2762,6 +2762,58 @@
+                                        GetWidget()->GetNativeWindow());
+ }
+ 
++void WorkspaceSidebarView::OnEntryRenamed(const std::string& entry_id,
++                                          const std::u16string& custom_title) {
++  if (service_) {
++    service_->SetEntryCustomTitle(entry_id, custom_title);
++  }
++}
++
++void WorkspaceSidebarView::OnEntryChangeIconRequested(
++    const std::string& entry_id) {
++  const auto it = entry_views_.find(entry_id);
++  const helium_workspace::WorkspaceEntry* const entry =
++      service_ ? service_->FindEntryById(entry_id) : nullptr;
++  if (it == entry_views_.end() || !entry) {
++    return;
++  }
++  WorkspaceEntryView* const view = it->second.get();
++  BrowserView* const browser_view =
++      BrowserView::GetBrowserViewForBrowser(GetBrowserWindow());
++  VerticalTabStripRegionView* const region =
++      browser_view ? browser_view->vertical_tab_strip_region_view() : nullptr;
++  // The menu was opened on this row, so it is on screen; one that has gone
++  // since (a fold, an empty layout) has nowhere to hang the card.
++  if (!region || !view->GetVisible() || view->bounds().IsEmpty()) {
++    return;
++  }
++  const gfx::Rect anchor = views::View::ConvertRectToTarget(
++      view, browser_view, view->IconBounds());
++  const gfx::Rect row =
++      views::View::ConvertRectToTarget(view, browser_view, view->GetLocalBounds());
++  const gfx::Rect region_bounds = views::View::ConvertRectToTarget(
++      region, browser_view, region->GetLocalBounds());
++  // Arc g35 f_00400: the card's top 7 below the row, the tail at the favicon;
++  // the same card as a space's (the user's 2026-09-22 rule: it stays up
++  // after a pick, so each one arrives here by id).
++  browser_view->ShowHeliumSpaceIconPicker(
++      anchor, helium::SpaceIconPickerPlacement::kBelowAnchor,
++      row.bottom() + helium::kSpaceIconPickerGapBelowEntryRow,
++      region_bounds.x(), entry->icon,
++      base::BindRepeating(&WorkspaceSidebarView::OnEntryIconPicked,
++                          weak_factory_.GetWeakPtr(), entry_id),
++      base::DoNothing());
++}
++
++void WorkspaceSidebarView::OnEntryIconPicked(const std::string& entry_id,
++                                             const std::string& icon) {
++  // An id that has gone (deleted or moved away while the picker was up) is a
++  // no-op in the service.
++  if (service_) {
++    service_->SetEntryIcon(entry_id, icon);
++  }
++}
++
+ // ---- M3.11 entry drag: source side (views::DragController) ----
+ 
+ void WorkspaceSidebarView::WriteDragDataForView(views::View* sender,
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -274,6 +274,9 @@
+                                    const std::string& space_id) override;
+   void OnEntryReplaceUrlRequested(const std::string& entry_id) override;
+   void OnEntryEditUrlRequested(const std::string& entry_id) override;
++  void OnEntryRenamed(const std::string& entry_id,
++                      const std::u16string& custom_title) override;
++  void OnEntryChangeIconRequested(const std::string& entry_id) override;
+ 
+   // WorkspaceFolderRowView::Delegate (M3.13):
+   void OnFolderToggled(const std::string& folder_id) override;
+@@ -315,6 +318,11 @@
+  private:
+   void OpenSpaceIconPicker(int attempt);
+   void OnSpaceIconPicked(const std::string& space_id, const std::string& icon);
++  // M6 轮3 3b: Change Icon... on a row or a tile. The picker stays up after a
++  // pick (user 2026-09-22), so every pick lands here by id -- never a view
++  // pointer: the row may be gone (deleted, moved to another space) by the
++  // time the next one comes.
++  void OnEntryIconPicked(const std::string& entry_id, const std::string& icon);
+ 
+   // Geometry of one layout pass, shared by Layout() and the preferred-size
+   // calculation so the two can never disagree.
+Index: src/chrome/browser/ui/views/tabs/common/workspace_space_icon_set.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_icon_set.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_space_icon_set.cc
+@@ -5,11 +5,22 @@
+ #include "chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h"
+ 
+ #include <iterator>
++#include <utility>
+ 
++#include "base/strings/utf_string_conversions.h"
+ #include "chrome/app/vector_icons/vector_icons.h"
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_space_icon_names.h"
+ #include "components/omnibox/browser/vector_icons.h"
+ #include "components/vector_icons/vector_icons.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/favicon_size.h"
++#include "ui/gfx/font_list.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
++#include "ui/gfx/image/canvas_image_source.h"
++#include "ui/gfx/image/image_skia.h"
++#include "ui/gfx/paint_vector_icon.h"
+ #include "ui/gfx/vector_icon_types.h"
+ #include "ui/views/vector_icons.h"
+ 
+@@ -153,3 +164,53 @@
+ const gfx::VectorIcon& SpaceFormPlusIcon() {
+   return vector_icons::kAddOldIcon;
+ }
++
++namespace {
++
++// The emoji's size inside the favicon's square: the ratio the Move to menu's
++// space icons use (13 in 16, workspace_move_to_space_menu_model.cc).
++constexpr int kEntryEmojiFontSize = 13;
++
++class EntryEmojiSource : public gfx::CanvasImageSource {
++ public:
++  EntryEmojiSource(std::u16string emoji, SkColor color)
++      : gfx::CanvasImageSource(gfx::Size(gfx::kFaviconSize, gfx::kFaviconSize)),
++        emoji_(std::move(emoji)),
++        color_(color) {}
++
++  // gfx::CanvasImageSource:
++  void Draw(gfx::Canvas* canvas) override {
++    // A colour emoji ignores |color_|; a text-style symbol (☀) wears it.
++    canvas->DrawStringRectWithFlags(
++        emoji_,
++        gfx::FontList().DeriveWithSizeDelta(kEntryEmojiFontSize -
++                                            gfx::FontList().GetFontSize()),
++        color_, gfx::Rect(size()),
++        gfx::Canvas::TEXT_ALIGN_CENTER | gfx::Canvas::NO_SUBPIXEL_RENDERING);
++  }
++
++ private:
++  const std::u16string emoji_;
++  const SkColor color_;
++};
++
++}  // namespace
++
++ui::ImageModel EntryCustomIconImage(const std::string& icon,
++                                    SkColor glyph_color) {
++  if (icon.empty()) {
++    return ui::ImageModel();
++  }
++  if (helium_workspace::IsVectorIconRef(icon)) {
++    const gfx::VectorIcon* vector =
++        FindSpaceVectorIcon(helium_workspace::VectorIconRefName(icon));
++    if (!vector) {
++      return ui::ImageModel();
++    }
++    return ui::ImageModel::FromImageSkia(
++        gfx::CreateVectorIcon(*vector, gfx::kFaviconSize, glyph_color));
++  }
++  return ui::ImageModel::FromImageSkia(
++      gfx::CanvasImageSource::MakeImageSkia<EntryEmojiSource>(
++          base::UTF8ToUTF16(icon), glyph_color));
++}
+Index: src/chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h
+@@ -5,9 +5,12 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SPACE_ICON_SET_H_
+ #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SPACE_ICON_SET_H_
+ 
++#include <string>
+ #include <string_view>
+ 
+ #include "chrome/browser/ui/helium_workspace/workspace_emoji_table.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "ui/base/models/image_model.h"
+ 
+ namespace gfx {
+ struct VectorIcon;
+@@ -44,4 +47,14 @@
+ // The "+" inside the Create a Space form's dashed button.
+ const gfx::VectorIcon& SpaceFormPlusIcon();
+ 
++// helium-fork M6 轮3 3b: a sidebar entry's own icon (WorkspaceEntry::icon --
++// one emoji or a "vi:<name>" reference, the space icon's format) as an image
++// the size of a favicon, for the places that draw favicons: the sidebar's
++// rows and tiles (TabIcon, and through it their drag card) and the omnibox
++// list. An emoji is drawn as text, a vector icon in |glyph_color|. Empty for
++// "" and for a "vi:" name this build does not know: the caller falls back to
++// the favicon chain and the stored value is left alone.
++ui::ImageModel EntryCustomIconImage(const std::string& icon,
++                                    SkColor glyph_color);
++
+ #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SPACE_ICON_SET_H_
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
++++ src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
+@@ -686,7 +686,9 @@
+   if (service_) {
+     service_->SetSpaceIcon(space_id, icon);
+   }
+-  RequestFocus();
++  // M6 轮3 3b: no RequestFocus() here any more -- the picker stays up after
++  // a pick (user 2026-09-22) and keeps the focus; the region's
++  // OnManageSheetPickerClosed gives it back to the sheet when it goes.
+ }
+ 
+ void HeliumSpaceManageView::Layout(PassKey) {
