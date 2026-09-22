@@ -1,0 +1,1015 @@
+Index: src/chrome/app/generated_resources.grd
+===================================================================
+--- src.orig/chrome/app/generated_resources.grd
++++ src/chrome/app/generated_resources.grd
+@@ -12263,6 +12263,15 @@
+         <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
+           Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
+         </message>
++        <message name="IDS_HELIUM_WS_TURNED_INTO_SPACE_BODY" desc="Text in the sidebar's bottom undo bar right after a folder was turned into a space, next to an Undo button.">
++          Turned “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>” into a space
++        </message>
++        <message name="IDS_HELIUM_WS_ENTRY_MOVED_BODY" desc="Text in the sidebar's bottom bar right after a row, folder or tab was moved to another space while the window stayed where it was; next to a button that goes to that space.">
++          Moved to “<ph name="SPACE_NAME">$1<ex>Work</ex></ph>”
++        </message>
++        <message name="IDS_HELIUM_WS_ENTRY_MOVED_GO" desc="Button in the sidebar's bottom bar that switches to the space something was just moved to.">
++          Go
++        </message>
+         <message name="IDS_HELIUM_WS_SPACE_FIRST_NAME" desc="Name given to the one sidebar space a profile starts with (or is migrated into); the user can rename it.">
+           Personal
+         </message>
+@@ -12637,6 +12646,15 @@
+         <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="In Title Case: Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
+           Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
+         </message>
++        <message name="IDS_HELIUM_WS_TURNED_INTO_SPACE_BODY" desc="In Title Case: Text in the sidebar's bottom undo bar right after a folder was turned into a space, next to an Undo button.">
++          Turned “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>” Into a Space
++        </message>
++        <message name="IDS_HELIUM_WS_ENTRY_MOVED_BODY" desc="In Title Case: Text in the sidebar's bottom bar right after a row, folder or tab was moved to another space while the window stayed where it was; next to a button that goes to that space.">
++          Moved to “<ph name="SPACE_NAME">$1<ex>Work</ex></ph>”
++        </message>
++        <message name="IDS_HELIUM_WS_ENTRY_MOVED_GO" desc="In Title Case: Button in the sidebar's bottom bar that switches to the space something was just moved to.">
++          Go
++        </message>
+         <message name="IDS_HELIUM_WS_SPACE_FIRST_NAME" desc="In Title Case: Name given to the one sidebar space a profile starts with (or is migrated into); the user can rename it.">
+           Personal
+         </message>
+Index: src/chrome/browser/ui/helium/arc_entry_menu.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_entry_menu.h
++++ src/chrome/browser/ui/helium/arc_entry_menu.h
+@@ -102,13 +102,19 @@
+   bool is_tile = false;
+   // A tab is open for the entry.
+   bool bound = false;
++  // ... and it is the one in front of this window. 3c: what decides the
++  // ⇧⌘C hint, because that shortcut copies the page in front (Arc g25/g27
++  // show it on the active row even when drifted; g28's loaded-but-behind
++  // copy does not get it).
++  bool active_tab = false;
+   // ... and it has left the pinned URL.
+   bool drifted = false;
+   bool audible = false;
+   bool muted = false;
+   // The Favorites grid has room and the entry may go there (a row only).
+   bool can_become_favorite = true;
+-  // The grid is at its cap, so a tile cannot be duplicated.
++  // The grid is at its cap. 3c: no longer gates Duplicate on a tile (the
++  // copy goes to Today now, Arc g29); the sidebar still reports it.
+   bool favorites_full = false;
+   // The copy-page-URL shortcut is bound and means "copy" (not "inspect").
+   bool copy_shortcut_live = false;
+@@ -149,10 +155,11 @@
+     return items.back();
+   };
+ 
+-  // The item copies the pinned URL and the shortcut copies the page's, so
+-  // the hint would lie on a drifted row.
++  // 3c (Arc g27, user 2026-09-22): both copy the page in front now, so the
++  // hint is honest on a drifted row too -- and only on the row that *is*
++  // the page in front (elsewhere ⇧⌘C would copy someone else's URL).
+   add(EntryMenuItemId::kCopyLink, EntryMenuLabel::kCopyLink).show_accelerator =
+-      s.bound && !s.drifted && s.copy_shortcut_live;
++      s.active_tab && s.copy_shortcut_live;
+ 
+   const size_t second_group = items.size();
+   if (s.include_3b) {
+@@ -182,8 +189,9 @@
+   items[second_group].separator_before = true;
+ 
+   add(EntryMenuItemId::kOpen, EntryMenuLabel::kOpen).separator_before = true;
+-  add(EntryMenuItemId::kDuplicate, EntryMenuLabel::kDuplicate,
+-      !(s.is_tile && s.favorites_full));
++  // 3c: a tile's Duplicate opens a background tab in Today (Arc g29), so a
++  // full grid no longer greys it out.
++  add(EntryMenuItemId::kDuplicate, EntryMenuLabel::kDuplicate);
+   // Favorites are the same in every space (Arc g1), so a tile has nowhere to
+   // move to; Arc's own tile submenu is profiles only (g12).
+   if (!s.is_tile) {
+Index: src/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
++++ src/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
+@@ -76,9 +76,12 @@
+   EXPECT_EQ(Label::kRemovePin, Find(menu, Id::kRemove)->label);
+ }
+ 
+-TEST(ArcEntryMenuTest, OpenAtHomeShowsCopyHint) {
++TEST(ArcEntryMenuTest, ActiveRowShowsCopyHint) {
+   EntryMenuState s = Row();
+   s.bound = true;
++  // 3c: open is not enough -- the shortcut copies the page in front.
++  EXPECT_FALSE(Find(BuildEntryMenu(s), Id::kCopyLink)->show_accelerator);
++  s.active_tab = true;
+   EXPECT_TRUE(Find(BuildEntryMenu(s), Id::kCopyLink)->show_accelerator);
+   // The shortcut is unbound, or the pref turns it into Inspect.
+   s.copy_shortcut_live = false;
+@@ -92,8 +95,11 @@
+   const std::vector<EntryMenuItem> menu = BuildEntryMenu(s);
+   EXPECT_TRUE(Find(menu, Id::kBackToPinnedUrl)->enabled);
+   EXPECT_TRUE(Find(menu, Id::kEditPinnedPage)->submenu[0].enabled);
+-  // The item copies the pinned URL, the shortcut the page's.
++  // 3c (Arc g27): drifting does not hide the hint -- both the item and the
++  // shortcut copy the page the row is showing. Being behind does.
+   EXPECT_FALSE(Find(menu, Id::kCopyLink)->show_accelerator);
++  s.active_tab = true;
++  EXPECT_TRUE(Find(BuildEntryMenu(s), Id::kCopyLink)->show_accelerator);
+ }
+ 
+ TEST(ArcEntryMenuTest, TileHidesMoveToAndBack) {
+@@ -126,15 +132,17 @@
+   EXPECT_FALSE(Find(BuildEntryMenu(s), Id::kToggleMute)->enabled);
+ }
+ 
+-TEST(ArcEntryMenuTest, CapDisablesFavoriteAndTileDuplicate) {
++TEST(ArcEntryMenuTest, CapDisablesFavoriteNotDuplicate) {
+   EntryMenuState s = Row();
+   s.can_become_favorite = false;
+   s.favorites_full = true;
+   EXPECT_FALSE(Find(BuildEntryMenu(s), Id::kToggleFavorite)->enabled);
+   // A row's copy lands among the rows, whatever the grid holds.
+   EXPECT_TRUE(Find(BuildEntryMenu(s), Id::kDuplicate)->enabled);
++  // 3c (Arc g29): a tile's copy is a Today tab, so a full grid is no
++  // longer a reason to grey it out.
+   s.is_tile = true;
+-  EXPECT_FALSE(Find(BuildEntryMenu(s), Id::kDuplicate)->enabled);
++  EXPECT_TRUE(Find(BuildEntryMenu(s), Id::kDuplicate)->enabled);
+   // ... and a tile can always leave the grid.
+   EXPECT_TRUE(Find(BuildEntryMenu(s), Id::kToggleFavorite)->enabled);
+ }
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
+@@ -553,6 +553,52 @@
+   return space_id;
+ }
+ 
++bool WorkspaceService::TurnSpaceBackIntoFolder(
++    const std::string& space_id,
++    const WorkspaceEntry& folder,
++    const std::string& original_space_id,
++    const std::vector<std::string>& children) {
++  if (!folder.is_folder() || !FindSpaceById(space_id) ||
++      !FindSpaceById(original_space_id) || FindEntryById(folder.id)) {
++    return false;
++  }
++  // Only the rows the conversion took, still where it left them, and never a
++  // folder: whatever else the space has gained in the meantime is the user's
++  // and stays (reviewer diff r0 G2). Their order in the space is the order
++  // they had inside the folder.
++  const std::set<std::string> wanted(children.begin(), children.end());
++  int child_position = 0;
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.section == WorkspaceEntry::Section::kPinned &&
++        entry.space_id == space_id && !entry.is_folder() &&
++        wanted.contains(entry.id)) {
++      entry.space_id = original_space_id;
++      entry.folder_id = folder.id;
++      entry.position = child_position++;
++    }
++  }
++  // The folder goes back to its old slot. RenumberScopes() closed the hole
++  // when it left, so reopen it first -- everything from that slot on shifts
++  // back down one -- and let SortEntries() place the folder (and, behind it,
++  // its children, which sort by their folder's position) by number.
++  for (WorkspaceEntry& entry : entries_) {
++    if (entry.section == WorkspaceEntry::Section::kPinned &&
++        entry.space_id == original_space_id && entry.folder_id.empty() &&
++        entry.position >= folder.position) {
++      ++entry.position;
++    }
++  }
++  WorkspaceEntry restored = folder;
++  restored.space_id = original_space_id;
++  restored.folder_id.clear();
++  entries_.push_back(std::move(restored));
++  SortEntries();
++  RenumberScopes();
++  PersistToPrefs();
++  NotifyChanged();
++  return true;
++}
++
+ const WorkspaceSpace* WorkspaceService::FindSpaceById(
+     const std::string& id) const {
+   for (const WorkspaceSpace& space : spaces_) {
+Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service.h
++++ src/chrome/browser/ui/helium_workspace/workspace_service.h
+@@ -206,6 +206,24 @@
+   // whole.
+   std::string TurnFolderIntoSpace(const std::string& folder_id,
+                                   const std::string& insert_after_id);
++  // M6 轮3 3c, the undo behind that command (user 2026-09-22: a confirm
++  // first, then an "Undo" offer afterwards). It is the inverse operation,
++  // NOT a RestoreEntries() snapshot: TurnFolderIntoSpace never deleted the
++  // children -- it re-homed them -- so their ids are still taken and
++  // RestoreEntries() would refuse the whole snapshot (reviewer brief r0 F1).
++  // Every pinned entry of |space_id| goes back into |folder| (which is
++  // reinserted at its old position, ahead of whoever took that slot), and
++  // the space is left empty for the caller to remove. Bindings are keyed by
++  // entry id and are never touched. False when the space is gone, the
++  // folder's id is taken again, or |folder| is not a folder.
++  // |children| are the rows the conversion moved, by id: only those go back
++  // (reviewer diff r0 G2 -- anything the user pinned in the new space during
++  // the undo window is not the folder's, and a folder they made there would
++  // become a nested one, which the model does not have).
++  bool TurnSpaceBackIntoFolder(const std::string& space_id,
++                               const WorkspaceEntry& folder,
++                               const std::string& original_space_id,
++                               const std::vector<std::string>& children);
+ 
+   // ---- Spaces (M6) ----
+   // In bottom-bar order (dense positions). Never empty after construction:
+Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
+@@ -1516,5 +1516,101 @@
+   EXPECT_THAT(PinnedShape(*service_), ElementsAre());
+ }
+ 
++// ---- M6 轮3 3c: the undo behind it (user 2026-09-22) ----
++
++TEST_F(WorkspaceServiceTest, TurnSpaceBackIntoFolderPutsEverythingBack) {
++  const std::string before = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://x.example/"), u"X");
++  const std::string folder = service_->AddFolder(u"Research", kDefaultSpaceId);
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  const std::string b = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://b.example/"), u"B");
++  const std::string after = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://y.example/"), u"Y");
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++  ASSERT_TRUE(service_->MoveEntryToFolder(b, folder, 1));
++  auto tab = MakeTab("https://b.example/", window_a());
++  service_->BindTab(tab->GetHandle(), b, /*guessed=*/false);
++  const WorkspaceEntry snapshot = *service_->FindEntryById(folder);
++
++  const std::string space =
++      service_->TurnFolderIntoSpace(folder, kDefaultSpaceId);
++  ASSERT_FALSE(space.empty());
++
++  EXPECT_TRUE(service_->TurnSpaceBackIntoFolder(space, snapshot,
++                                                kDefaultSpaceId, {a, b}));
++  // The folder is back between its old neighbours, its children inside it in
++  // their order, and the binding never moved.
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(before, folder, folder + "/" + a, folder + "/" + b,
++                          after));
++  const WorkspaceEntry* const back = service_->FindEntryById(folder);
++  ASSERT_TRUE(back);
++  EXPECT_TRUE(back->is_folder());
++  EXPECT_EQ(u"Research", back->title);
++  EXPECT_EQ(folder, service_->FindEntryById(a)->folder_id);
++  EXPECT_EQ(folder, service_->FindEntryById(b)->folder_id);
++  EXPECT_EQ(kDefaultSpaceId, service_->FindEntryById(a)->space_id);
++  EXPECT_EQ(b, service_->FindEntryIdForTab(tab->GetHandle()));
++  // The space it made is empty now, so removing it closes over nothing.
++  EXPECT_THAT(PinnedShapeIn(*service_, space), ElementsAre());
++  EXPECT_TRUE(service_->RemoveSpace(space).has_value());
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(before, folder, folder + "/" + a, folder + "/" + b,
++                          after));
++}
++
++TEST_F(WorkspaceServiceTest, TurnSpaceBackIntoFolderRefusesATakenId) {
++  const std::string folder = service_->AddFolder(u"Research", kDefaultSpaceId);
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++  const WorkspaceEntry snapshot = *service_->FindEntryById(folder);
++  const std::string space =
++      service_->TurnFolderIntoSpace(folder, kDefaultSpaceId);
++  ASSERT_FALSE(space.empty());
++  // A folder of the same id is back (a stale bar, a second undo): refuse.
++  EXPECT_TRUE(service_->TurnSpaceBackIntoFolder(space, snapshot,
++                                                kDefaultSpaceId, {a}));
++  EXPECT_FALSE(service_->TurnSpaceBackIntoFolder(space, snapshot,
++                                                 kDefaultSpaceId, {a}));
++  // And a space that is gone is refused too.
++  EXPECT_TRUE(service_->RemoveSpace(space).has_value());
++  EXPECT_FALSE(service_->TurnSpaceBackIntoFolder(space, snapshot,
++                                                 kDefaultSpaceId, {a}));
++}
++
++// reviewer diff r0 G2: what the user pinned in the new space while the undo
++// bar was up is theirs -- it does not get swept into the folder.
++TEST_F(WorkspaceServiceTest, TurnSpaceBackIntoFolderLeavesLaterArrivals) {
++  const std::string folder = service_->AddFolder(u"Research", kDefaultSpaceId);
++  const std::string a = service_->AddEntry(WorkspaceEntry::Section::kPinned,
++                                           GURL("https://a.example/"), u"A");
++  ASSERT_TRUE(service_->MoveEntryToFolder(a, folder, 0));
++  const WorkspaceEntry snapshot = *service_->FindEntryById(folder);
++  const std::string space =
++      service_->TurnFolderIntoSpace(folder, kDefaultSpaceId);
++  ASSERT_FALSE(space.empty());
++  // The user pins a page in the new space, and makes a folder there too.
++  const std::string mine = service_->AddEntry(
++      WorkspaceEntry::Section::kPinned, GURL("https://mine.example/"), u"Mine",
++      space);
++  const std::string their_folder = service_->AddFolder(u"Theirs", space);
++
++  EXPECT_TRUE(service_->TurnSpaceBackIntoFolder(space, snapshot,
++                                                kDefaultSpaceId, {a}));
++  // PinnedShape() reads every space in bar order: the folder is home with its
++  // child, the user's two are still in the space it made.
++  EXPECT_THAT(PinnedShape(*service_),
++              ElementsAre(folder, folder + "/" + a, mine, their_folder));
++  EXPECT_THAT(PinnedShapeIn(*service_, kDefaultSpaceId),
++              ElementsAre(folder, folder + "/" + a));
++  // Both of the user's stay put, and the folder they made is still top level.
++  EXPECT_THAT(PinnedShapeIn(*service_, space), ElementsAre(mine, their_folder));
++  EXPECT_TRUE(service_->FindEntryById(their_folder)->folder_id.empty());
++  EXPECT_EQ(space, service_->FindEntryById(mine)->space_id);
++}
++
+ }  // namespace
+ }  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -185,6 +185,45 @@
+   return extra && extra->entries().contains(helium_workspace::kEntryExtraDataKey);
+ }
+ 
++// helium-fork M6 轮3 3c: points a *restored* (never-loaded) tab's committed
++// entry at |url| without waking it. Extracted from SendRestoredTabHome so
++// Edit Pinned Page > Edit... can reuse it (Arc g26: the open tab follows the
++// edit -- and a sleeping one must follow without loading).
++void RepointRestoredEntry(content::NavigationEntry* nav,
++                          content::WebContents* contents,
++                          const GURL& url,
++                          const std::u16string& title) {
++  std::unique_ptr<content::NavigationEntryRestoreContext> restore_context =
++      content::NavigationEntryRestoreContext::Create();
++  // First, and everything else after it: SetPageState rebuilds the entry's
++  // FrameNavigationEntry from the state's own URL, referrer, method and
++  // redirect chain, clobbering whatever was set before it. The state has to
++  // be replaced at all because it is what the next session save writes out,
++  // and ContentSerializedNavigationBuilder::ToNavigationEntry lets it clobber
++  // the URL on the way back in -- leaving the old one there would resurrect
++  // it exactly one restart later.
++  nav->SetPageState(blink::PageState::CreateFromURL(url),
++                    restore_context.get());
++  nav->SetURL(url);
++  nav->SetVirtualURL(url);
++  // A direct navigation's chain is [url]; SetPageState leaves it empty. The
++  // at-home test falls back to the chain's first element and the chain is
++  // persisted with the entry, so give it the shape a navigation straight to
++  // this URL would have left behind.
++  nav->SetRedirectChain({url});
++  nav->SetTitle(title);
++  nav->SetOriginalRequestURL(GURL());
++  nav->SetTransitionType(ui::PAGE_TRANSITION_AUTO_BOOKMARK);
++
++  // The icon the restore asked for is the old page's, and its reply is still
++  // in flight against the URL just changed (ContentFaviconDriver::
++  // OnFaviconUpdated DCHECKs the two match). Asking again cancels that one.
++  if (favicon::FaviconDriver* const driver =
++          favicon::ContentFaviconDriver::FromWebContents(contents)) {
++    driver->FetchFavicon(url, /*is_same_document=*/false);
++  }
++}
++
+ }  // namespace
+ 
+ DEFINE_USER_DATA(WorkspaceTabController);
+@@ -600,15 +639,16 @@
+   const tabs::TabHandle tab =
+       std::exchange(pending_move_tab_, tabs::TabHandle::Null());
+   if (!entry_id.empty()) {
+-    MoveEntryToSpace(entry_id, id);
++    MoveEntryToSpace(entry_id, id, /*announce=*/false);
+   } else if (tab != tabs::TabHandle::Null()) {
+-    MoveTabToSpace(tab, id);
++    MoveTabToSpace(tab, id, /*announce=*/false);
+   }
+   SwitchToSpace(id);
+ }
+ 
+ void WorkspaceTabController::MoveEntryToSpace(const std::string& entry_id,
+-                                              const std::string& space_id) {
++                                              const std::string& space_id,
++                                              bool announce) {
+   // Copies: the callers' strings live in rows that the move rebuilds.
+   const std::string id = entry_id;
+   const std::string target = space_id;
+@@ -624,11 +664,12 @@
+   if (!service_->MoveEntryToSpace(id, target)) {
+     return;
+   }
+-  FollowMovedTabs(moved, target, tabs::TabHandle::Null());
++  FollowMovedTabs(moved, target, tabs::TabHandle::Null(), announce);
+ }
+ 
+ void WorkspaceTabController::MoveTabToSpace(tabs::TabHandle handle,
+-                                            const std::string& space_id) {
++                                            const std::string& space_id,
++                                            bool announce) {
+   const std::string target = space_id;
+   tabs::TabInterface* const tab = handle.Get();
+   if (!service_ || !tab ||
+@@ -647,7 +688,7 @@
+   // (prefs::kNewTabPosition) -- it kept its strip index, which among the
+   // other space's rows is no place in particular.
+   MoveTabToNewTabPlace(tab);
+-  FollowMovedTabs({handle}, target, handle);
++  FollowMovedTabs({handle}, target, handle, announce);
+ }
+ 
+ void WorkspaceTabController::TurnFolderIntoSpace(
+@@ -658,13 +699,102 @@
+   if (!folder || !folder->is_folder()) {
+     return;
+   }
++  // 3c: copied before the model moves -- the undo puts this back.
++  const WorkspaceEntry snapshot = *folder;
++  const std::u16string folder_title = folder->title;
++  const std::string origin_space = snapshot.space_id;
+   const std::vector<tabs::TabHandle> moved = TabsOfEntryTree(id);
++  // The rows that are about to move, by id: the undo takes back these and
++  // nothing else (reviewer diff r0 G2).
++  std::vector<std::string> children;
++  for (const WorkspaceEntry& entry : service_->entries()) {
++    if (entry.folder_id == id) {
++      children.push_back(entry.id);
++    }
++  }
+   const std::string space =
+       service_->TurnFolderIntoSpace(id, /*insert_after_id=*/current_space_id_);
+   if (space.empty()) {
+     return;
+   }
+-  FollowMovedTabs(moved, space, tabs::TabHandle::Null());
++  // 3c: this command always takes the window along (Arc g30, and our 3a
++  // behaviour) -- the "only the page in front follows" rule is Move to's,
++  // so the move half is told to keep quiet and the switch is explicit.
++  FollowMovedTabs(moved, space, tabs::TabHandle::Null(), /*announce=*/false);
++  turn_undo_folder_ = snapshot;
++  turn_undo_space_id_ = space;
++  turn_undo_origin_space_id_ = origin_space;
++  turn_undo_children_ = children;
++  turn_undo_tabs_ = moved;
++  // ⛔ 3c diagnosis 2026-09-22: raised BEFORE the switch. Shown after it, the
++  // bar never appeared -- the list-slide animation takes the region through a
++  // transient layout and the freshly shown bar never comes back from it.
++  if (BrowserView* const browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_window_)) {
++    if (VerticalTabStripRegionView* const region =
++            browser_view->vertical_tab_strip_region_view()) {
++      region->ShowUndoBarForTurnIntoSpace(
++          folder_title,
++          base::BindOnce(&WorkspaceTabController::UndoLastTurnFolderIntoSpace,
++                         weak_factory_.GetWeakPtr()));
++    }
++  }
++  SwitchToSpace(space);
++}
++
++void WorkspaceTabController::UndoLastTurnFolderIntoSpace() {
++  if (!service_ || !turn_undo_folder_) {
++    return;
++  }
++  const WorkspaceEntry folder = *turn_undo_folder_;
++  const std::string space_id = turn_undo_space_id_;
++  const std::string origin = turn_undo_origin_space_id_;
++  const std::vector<std::string> children = turn_undo_children_;
++  const std::vector<tabs::TabHandle> tabs = turn_undo_tabs_;
++  turn_undo_folder_.reset();
++  turn_undo_space_id_.clear();
++  turn_undo_origin_space_id_.clear();
++  turn_undo_children_.clear();
++  turn_undo_tabs_.clear();
++  // 1. The rows go home first: they never left the model, so their bindings
++  //    (keyed by entry id) ride along untouched.
++  if (!service_->TurnSpaceBackIntoFolder(space_id, folder, origin, children)) {
++    return;  // the space or the folder's id is someone else's now
++  }
++  // 2. Then the tags, before the space goes -- RemoveSpace() erases every
++  //    tag naming it, and these tabs must keep pointing at |origin|.
++  for (tabs::TabHandle handle : tabs) {
++    if (!handle.Get()) {
++      continue;
++    }
++    service_->SetTabSpace(handle, origin);
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(&WorkspaceTabController::PersistTabSpace,
++                                  weak_factory_.GetWeakPtr(), handle, origin));
++  }
++  // 3. The space is empty by now, so this closes nothing: DeleteSpace() --
++  //    which would close the tabs inside -- is deliberately not used
++  //    (reviewer brief r0 F2).
++  for (BrowserWindowInterface* browser : GetAllBrowserWindowInterfaces()) {
++    if (browser->GetProfile() != browser_window_->GetProfile()) {
++      continue;
++    }
++    if (WorkspaceTabController* const controller = From(browser)) {
++      if (controller->current_space_id_ == space_id) {
++        controller->SwitchToSpaceInternal(origin, kDirectionFromOrder);
++      }
++    }
++  }
++  // Only if it is empty: the user may have pinned something there inside the
++  // undo window, and that row -- with its space -- stays (G2).
++  const bool space_is_empty = std::ranges::none_of(
++      service_->entries(), [&](const WorkspaceEntry& e) {
++        return e.section == WorkspaceEntry::Section::kPinned &&
++               e.space_id == space_id;
++      });
++  if (space_is_empty) {
++    service_->RemoveSpace(space_id);
++  }
+ }
+ 
+ void WorkspaceTabController::RequestNewSpaceForEntryMove(
+@@ -702,7 +832,8 @@
+ void WorkspaceTabController::FollowMovedTabs(
+     const std::vector<tabs::TabHandle>& moved,
+     const std::string& space_id,
+-    tabs::TabHandle activate) {
++    tabs::TabHandle activate,
++    bool announce) {
+   const auto went_along = [&moved](tabs::TabHandle handle) {
+     return std::ranges::find(moved, handle) != moved.end();
+   };
+@@ -749,13 +880,45 @@
+   //    other visit.
+   TabStripModel* const model = browser_window_->GetTabStripModel();
+   tabs::TabInterface* const active = model ? model->GetActiveTab() : nullptr;
+-  if (activate.Get() && !(active && went_along(active->GetHandle())) &&
+-      !helium_workspace::IsSleepingTab(activate.Get()->GetContents())) {
+-    last_active_by_space_[space_id] = activate;
++  const bool active_went_along = active && went_along(active->GetHandle());
++  // 3c (Arc g28/g31/g32/g33, user 2026-09-22): only the page in front
++  // follows its row across. Anything else -- a background tab, a row with no
++  // tab at all, a whole folder -- stays put and the sidebar offers to go
++  // there. What it must not do is re-point the target space at the arrival:
++  // Arc shows that space's own last tab when you get there (g33).
++  if (!active_went_along) {
++    // Deliberately NOT last_active_by_space_[space_id] = activate: Arc shows
++    // the target space's own last tab when you get there, not the arrival
++    // (g33), and the old assignment is what made this window jump onto a
++    // moved row. (The rule that a sleeping moved tab must never become a
++    // space's "last seen" -- 3a-r8 -- is subsumed: none of them do now.)
++    if (announce && space_id != current_space_id_) {
++      const WorkspaceSpace* const space = service_->FindSpaceById(space_id);
++      if (BrowserView* const browser_view =
++              BrowserView::GetBrowserViewForBrowser(browser_window_)) {
++        if (VerticalTabStripRegionView* const region =
++                browser_view->vertical_tab_strip_region_view();
++            region && space) {
++          region->ShowMovedToSpaceBar(
++              space->name,
++              base::BindOnce(&WorkspaceTabController::GoToSpaceFromBar,
++                             weak_factory_.GetWeakPtr(), space_id));
++        }
++      }
++    }
++    return;
+   }
+   SwitchToSpaceInternal(space_id, kDirectionFromOrder);
+ }
+ 
++void WorkspaceTabController::GoToSpaceFromBar(const std::string& space_id) {
++  // The bar outlives nothing, but eight seconds is long enough for another
++  // window to have deleted the space it names.
++  if (service_ && service_->FindSpaceById(space_id)) {
++    SwitchToSpaceInternal(space_id, kDirectionFromOrder);
++  }
++}
++
+ void WorkspaceTabController::AddObserver(Observer* observer) {
+   observers_.AddObserver(observer);
+ }
+@@ -1932,36 +2095,7 @@
+   // still arrives on the click that activates it (LoadIfNecessary reads the
+   // entry we just rewrote). The pre-quit page is dropped rather than pushed
+   // onto the back stack, as in Arc; it is still in history.
+-  std::unique_ptr<content::NavigationEntryRestoreContext> restore_context =
+-      content::NavigationEntryRestoreContext::Create();
+-  // First, and everything else after it: SetPageState rebuilds the entry's
+-  // FrameNavigationEntry from the state's own URL, referrer, method and
+-  // redirect chain, clobbering whatever was set before it. The state has to
+-  // be replaced at all because it is what the next session save writes out,
+-  // and ContentSerializedNavigationBuilder::ToNavigationEntry lets it clobber
+-  // the URL on the way back in -- leaving the drifted one there would
+-  // resurrect the drift exactly one restart later.
+-  nav->SetPageState(blink::PageState::CreateFromURL(entry.url),
+-                    restore_context.get());
+-  nav->SetURL(entry.url);
+-  nav->SetVirtualURL(entry.url);
+-  // A direct navigation's chain is [url]; SetPageState leaves it empty. The
+-  // at-home test falls back to the chain's first element and the chain is
+-  // persisted with the entry, so give it the shape a navigation straight to
+-  // the pinned URL would have left behind.
+-  nav->SetRedirectChain({entry.url});
+-  nav->SetTitle(entry.title);
+-  nav->SetOriginalRequestURL(GURL());
+-  nav->SetTransitionType(ui::PAGE_TRANSITION_AUTO_BOOKMARK);
+-
+-  // The icon SessionRestoreDelegate::RestoreTabs asked for is the drifted
+-  // page's, and its reply is still in flight against the URL we just
+-  // changed (ContentFaviconDriver::OnFaviconUpdated DCHECKs the two match).
+-  // Asking again cancels that one and looks up the pinned page instead.
+-  if (favicon::FaviconDriver* const driver =
+-          favicon::ContentFaviconDriver::FromWebContents(contents)) {
+-    driver->FetchFavicon(entry.url, /*is_same_document=*/false);
+-  }
++  RepointRestoredEntry(nav, contents, entry.url, entry.title);
+ 
+   if (!helium_workspace::IsSleepingTab(contents)) {
+     // "Continue where you left off" shows its window's last active tab, and
+@@ -1974,6 +2108,43 @@
+   }
+ }
+ 
++void WorkspaceTabController::OpenInTodayBackground(const GURL& url) {
++  if (!browser_window_ || !url.is_valid()) {
++    return;
++  }
++  // index -1 is "where new tabs go here" (GetDefaultNewTabIndex reads
++  // helium.browser.new_tab_position), which is the ⛔ rule for anything
++  // arriving in Today; the tag comes from TagInsertedTab (current space).
++  chrome::AddTabAt(browser_window_, url, /*index=*/-1, /*foreground=*/false);
++}
++
++void WorkspaceTabController::RepointEntryTab(const std::string& entry_id,
++                                             const GURL& url) {
++  if (!service_ || !url.is_valid()) {
++    return;
++  }
++  const WorkspaceEntry* const entry = service_->FindEntryById(entry_id);
++  tabs::TabInterface* const tab =
++      service_->FindTabForEntryInWindow(entry_id, browser_window_).Get();
++  content::WebContents* const contents = tab ? tab->GetContents() : nullptr;
++  if (!entry || !contents) {
++    return;  // nothing open here: the row simply points somewhere else now
++  }
++  content::NavigationController& controller = contents->GetController();
++  // 3c (Arc g26): a live tab goes to the new page. A sleeping one is
++  // rewritten in place -- ⛔ nothing here may wake or load a sleeping tab
++  // (3a-r8), and its page still arrives on the click that opens it.
++  if (helium_workspace::IsSleepingTab(contents)) {
++    content::NavigationEntry* const nav = controller.GetLastCommittedEntry();
++    if (nav && !nav->IsInitialEntry()) {
++      RepointRestoredEntry(nav, contents, url, entry->title);
++    }
++    return;
++  }
++  controller.LoadURL(url, content::Referrer(),
++                     ui::PAGE_TRANSITION_AUTO_BOOKMARK, std::string());
++}
++
+ void WorkspaceTabController::BindTabToEntry(tabs::TabInterface* tab,
+                                             const std::string& entry_id,
+                                             bool guessed) {
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -193,6 +193,26 @@
+   // closed tabs come back too.
+   void UndoLastDeleteFolder();
+ 
++  // M6 轮3 3c (user 2026-09-22: "执行操作之后，再弹出 Undo 的小弹窗"): the
++  // undo for the last TurnFolderIntoSpace(). The inverse operation, not a
++  // snapshot restore -- the children never left the model, so their ids are
++  // still taken (reviewer brief r0 F1). The rows go back into the folder at
++  // its old slot, their tabs are re-tagged to the space they came from, the
++  // new space (empty by then) is removed and the window goes back.
++  void UndoLastTurnFolderIntoSpace();
++
++  // M6 轮3 3c, Edit Pinned Page > Edit...: points |entry_id|'s tab in this
++  // window at |url| the way Arc does (g26: the open tab follows the edit).
++  // A live tab navigates; a sleeping one has its restored entry rewritten in
++  // place -- never woken, never loaded (the ⛔ rule of 3a-r8).
++  void RepointEntryTab(const std::string& entry_id, const GURL& url);
++
++  // M6 轮3 3c, Duplicate on a favorite tile (Arc g29): the copy is not a
++  // second tile -- it is a background tab in this space's Today, landing
++  // where new tabs land here (kNewTabPosition). Nothing is activated and
++  // the window stays in its space.
++  void OpenInTodayBackground(const GURL& url);
++
+   // ---- Spaces (M6) ----
+ 
+   // The space this window is looking at. Always names an existing space.
+@@ -234,10 +254,15 @@
+   // restart fall back to), then this window switches; another window whose
+   // active tab went along follows in state only. Only ever called from a
+   // menu command, never from an observer callback.
++  // 3c: |announce| false is the New Space... path, which switches on its own
++  // right after (reviewer brief r0 F5) -- no "moved, go there" bar there.
+   void MoveEntryToSpace(const std::string& entry_id,
+-                        const std::string& space_id);
++                        const std::string& space_id,
++                        bool announce = true);
+   // The same for an ordinary (unbound) tab of this window: Today's Move to.
+-  void MoveTabToSpace(tabs::TabHandle handle, const std::string& space_id);
++  void MoveTabToSpace(tabs::TabHandle handle,
++                      const std::string& space_id,
++                      bool announce = true);
+   // Turn "x" into Space: a new space right of the current one holding the
+   // folder's rows, their tabs re-tagged to it, and the window switched there.
+   void TurnFolderIntoSpace(const std::string& folder_id);
+@@ -405,9 +430,16 @@
+   // |moved|, repairs every window's per-space memory, switches this window
+   // to |space_id| and lets other windows follow their active tab. |activate|
+   // (may be Null) is the tab to show here when the active one did not move.
++  // 3c: |announce| false keeps the "moved, go there" bar away on the path
++  // that switches on its own anyway (Move to > New Space..., whose
++  // CreateSpaceFromForm ends in SwitchToSpace -- reviewer brief r0 F5).
+   void FollowMovedTabs(const std::vector<tabs::TabHandle>& moved,
+                        const std::string& space_id,
+-                       tabs::TabHandle activate);
++                       tabs::TabHandle activate,
++                       bool announce = true);
++  // 3c: the "moved to X -- Go" bar's button. Checks the space is still
++  // there (eight seconds is long enough for another window to delete it).
++  void GoToSpaceFromBar(const std::string& space_id);
+   // A space left holding nothing but the untouched new tab page that
+   // ActivateSpaceTab minted for it loses that tab again, so switching around
+   // does not litter every space with a blank page.
+@@ -525,6 +557,16 @@
+   // The last DeleteSpace()'s snapshot and watermark, same lifecycle.
+   std::optional<WorkspaceService::RemovedSpace> space_undo_snapshot_;
+   SessionID space_undo_watermark_ = SessionID::InvalidValue();
++  // 3c: the last TurnFolderIntoSpace() -- the folder as it was, the space it
++  // became, the space it came from and the tabs that went along. No
++  // watermark: nothing was closed. Cleared by the undo; a bar that times out
++  // simply never calls back, and a stale copy is refused by
++  // TurnSpaceBackIntoFolder() (the space is gone / the id is taken again).
++  std::optional<WorkspaceEntry> turn_undo_folder_;
++  std::string turn_undo_space_id_;
++  std::string turn_undo_origin_space_id_;
++  std::vector<std::string> turn_undo_children_;
++  std::vector<tabs::TabHandle> turn_undo_tabs_;
+   int last_switch_direction_ = 0;
+ 
+   // ---- Spaces (M6) ----
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -1072,6 +1072,28 @@
+   }
+ }
+ 
++void VerticalTabStripRegionView::ShowUndoBarForTurnIntoSpace(
++    const std::u16string& folder_title,
++    base::OnceClosure on_undo) {
++  if (undo_bar_ && !sheet_) {
++    undo_bar_->ShowForAction(
++        l10n_util::GetStringFUTF16(IDS_HELIUM_WS_TURNED_INTO_SPACE_BODY,
++                                   folder_title),
++        std::move(on_undo));
++  }
++}
++
++void VerticalTabStripRegionView::ShowMovedToSpaceBar(
++    const std::u16string& space_name,
++    base::OnceClosure on_go) {
++  if (undo_bar_ && !sheet_) {
++    undo_bar_->ShowForOffer(
++        l10n_util::GetStringFUTF16(IDS_HELIUM_WS_ENTRY_MOVED_BODY, space_name),
++        l10n_util::GetStringUTF16(IDS_HELIUM_WS_ENTRY_MOVED_GO),
++        std::move(on_go));
++  }
++}
++
+ void VerticalTabStripRegionView::ShowUndoBarForFolderDelete(
+     const std::u16string& folder_title,
+     base::OnceClosure on_undo) {
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -85,6 +85,15 @@
+                             base::OnceClosure on_undo);
+   void ShowUndoBarForFolderDelete(const std::u16string& folder_title,
+                                   base::OnceClosure on_undo);
++  // M6 轮3 3c (user 2026-09-22): the same bar after Turn "x" into Space --
++  // a confirm first, then the offer to take it back (whole: the folder and
++  // its rows go home and the new space goes away).
++  void ShowUndoBarForTurnIntoSpace(const std::u16string& folder_title,
++                                   base::OnceClosure on_undo);
++  // 3c: and after a Move to that did not switch spaces -- "Moved to X · Go"
++  // (Arc g28/g31/g33). |on_go| switches; ⌘Z is not armed for it.
++  void ShowMovedToSpaceBar(const std::u16string& space_name,
++                           base::OnceClosure on_go);
+ 
+   // The sidebar view inside this region (drag targets and, M3.13, the
+   // folder-rename handoff reach it through here).
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+@@ -1077,6 +1077,7 @@
+   helium::EntryMenuState state;
+   state.is_tile = renders_as_capsule();
+   state.bound = !!bound_tab_;
++  state.active_tab = !!bound_tab_ && active_;
+   state.drifted = drifted_;
+   // The row's own speaker is the judge of "audible" (it rides out the gaps
+   // between sounds), so the item is live exactly when the speaker shows.
+@@ -1122,8 +1123,20 @@
+   using Id = helium::EntryMenuItemId;
+   switch (id) {
+     case Id::kCopyLink: {
++      // 3c (Arc g27): what the row is showing, which on a drifted row is
++      // the page it wandered to; a row with no tab has only its own URL.
++      // GetLastCommittedURL() reads the committed entry, so a sleeping tab
++      // answers without being woken.
++      GURL url = url_;
++      if (content::WebContents* const contents =
++              bound_tab_ ? bound_tab_->GetContents() : nullptr) {
++        const GURL live = contents->GetLastCommittedURL();
++        if (live.is_valid() && !live.IsAboutBlank()) {
++          url = live;
++        }
++      }
+       ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+-      writer.WriteText(base::UTF8ToUTF16(url_.spec()));
++      writer.WriteText(base::UTF8ToUTF16(url.spec()));
+       break;
+     }
+     case Id::kToggleMute:
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -281,8 +281,12 @@
+ // the dialog: it is modal to a window of that profile.
+ class EditPinnedUrlDialogDelegate : public ui::DialogModelDelegate {
+  public:
+-  EditPinnedUrlDialogDelegate(Profile* profile, std::string entry_id)
+-      : profile_(profile), entry_id_(std::move(entry_id)) {}
++  EditPinnedUrlDialogDelegate(Profile* profile,
++                              std::string entry_id,
++                              BrowserWindowInterface* browser)
++      : profile_(profile),
++        entry_id_(std::move(entry_id)),
++        browser_(browser ? browser->GetWeakPtr() : nullptr) {}
+ 
+   // Save. False keeps the dialog open: the text is not something an entry
+   // may point at (empty, unparsable, javascript:).
+@@ -310,12 +314,24 @@
+     if (!same_site) {
+       service->SetEntryFavicon(entry_id_, std::string());
+     }
++    // 3c (Arc g26, user 2026-09-22): the page that is open on this row
++    // follows the edit. A sleeping tab is repointed without being woken;
++    // see WorkspaceTabController::RepointEntryTab.
++    if (browser_) {
++      if (auto* const controller =
++              helium_workspace::WorkspaceTabController::From(browser_.get())) {
++        controller->RepointEntryTab(entry_id_, *url);
++      }
++    }
+     return true;
+   }
+ 
+  private:
+   const raw_ptr<Profile> profile_;
+   const std::string entry_id_;
++  // The window that opened the dialog: modal to it, so it is normally still
++  // there at Save -- weak because "normally" is not "always".
++  base::WeakPtr<BrowserWindowInterface> browser_;
+ };
+ 
+ // Defined with the layout blends below; the row flight (3a-r4) sits above them.
+@@ -2671,9 +2687,22 @@
+ void WorkspaceSidebarView::OnEntryDuplicateRequested(
+     const std::string& entry_id) {
+   const std::string id = entry_id;
+-  if (service_) {
+-    service_->DuplicateEntry(id);
++  const helium_workspace::WorkspaceEntry* const entry =
++      service_ ? service_->FindEntryById(id) : nullptr;
++  if (!entry) {
++    return;
++  }
++  // 3c (Arc g29): a tile's copy is a background tab in this space's Today,
++  // not a thirteenth tile. A row's copy is still a row (g28).
++  if (entry->section == helium_workspace::WorkspaceEntry::Section::kFavorite) {
++    const GURL url = entry->url;
++    if (auto* const controller =
++            helium_workspace::WorkspaceTabController::From(GetBrowserWindow())) {
++      controller->OpenInTodayBackground(url);
++    }
++    return;
+   }
++  service_->DuplicateEntry(id);
+ }
+ 
+ void WorkspaceSidebarView::OnEntryMoveToSpaceRequested(
+@@ -2737,7 +2766,7 @@
+   // Arc's dialog (轮0 g13d f_01103): the title, one line of explanation, the
+   // URL selected whole, Cancel on ESC and Save as the ⏎ default.
+   auto delegate = std::make_unique<EditPinnedUrlDialogDelegate>(
+-      browser->GetProfile(), entry->id);
++      browser->GetProfile(), entry->id, browser);
+   EditPinnedUrlDialogDelegate* const delegate_ptr = delegate.get();
+   ui::DialogModel::Builder builder(std::move(delegate));
+   builder
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
++++ src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.cc
+@@ -74,6 +74,11 @@
+   watermark_ = watermark;
+   action_undo_.Reset();
+   action_label_.clear();
++  // 3c (reviewer diff r0 G1): the button's own text is part of the mode --
++  // left over, Move to's "Go" would sit on a closed-tabs bar whose button
++  // undoes.
++  action_button_label_.clear();
++  action_is_undo_ = true;
+   ResetAccelerators();
+   UpdateLabel();
+   SetShown(true);
+@@ -87,6 +92,8 @@
+   watermark_ = SessionID::InvalidValue();
+   action_undo_ = std::move(on_undo);
+   action_label_ = label;
++  action_button_label_.clear();
++  action_is_undo_ = true;
+   UpdateLabel();
+   SetShown(true);
+   // ⌘Z reaches the Undo button for as long as the action undo is up
+@@ -100,6 +107,23 @@
+                                       base::Unretained(this)));
+ }
+ 
++void HeliumUndoBarView::ShowForOffer(const std::u16string& label,
++                                     const std::u16string& button,
++                                     base::OnceClosure on_press) {
++  watermark_ = SessionID::InvalidValue();
++  action_undo_ = std::move(on_press);
++  action_label_ = label;
++  action_button_label_ = button;
++  action_is_undo_ = false;
++  UpdateLabel();
++  SetShown(true);
++  // No ⌘Z: this button does not undo anything (3c).
++  ResetAccelerators();
++  dismiss_timer_.Start(FROM_HERE, kDismissDelay,
++                       base::BindOnce(&HeliumUndoBarView::Dismiss,
++                                      base::Unretained(this)));
++}
++
+ void HeliumUndoBarView::Dismiss() {
+   dismiss_timer_.Stop();
+   // Timing out (or being replaced) is what ends an action's undo window:
+@@ -141,6 +165,16 @@
+ }
+ 
+ void HeliumUndoBarView::UpdateLabel() {
++  // 3c: the button reads "Undo" unless the caller named its own (Move to's
++  // "Go"). Its width feeds Layout(), so ask for one when the text changes.
++  const std::u16string button =
++      action_button_label_.empty()
++          ? l10n_util::GetStringUTF16(IDS_HELIUM_UNPINNED_TABS_CLOSED_UNDO)
++          : action_button_label_;
++  if (undo_button_->GetText() != button) {
++    undo_button_->SetText(button);
++    InvalidateLayout();
++  }
+   if (!action_label_.empty()) {
+     label_->SetText(action_label_);
+     return;
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
++++ src/chrome/browser/ui/views/tabs/vertical/helium_undo_bar_view.h
+@@ -69,6 +69,14 @@
+   // focused text editor's own undo still wins).
+   void ShowForAction(const std::u16string& label, base::OnceClosure on_undo);
+ 
++  // M6 轮3 3c: the same bar with a button that is not an undo -- Move to's
++  // "Moved to X · Go" (Arc g28/g31/g33 answer a move that does not switch
++  // with exactly this offer). ⌘Z is deliberately NOT armed here: it means
++  // undo, and going somewhere is not one.
++  void ShowForOffer(const std::u16string& label,
++                    const std::u16string& button,
++                    base::OnceClosure on_press);
++
+   // Hides it early -- after Undo is pressed, or when the window changes out
+   // from under it.
+   void Dismiss();
+@@ -107,6 +115,10 @@
+   // closed-tabs watermark; UpdateLabel() and OnUndoPressed() branch on it.
+   base::OnceClosure action_undo_;
+   std::u16string action_label_;
++  // 3c: the button's text while showing an action (empty = the default
++  // "Undo"), and whether ⌘Z runs it.
++  std::u16string action_button_label_;
++  bool action_is_undo_ = true;
+   bool shown_ = false;
+   base::OneShotTimer dismiss_timer_;
+   gfx::SlideAnimation shown_animation_{this};
