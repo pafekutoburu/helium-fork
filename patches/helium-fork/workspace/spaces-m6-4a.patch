@@ -1,0 +1,1947 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -5898,6 +5898,8 @@
+     "helium/arc_space_form_unittest.cc",
+     "helium/arc_space_manage.h",
+     "helium/arc_space_manage_unittest.cc",
++    "helium/arc_space_motion.h",
++    "helium/arc_space_motion_unittest.cc",
+     "helium/arc_space_icon_picker.h",
+     "helium/arc_space_icon_picker_unittest.cc",
+     "helium/arc_toolbar_host.h",
+Index: src/chrome/browser/ui/helium/arc_space_motion.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_space_motion.h
+@@ -0,0 +1,177 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_ARC_SPACE_MOTION_H_
++#define CHROME_BROWSER_UI_HELIUM_ARC_SPACE_MOTION_H_
++
++#include <algorithm>
++#include <cmath>
++
++#include "base/time/time.h"
++
++// helium-fork M6 轮4: the space-level transitions -- the switch carousel,
++// the two-finger swipe, the bottom bar making way -- measured on Arc
++// 1.165.1 on 2026-09-23 (decisions.md 「M6 轮4」②, recordings g38–g47,
++// evidence tasks/evidence/4/arc/). They sit outside ⛔「侧栏只有三处动效」,
++// which is about rows only (user ruling 2026-09-22, 「M6 轮4」①).
++//
++// Every one of them is a critically damped spring -- no overshoot, stepped
++// in closed form off the real elapsed time, so a dropped frame costs a frame
++// and never the curve. The carousel's unit is the *slot*: one space, one
++// sidebar width. The swipe's finger travel is in points.
++//
++// Header-only and free of //ui/views on purpose, like every other arc_*.h:
++// asserted in helium_workspace_unittests.
++namespace helium {
++
++// Arc g38: a click / Ctrl+number switch is a critically damped spring with
++// a 0.2s period, ω = 2π / 0.2s -- fixed-ω fits of the list's travel held to
++// ≤0.2% over the whole run (switches 1 and 4), half-way at 53ms, 90% at
++// 124ms, 99% at 211ms, the last half point still moving at 290–330ms. A far
++// jump (2 or 3 spaces) rides the same normalised curve (598 / 897pt).
++// ⛔ Replaces M6-r3's LINEAR_OUT_SLOW_IN 180ms (3–17% off in the tail).
++inline constexpr double kSpaceSlideOmega = 31.415926535897932;
++
++// Arc g45 / g47: the bottom bar's icons making way for the Create form's
++// dot, closing up after a delete and opening for an undo -- four fits,
++// ω 25.75–26.5/s (≈1% residual). A little slower than the list.
++inline constexpr double kSpaceBarMakeWayOmega = 26.0;
++
++// Arc g39: the list follows the fingers at 0.500 × scrollingDeltaX (two
++// segments, a = 0.5001 / 0.5000, residual 0.11pt), linear, no dead zone.
++inline constexpr double kSpaceSwipeFollowRatio = 0.5;
++
++// Arc g40 / g44: a release with no inertia completes from half-way on
++// (26% / 44% / 47% went back, 53.7% / 70% / 71% completed). Exactly half is
++// unmeasured; it completes here.
++inline constexpr double kSpaceSwipeCommitFraction = 0.5;
++
++// Arc g42 seg3: past the last space the list moves 0.128–0.141 of what the
++// fingers would have moved it (0.5 × finger), close to linear.
++inline constexpr double kSpaceSwipeRubberBand = 0.135;
++
++// Arc g42 seg3 / seg4: the ⊕ that trails in from the right edge past the
++// last space stops 36pt short of it (x≈263 in a 299pt sidebar) and turns
++// solid once 0.5 × finger passes about 185pt -- ⚠ Arc flips somewhere in
++// 155–214, the exact point was not measured. A release while it is solid
++// opens the Create a Space form.
++inline constexpr int kSpaceSwipePlusRestInset = 36;
++inline constexpr double kSpaceSwipePlusSolidAt = 185.0;
++
++// ⚠ Ours (Arc: "the first stretch picks the axis and it stays", g43): the
++// axis is decided once either finger total reaches this many points.
++inline constexpr double kSpaceSwipeAxisLock = 6.0;
++
++// ⚠ Ours: after the fingers lift, how long to wait for macOS's momentum
++// "began" -- the only way to tell a flick from a slow release. Arc's bounce
++// back starts about 27ms after the lift (g40).
++inline constexpr base::TimeDelta kSpaceSwipeMomentumWait =
++    base::Milliseconds(25);
++
++// A spring has settled when it is within a quarter point of its target and
++// slower than 5pt/s (at W = 299 a one-space slide settles at ≈314ms, inside
++// Arc's 290–330).
++inline constexpr double kSpaceSpringSettlePoints = 0.25;
++inline constexpr double kSpaceSpringSettleSpeed = 5.0;
++
++// Position (units of the caller's choosing) and velocity (units / s).
++struct SpringState {
++  double x = 0.0;
++  double v = 0.0;
++};
++
++// The critically damped spring toward |target|, |t| seconds after |from|:
++//   x(t) = target + (e + (v0 + ωe)t)·e^(−ωt),   e = x0 − target
++//   v(t) = (v0 − ω(v0 + ωe)t)·e^(−ωt)
++// Re-aiming mid-flight is starting a new one from the state reached, so
++// position and velocity stay continuous.
++inline SpringState StepCriticalSpring(const SpringState& from,
++                                      double target,
++                                      double omega,
++                                      double t) {
++  const double e = from.x - target;
++  const double b = from.v + omega * e;
++  const double decay = std::exp(-omega * t);
++  return {target + (e + b * t) * decay, (from.v - omega * b * t) * decay};
++}
++
++// |unit_points|: how many points one unit of |s| is (the sidebar width for
++// the carousel's slots, 1 for the bar's point offsets).
++inline bool SpringSettled(const SpringState& s,
++                          double target,
++                          double unit_points) {
++  return std::abs(s.x - target) * unit_points < kSpaceSpringSettlePoints &&
++         std::abs(s.v) * unit_points < kSpaceSpringSettleSpeed;
++}
++
++// ⚠ Ours: the first frame after a slide starts or re-aims comes after the
++// pictures were taken and the views laid out -- tens of milliseconds on a
++// far jump. The spring takes at most one 60 Hz frame's step across that gap,
++// so the list moves on from where it was shown instead of skipping the
++// stretch nobody saw (a re-aim at full speed jumped ~0.4 space in one frame,
++// 4a pos-r1). Arc's clock runs from the click and its first frame shows
++// 17–25ms of the curve (g38); ours shows at most 16.7ms.
++inline constexpr double kSpaceSpringMaxFirstStep = 1.0 / 60.0;
++
++// The origin (seconds, on the caller's clock) that frame is evaluated
++// against: |origin_seconds|, or one step back from |now_seconds| when the
++// frame came later than that.
++inline double CapFirstStepOrigin(double origin_seconds, double now_seconds) {
++  return std::max(origin_seconds, now_seconds - kSpaceSpringMaxFirstStep);
++}
++
++// Where a released swipe goes, in slots. |x| is the carousel's position,
++// |live| the committed space's slot, |flick| the direction x was heading
++// when macOS carried the gesture on with inertia (+1 toward higher slots, -1
++// toward lower, 0 when it did not -- a slow release). A flick goes the way
++// it points from wherever the list is, even back over the start (Arc g41:
++// released 70% toward the far side, the flick still landed where it
++// pointed); a slow release goes to the nearer slot, and exactly half-way
++// counts as leaving |live|. Clamped to [first, last].
++inline int SwipeReleaseTarget(double x,
++                              int live,
++                              int flick,
++                              int first,
++                              int last) {
++  // Positions within a hair of a slot count as on it (the float x of a
++  // spring that has come to rest).
++  constexpr double kOnSlot = 1e-6;
++  const double lower = std::floor(x + kOnSlot);
++  int target;
++  if (flick > 0) {
++    target = static_cast<int>(std::ceil(x - kOnSlot));
++  } else if (flick < 0) {
++    target = static_cast<int>(lower);
++  } else {
++    const double fraction = x - lower;
++    const int down = static_cast<int>(lower);
++    const int up = down + 1;
++    if (std::abs(fraction - kSpaceSwipeCommitFraction) < kOnSlot) {
++      // A tie leaves the committed slot (≥ half completes).
++      target = down == live ? up : down;
++    } else {
++      target = fraction < kSpaceSwipeCommitFraction ? down : up;
++    }
++  }
++  return std::clamp(target, first, last);
++}
++
++// The list's travel for |overshoot| slots of finger past the last space.
++inline double RubberBandTravel(double overshoot) {
++  return overshoot * kSpaceSwipeRubberBand;
++}
++
++// How far along a slide from |origin| to |target| the carousel at |x| is,
++// 0..1 -- what the bottom bar cross-fades the two icons by (Arc g38: the old
++// and new current emoji trade saturation on the list's own spring).
++inline double SlideBlend(double x, double origin, double target) {
++  if (origin == target) {
++    return 0.0;
++  }
++  return std::clamp((x - origin) / (target - origin), 0.0, 1.0);
++}
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_HELIUM_ARC_SPACE_MOTION_H_
+Index: src/chrome/browser/ui/helium/arc_space_motion_unittest.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/helium/arc_space_motion_unittest.cc
+@@ -0,0 +1,149 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/arc_space_motion.h"
++
++#include <cmath>
++#include <numbers>
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace helium {
++namespace {
++
++// The first time (ms, 0.1ms steps) a slide from rest reaches |fraction|.
++double MsToReach(double fraction, double omega) {
++  for (int tenth = 0; tenth < 20000; ++tenth) {
++    const double t = tenth / 10000.0;
++    if (StepCriticalSpring({0.0, 0.0}, 1.0, omega, t).x >= fraction) {
++      return tenth / 10.0;
++    }
++  }
++  return -1.0;
++}
++
++// The first time (ms) a slide of |slots| sidebar widths of |width| points
++// has settled.
++double MsToSettle(double slots, double width) {
++  for (int ms = 0; ms < 2000; ++ms) {
++    if (SpringSettled(
++            StepCriticalSpring({0.0, 0.0}, slots, kSpaceSlideOmega, ms / 1000.0),
++            slots, width)) {
++      return ms;
++    }
++  }
++  return -1.0;
++}
++
++TEST(ArcSpaceMotionTest, TheSwitchSpringIsArcsTwoTenthsOfASecond) {
++  EXPECT_NEAR(2.0 * std::numbers::pi / 0.2, kSpaceSlideOmega, 1e-9);
++  // decisions 「M6 轮4」②: half at 53ms, 90% at 124ms, 99% at 211ms.
++  EXPECT_NEAR(53.0, MsToReach(0.5, kSpaceSlideOmega), 2.0);
++  EXPECT_NEAR(124.0, MsToReach(0.9, kSpaceSlideOmega), 2.0);
++  EXPECT_NEAR(211.0, MsToReach(0.99, kSpaceSlideOmega), 2.0);
++}
++
++TEST(ArcSpaceMotionTest, ASlideSettlesWhereArcsDid) {
++  // Arc g38: the last half point of a one-space slide in a 299pt sidebar
++  // stopped 290–330ms after the start.
++  const double one = MsToSettle(1.0, 299.0);
++  EXPECT_GE(one, 290.0);
++  EXPECT_LE(one, 330.0);
++  // A three-space jump rides the same curve; its tail is a few points longer
++  // (Arc g38 #3/#4: 350ms from the last still frame).
++  const double three = MsToSettle(3.0, 299.0);
++  EXPECT_GT(three, one);
++  EXPECT_LE(three, 380.0);
++}
++
++TEST(ArcSpaceMotionTest, ReAimingMidFlightKeepsPositionAndSpeed) {
++  const SpringState mid =
++      StepCriticalSpring({0.0, 0.0}, 1.0, kSpaceSlideOmega, 0.05);
++  ASSERT_GT(mid.v, 0.0);
++  const SpringState again = StepCriticalSpring(mid, 3.0, kSpaceSlideOmega, 0.0);
++  EXPECT_DOUBLE_EQ(mid.x, again.x);
++  EXPECT_DOUBLE_EQ(mid.v, again.v);
++  // ...and it does get there, without overshooting.
++  double peak = 0.0;
++  for (int ms = 0; ms <= 600; ++ms) {
++    peak = std::max(
++        peak, StepCriticalSpring(mid, 3.0, kSpaceSlideOmega, ms / 1000.0).x);
++  }
++  EXPECT_LE(peak, 3.0 + 1e-9);
++  EXPECT_NEAR(3.0, StepCriticalSpring(mid, 3.0, kSpaceSlideOmega, 0.6).x, 1e-4);
++}
++
++TEST(ArcSpaceMotionTest, TheFirstFrameAfterAnAimTakesOneStepAtMost) {
++  // A frame on time keeps the spring's own clock.
++  EXPECT_DOUBLE_EQ(0.0, CapFirstStepOrigin(0.0, 0.008));
++  // One 80ms late (pictures taken, views laid out) moves a single 60 Hz
++  // step from where the list was shown.
++  EXPECT_NEAR(0.08 - 1.0 / 60.0, CapFirstStepOrigin(0.0, 0.08), 1e-12);
++  const SpringState shown =
++      StepCriticalSpring({0.0, 0.0}, 2.0, kSpaceSlideOmega, 0.0);
++  const double origin = CapFirstStepOrigin(0.0, 0.08);
++  EXPECT_NEAR(
++      StepCriticalSpring(shown, 2.0, kSpaceSlideOmega, 1.0 / 60.0).x,
++      StepCriticalSpring(shown, 2.0, kSpaceSlideOmega, 0.08 - origin).x,
++      1e-12);
++  // ...and from wherever a re-aim left the spring on its clock.
++  EXPECT_DOUBLE_EQ(1.0, CapFirstStepOrigin(1.0, 1.01));
++}
++
++TEST(ArcSpaceMotionTest, ASlowReleaseGoesToTheNearerSpace) {
++  // Arc g40 / g44 / g39 (live = 2): 26% / 44% / 47% went back, 53.7% / 70% /
++  // 71% completed -- either way.
++  for (double f : {0.26, 0.44, 0.47}) {
++    EXPECT_EQ(2, SwipeReleaseTarget(2.0 + f, 2, 0, 0, 4)) << f;
++    EXPECT_EQ(2, SwipeReleaseTarget(2.0 - f, 2, 0, 0, 4)) << f;
++  }
++  for (double f : {0.537, 0.70, 0.71}) {
++    EXPECT_EQ(3, SwipeReleaseTarget(2.0 + f, 2, 0, 0, 4)) << f;
++    EXPECT_EQ(1, SwipeReleaseTarget(2.0 - f, 2, 0, 0, 4)) << f;
++  }
++  // Exactly half completes.
++  EXPECT_EQ(3, SwipeReleaseTarget(2.5, 2, 0, 0, 4));
++  EXPECT_EQ(1, SwipeReleaseTarget(1.5, 2, 0, 0, 4));
++}
++
++TEST(ArcSpaceMotionTest, AFlickGoesTheWayItPoints) {
++  // Arc g41: fourteen quick flicks that had moved the list only 2.7%–21%
++  // all completed.
++  EXPECT_EQ(3, SwipeReleaseTarget(2.027, 2, +1, 0, 4));
++  EXPECT_EQ(3, SwipeReleaseTarget(2.21, 2, +1, 0, 4));
++  EXPECT_EQ(1, SwipeReleaseTarget(1.79, 2, -1, 0, 4));
++  // Released 70% toward the far side, flicked back: lands where it points.
++  EXPECT_EQ(2, SwipeReleaseTarget(2.7, 2, -1, 0, 4));
++  // Grabbed at 93% of a slide into 2 and flicked back (g41): 1.
++  EXPECT_EQ(1, SwipeReleaseTarget(1.93, 2, -1, 0, 4));
++  EXPECT_EQ(2, SwipeReleaseTarget(1.93, 2, +1, 0, 4));
++}
++
++TEST(ArcSpaceMotionTest, AReleaseNeverLeavesTheStrip) {
++  EXPECT_EQ(4, SwipeReleaseTarget(4.3, 4, +1, 0, 4));
++  EXPECT_EQ(4, SwipeReleaseTarget(4.8, 4, 0, 0, 4));
++  EXPECT_EQ(0, SwipeReleaseTarget(-0.2, 0, -1, 0, 4));
++  EXPECT_EQ(0, SwipeReleaseTarget(-0.9, 0, 0, 0, 4));
++}
++
++TEST(ArcSpaceMotionTest, TheRubberBandIsLinear) {
++  EXPECT_DOUBLE_EQ(0.0, RubberBandTravel(0.0));
++  EXPECT_DOUBLE_EQ(0.135, RubberBandTravel(1.0));
++  // Arc g42 seg3: 0.5 × finger at 296pt moved the list about 38pt.
++  EXPECT_NEAR(40.0, RubberBandTravel(296.0), 0.1);
++}
++
++TEST(ArcSpaceMotionTest, TheBarBlendFollowsTheSlide) {
++  EXPECT_DOUBLE_EQ(0.0, SlideBlend(1.0, 1.0, 3.0));
++  EXPECT_DOUBLE_EQ(0.5, SlideBlend(2.0, 1.0, 3.0));
++  EXPECT_DOUBLE_EQ(1.0, SlideBlend(3.0, 1.0, 3.0));
++  // Leftward too, and clamped at both ends.
++  EXPECT_DOUBLE_EQ(0.25, SlideBlend(2.5, 3.0, 1.0));
++  EXPECT_DOUBLE_EQ(0.0, SlideBlend(0.9, 1.0, 3.0));
++  EXPECT_DOUBLE_EQ(1.0, SlideBlend(3.01, 1.0, 3.0));
++  EXPECT_DOUBLE_EQ(0.0, SlideBlend(2.0, 2.0, 2.0));
++}
++
++}  // namespace
++}  // namespace helium
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -555,6 +555,9 @@
+   // -- one wasted pass and a frame of the old space wearing the new card.
+   SetCurrentSpace(space_id, direction);
+   ActivateSpaceTab(space_id);
++  // M6 轮4: before the old space's blank page goes -- the carousel's
++  // picture of the leaving list still has that row.
++  NotifySpaceSwitchActivated();
+   CloseAbandonedBlankTab(previous);
+   // 3a-r1: the views snapped their lists in OnCurrentSpaceChanged(), before
+   // ActivateSpaceTab had a chance to mint the space's blank page; they snap
+@@ -868,6 +871,7 @@
+       controller->last_active_by_space_[space_id] = active->GetHandle();
+       if (controller != this) {
+         controller->SetCurrentSpace(space_id);
++        controller->NotifySpaceSwitchActivated();
+       }
+     }
+   }
+@@ -950,7 +954,6 @@
+   for (Observer& observer : observers_) {
+     observer.OnCurrentSpaceWillChange(direction);
+   }
+-  last_switch_direction_ = direction;
+   current_space_id_ = space_id;
+   browser_window_->GetProfile()->GetPrefs()->SetString(
+       prefs::kWorkspaceCurrentSpaceId, space_id);
+@@ -959,6 +962,14 @@
+   }
+ }
+ 
++void WorkspaceTabController::NotifySpaceSwitchActivated() {
++  // Sent even when SetCurrentSpace found nothing to change: an observer
++  // with no switch pending simply has nothing to do.
++  for (Observer& observer : observers_) {
++    observer.OnSpaceSwitchActivated();
++  }
++}
++
+ void WorkspaceTabController::ActivateSpaceTab(const std::string& space_id) {
+   TabStripModel* const model = browser_window_->GetTabStripModel();
+   if (!model || model->empty()) {
+@@ -1331,6 +1342,7 @@
+   if (service_->FindSpaceById(space)) {
+     SetCurrentSpace(space);  // the tab is already active: state only
+     last_active_by_space_[space] = handle;
++    NotifySpaceSwitchActivated();
+   }
+ }
+ 
+@@ -1972,6 +1984,7 @@
+     }
+   }
+   SetCurrentSpace(landing, /*direction=*/0);  // a landing, not a switch
++  NotifySpaceSwitchActivated();
+ }
+ 
+ bool WorkspaceTabController::ClaimTabForMatchingEntry(
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -85,6 +85,18 @@
+     // container's add animation *inside* the carousel (user 2026-09-18
+     // recording: the blank page's row growing in from the top).
+     virtual void OnSpaceSwitchSettled() {}
++    // helium-fork M6 轮4: the space this window just switched to has its tab
++    // active now, and nothing else has happened yet -- the old space's
++    // untouched blank page is still there to be closed. Fired once after
++    // every SetCurrentSpace, in the same task: right after ActivateSpaceTab
++    // on a switch, right after the state change where the tab was already
++    // active (the follow rule; another window following its moved tab), and
++    // on a landing (direction 0). The space carousel photographs the spaces
++    // it slides past here: the active row belongs to the new space by now,
++    // so no picture carries the white card (Arc g38 f_00203: the old list's
++    // card is gone before the list moves), and the old space still shows the
++    // rows it had.
++    virtual void OnSpaceSwitchActivated() {}
+   };
+ 
+   WorkspaceTabController(BrowserWindowInterface* browser_window,
+@@ -218,6 +230,24 @@
+   // The space this window is looking at. Always names an existing space.
+   const std::string& current_space_id() const { return current_space_id_; }
+ 
++  // helium-fork M6 轮4: the space the *views* draw. current_space_id() except
++  // inside the space carousel's snapshot pass, which points it at another
++  // space for one synchronous capture -- the carousel shows every space but
++  // the committed one as a picture (decisions 「M6 轮4」④). Read by exactly
++  // two views: WorkspaceSidebarView::RefreshCurrentSpaceId and
++  // UnpinnedTabContainerView::CurrentSpaceId. ⛔ Nothing that acts on the
++  // model reads it -- close landings, Cmd+W, new-tab tagging, prefs and the
++  // session all stay on current_space_id(). The override notifies nobody:
++  // the carousel resyncs the two views itself, and puts it back (empty)
++  // before its task ends.
++  const std::string& shown_space_id() const {
++    return view_space_override_.empty() ? current_space_id_
++                                        : view_space_override_;
++  }
++  void SetViewSpaceOverride(const std::string& space_id) {
++    view_space_override_ = space_id;
++  }
++
+   // Makes |space_id| current: the views re-filter, then the space's
+   // last-active tab is activated -- or its first tab in strip order, or a
+   // fresh new tab page tagged to it (Arc shows an empty content area for a
+@@ -295,12 +325,6 @@
+   // the window switches to the restored space.
+   void UndoLastDeleteSpace();
+ 
+-  // M6-r1: which way the last switch went, for the sidebar's slide (+1 =
+-  // to a space further right in bar order / "next", -1 = left / "previous",
+-  // 0 = not a switch to animate -- startup, a restore landing on its
+-  // space). Valid during and after OnCurrentSpaceChanged().
+-  int last_switch_direction() const { return last_switch_direction_; }
+-
+   void AddObserver(Observer* observer);
+   void RemoveObserver(Observer* observer);
+ 
+@@ -412,11 +436,16 @@
+   // |entry_persist_pending_|.
+   void PersistWindowEntryBindings();
+   // The state half of a switch: the id, the pref, the observers. No tab is
+-  // touched. |direction| is what last_switch_direction() reports to the
+-  // observers (see there); kDirectionFromOrder derives it from bar order.
++  // touched. |direction| is what OnCurrentSpaceWillChange() reports to the
++  // observers (+1 = to a space further right in bar order / "next", -1 =
++  // left / "previous", 0 = not a switch to animate -- startup, a restore
++  // landing on its space); kDirectionFromOrder derives it from bar order.
+   static constexpr int kDirectionFromOrder = 2;
+   void SetCurrentSpace(const std::string& space_id,
+                        int direction = kDirectionFromOrder);
++  // M6 轮4: Observer::OnSpaceSwitchActivated, for every SetCurrentSpace --
++  // see the observer for where each caller sends it.
++  void NotifySpaceSwitchActivated();
+   // SwitchToSpace with an explicit slide direction (Next/Prev wrapping
+   // around the ends still slide their own way).
+   void SwitchToSpaceInternal(const std::string& space_id, int direction);
+@@ -567,10 +596,11 @@
+   std::string turn_undo_origin_space_id_;
+   std::vector<std::string> turn_undo_children_;
+   std::vector<tabs::TabHandle> turn_undo_tabs_;
+-  int last_switch_direction_ = 0;
+ 
+   // ---- Spaces (M6) ----
+   std::string current_space_id_;
++  // M6 轮4: see shown_space_id(). Empty outside a carousel capture.
++  std::string view_space_override_;
+   // The tab each space was looking at when the window last left it, or the
+   // one it activated most recently while current. Dead handles are simply
+   // skipped; a tab that moved to another space is re-checked on use.
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -4,6 +4,9 @@
+ 
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ 
++#include "chrome/browser/ui/helium_workspace/workspace_service.h"
++#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "chrome/browser/ui/helium_workspace/workspace_space.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "chrome/browser/ui/helium/arc_space_form.h"
+@@ -96,6 +99,7 @@
+ #include "ui/views/layout/flex_layout.h"
+ #include "ui/views/layout/flex_layout_types.h"
+ #include "ui/views/layout/layout_types.h"
++#include "ui/views/layout/proposed_layout.h"
+ #include "ui/views/view.h"
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
+@@ -286,7 +290,11 @@
+           base::Unretained(this)),
+       base::BindRepeating(
+           &VerticalTabStripRegionView::OnSpaceSwitchSettledForToday,
++          base::Unretained(this)),
++      base::BindRepeating(
++          &VerticalTabStripRegionView::OnSpaceSwitchActivatedForToday,
+           base::Unretained(this))));
++  carousel_ = std::make_unique<SpaceCarousel>(this, this);
+   space_bar_->SetProperty(
+       views::kMarginsKey,
+       gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
+@@ -685,6 +693,10 @@
+ }
+ 
+ void VerticalTabStripRegionView::RemovedFromWidget() {
++  // M6 轮4: the pictures live in the strip's layer; land before it goes.
++  if (carousel_) {
++    carousel_->Stop();
++  }
+   if (GetFocusManager()) {
+     GetFocusManager()->RemoveFocusChangeListener(&focus_listener_);
+   }
+@@ -917,6 +929,10 @@
+ void VerticalTabStripRegionView::OnBoundsChanged(
+     const gfx::Rect& previous_bounds) {
+   BaseTabStripRegionView::OnBoundsChanged(previous_bounds);
++  // M6 轮4: the carousel's pictures were taken at the old width.
++  if (carousel_ && previous_bounds.width() != width()) {
++    carousel_->Stop();
++  }
+   // The strip's width gate (helium::kMediaStripMinWidth) rides the sidebar's
+   // drag-resize and collapse, both of which land here.
+   UpdateMediaStripVisibility();
+@@ -950,31 +966,8 @@
+       today && !today->IsDragging()) {
+     today->SnapLayoutToTarget();
+   }
+-  // M6-r1: the switch slides the list region in (Arc 2026-09-03: the head
+-  // row, pinned rows, folders, Today and New Tab move as one; favorites,
+-  // the address row and the bottom bar stay). The controller says which
+-  // way; 0 is a landing (startup, restore) and does not animate.
+-  // 3a-r1: the New Tab row is one of the strip's own sliding views now
+-  // (TabStripView::today_new_tab_button), so nothing here moves it.
+-  // M6 轮2 2b (reviewer 2026-09-16): no slide while a sheet is up -- the
+-  // lists are hidden, OnCurrentSpaceWillChange took no snapshot, and a
+-  // slide started here would still be mid-transform if the sheet closed
+-  // within its 180ms (the close only snaps the two vertical layouts).
+-  if (sheet_) {
+-    return;
+-  }
+-  if (TabStripView* const strip = tab_strip_view()) {
+-    if (const auto* controller = helium_workspace::WorkspaceTabController::From(
+-            browser_view()->browser())) {
+-      const int direction = controller->last_switch_direction();
+-      strip->SetSlideCallbacks(
+-          base::BindRepeating(&VerticalTabStripRegionView::OnListSlideProgress,
+-                              base::Unretained(this)),
+-          base::BindRepeating(&VerticalTabStripRegionView::OnListSlideEnded,
+-                              base::Unretained(this)));
+-      strip->SlideListRegion(direction);
+-    }
+-  }
++  // M6 轮4: the motion itself is the space carousel's, started once the new
++  // space's tab is active (OnSpaceSwitchActivatedForToday).
+ }
+ 
+ void VerticalTabStripRegionView::OnSpaceSwitchSettledForToday() {
+@@ -993,56 +986,109 @@
+ }
+ 
+ void VerticalTabStripRegionView::OnCurrentSpaceWillChange(int direction) {
+-  TabStripView* const strip = tab_strip_view();
+-  if (!strip || direction == 0 || !GetWidget() || !layer() || sheet_) {
++  if (!carousel_) {
+     return;
+   }
+-  strip->CaptureListSnapshot();
+-  // M6-r4: the leaving list's card shadow goes with it (r3 hid it for the
+-  // slide, which the user read as a blink: 2026-09-03 recording, shadow
+-  // zone 211 -> 222 -> 211 over 7 frames). Snapshotted like the list, into
+-  // the host's masking layer at its landed (untransformed) bounds;
+-  // OnListSlideProgress drives it out at dx_old. The live shadow stays
+-  // live: the containers re-aim it at the arriving list's active row on
+-  // the first layout, and it rides the same transform in.
+-  leaving_shadow_snapshots_.clear();
+-  if (row_shadow_host_ && row_shadow_host_->layer()) {
+-    for (HeliumCardShadowView* shadow :
+-         {pinned_row_shadow_.get(), active_row_shadow_.get()}) {
+-      if (!shadow || !shadow->GetVisible() || shadow->size().IsEmpty()) {
+-        continue;
+-      }
+-      std::unique_ptr<HeliumViewSnapshotLayer> snapshot =
+-          HeliumViewSnapshotLayer::Capture(shadow, shadow->GetLocalBounds(),
+-                                           layer()->device_scale_factor());
+-      if (!snapshot) {
+-        continue;
+-      }
+-      snapshot->layer()->SetBounds(shadow->bounds());
+-      row_shadow_host_->layer()->Add(snapshot->layer());
+-      leaving_shadow_snapshots_.push_back(std::move(snapshot));
++  // M6 轮2 2b (reviewer 2026-09-16): nothing slides while a sheet is up --
++  // the lists are hidden, and a motion started now would still be running
++  // when the sheet closed.
++  if (!GetWidget() || !layer() || sheet_) {
++    carousel_->Stop();
++    return;
++  }
++  carousel_->OnSwitchWillStart(direction);
++}
++
++void VerticalTabStripRegionView::OnSpaceSwitchActivatedForToday() {
++  if (carousel_ && !sheet_) {
++    carousel_->OnSwitchActivated();
++  }
++}
++
++TabStripView* VerticalTabStripRegionView::CarouselStrip() {
++  return tab_strip_view();
++}
++
++helium_workspace::WorkspaceTabController*
++VerticalTabStripRegionView::CarouselController() {
++  return browser_view() ? helium_workspace::WorkspaceTabController::From(
++                              browser_view()->browser())
++                        : nullptr;
++}
++
++std::vector<std::string> VerticalTabStripRegionView::CarouselSpaceOrder() {
++  std::vector<std::string> order;
++  if (!browser_view()) {
++    return order;
++  }
++  if (const helium_workspace::WorkspaceService* const service =
++          helium_workspace::WorkspaceServiceFactory::GetForProfile(
++              browser_view()->GetProfile())) {
++    for (const helium_workspace::WorkspaceSpace& space : service->spaces()) {
++      order.push_back(space.id);
+     }
+   }
++  return order;
+ }
+ 
+-void VerticalTabStripRegionView::OnListSlideProgress(float dx_live,
+-                                                     float dx_old) {
+-  // M6-r4: the row shadows ride with their lists.
+-  const gfx::Transform live = gfx::Transform::MakeTranslation(dx_live, 0.0f);
++void VerticalTabStripRegionView::CarouselResyncViews() {
++  // The switch's own re-filter, for whatever the controller's
++  // shown_space_id() names -- both lists, both animating layout managers
++  // landed (M6-r4 #2: a tween here is rows wiped in inside the picture).
++  if (WorkspaceSidebarView* const sidebar = WorkspaceDragSidebar()) {
++    sidebar->ResyncToShownSpace();
++  }
++  if (UnpinnedTabContainerView* const today = TodayDropContainer();
++      today && !today->IsDragging()) {
++    today->SnapLayoutToTarget();
++  }
++}
++
++void VerticalTabStripRegionView::CarouselFitStrip() {
++  TabStripView* const strip = tab_strip_view();
++  if (!strip) {
++    return;
++  }
++  // The strip is as tall as its contents (preferred at most, the bottom
++  // container takes the rest), so another space's list needs the strip at
++  // that space's height. Laid out in the height the region last gave it --
++  // the committed space's, or already the arriving one's once
++  // ActivateSpaceTab has run a layout -- the pinned viewport gave way to
++  // Today's reserve and the picture came out squeezed (4a pos-r1: the
++  // leaving Work list's separator 4pt high, Personal's B row cut off). The
++  // region's own layout, asked for its answer without applying the rest.
++  const views::ProposedLayout layout = flex_layout_->GetProposedLayout(size());
++  if (const views::ChildLayout* const child = layout.GetLayoutFor(strip);
++      child && child->visible) {
++    strip->SetBoundsRect(child->bounds);
++  }
++  strip->DeprecatedLayoutImmediately();
++}
++
++void VerticalTabStripRegionView::OnCarouselFrame(float live_dx) {
++  // M6-r4: the row shadows ride with the live list.
++  const gfx::Transform live = gfx::Transform::MakeTranslation(live_dx, 0.0f);
+   for (HeliumCardShadowView* shadow :
+        {pinned_row_shadow_.get(), active_row_shadow_.get()}) {
+     if (shadow && shadow->layer()) {
+       shadow->layer()->SetTransform(live);
+     }
+   }
+-  const gfx::Transform old = gfx::Transform::MakeTranslation(dx_old, 0.0f);
+-  for (auto& snapshot : leaving_shadow_snapshots_) {
+-    snapshot->layer()->SetTransform(old);
++}
++
++void VerticalTabStripRegionView::OnCarouselBlend(
++    const std::map<std::string, float>& greys) {
++  if (!space_bar_) {
++    return;
++  }
++  if (greys.empty()) {
++    space_bar_->ClearSwitchBlend();
++  } else {
++    space_bar_->SetSwitchBlend(greys);
+   }
+ }
+ 
+-void VerticalTabStripRegionView::OnListSlideEnded() {
+-  leaving_shadow_snapshots_.clear();
++void VerticalTabStripRegionView::OnCarouselEnded() {
+   for (HeliumCardShadowView* shadow :
+        {pinned_row_shadow_.get(), active_row_shadow_.get()}) {
+     if (shadow && shadow->layer()) {
+@@ -1106,8 +1152,7 @@
+ }
+ 
+ bool VerticalTabStripRegionView::IsListSliding() const {
+-  TabStripView* const strip = tab_strip_view();
+-  return strip && strip->slide_dx_live() != 0.0f;
++  return carousel_ && carousel_->IsActive();
+ }
+ 
+ void VerticalTabStripRegionView::ShowSpaceCreateForm() {
+@@ -1162,6 +1207,10 @@
+ void VerticalTabStripRegionView::ShowSidebarSheet(
+     std::unique_ptr<views::View> sheet,
+     SidebarSheetKind kind) {
++  // M6 轮4: the lists are about to be hidden; land whatever was moving.
++  if (carousel_) {
++    carousel_->Stop();
++  }
+   CloseSidebarSheet();
+   // Right after the address row, before the tab strip: the flex layout
+   // runs children in order, and the sheet takes all the height the hidden
+@@ -2130,6 +2179,11 @@
+   if (collapsed && manage_view_) {
+     manage_view_->AbortDrag();
+   }
++  // M6 轮4: and the space carousel lands (pitfalls 2b-r1 #4: a fold is no
++  // RemovedFromWidget, so whatever relies on that has to be named here).
++  if (collapsed && carousel_) {
++    carousel_->Stop();
++  }
+ 
+   UpdateResizeAreaVisibility();
+ 
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -5,7 +5,10 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_VERTICAL_TAB_STRIP_REGION_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_VERTICAL_TAB_STRIP_REGION_VIEW_H_
+ 
++#include <map>
+ #include <optional>
++#include <string>
++#include <vector>
+ 
+ #include "base/callback_list.h"
+ #include "base/containers/flat_set.h"
+@@ -20,6 +23,7 @@
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
+ #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+ #include "chrome/browser/ui/views/frame/base_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/tabs/common/space_carousel.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
+ #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
+@@ -69,7 +73,8 @@
+     : public BaseTabStripRegionView,
+       public views::ResizeAreaDelegate,
+       public OmniboxTabHelper::Observer,
+-      public tabs::VerticalTabStripStateController::Delegate {
++      public tabs::VerticalTabStripStateController::Delegate,
++      public SpaceCarousel::Delegate {
+   METADATA_HEADER(VerticalTabStripRegionView, BaseTabStripRegionView)
+ 
+  public:
+@@ -380,12 +385,12 @@
+   // M6-r4: the two row shadows' host. Its layer masks to the strip's
+   // x-range widened by the shadow's own overhang and the region's full
+   // height (Layout), so a shadow riding the space carousel is clipped where
+-  // the list is, while at rest nothing is cut.
++  // the list is, while at rest nothing is cut. (M6 轮4: the leaving list's
++  // shadow snapshot is gone -- the lists the carousel shows as pictures
++  // have no active row, so no card and no shadow; Arc g38.)
+   raw_ptr<views::View> row_shadow_host_ = nullptr;
+-  // The leaving list's card shadow, driven out with the list (its snapshot
+-  // sits in the host's layer at the landed bounds).
+-  std::vector<std::unique_ptr<HeliumViewSnapshotLayer>>
+-      leaving_shadow_snapshots_;
++  // M6 轮4: the space switch's motion (decisions 「M6 轮4」④).
++  std::unique_ptr<SpaceCarousel> carousel_;
+   // 3a-r1: the press metric of the strip's own "+ New Tab" row (the bottom
+   // container wires its copy itself).
+   base::CallbackListSubscription new_tab_row_pressed_subscription_;
+@@ -443,17 +448,25 @@
+   // M6: the window switched space; the Today list reads the current space
+   // from the controller, so it just needs a fresh layout.
+   void OnCurrentSpaceChangedForToday();
+-  // helium-fork M6-r3: the carousel's other half. Before the switch lands,
+-  // snapshot what is about to leave (the strip's lists, and the New Tab
+-  // button -- Arc slides it with the list); while the slide runs, move the
+-  // button in with the list and its snapshot out; at the end drop it all
+-  // and let the containers re-derive the active row's shadow.
++  // helium-fork M6-r3 → M6 轮4: the controller's switch, handed to the
++  // space carousel -- WillChange (the views still show the space being
++  // left), then Activated (the new space's tab is active; the carousel
++  // photographs the spaces it will slide past and starts its spring).
+   void OnCurrentSpaceWillChange(int direction);
++  void OnSpaceSwitchActivatedForToday();
+   // 3a-r1: the switch's tab work is done (WorkspaceTabController::Observer::
+   // OnSpaceSwitchSettled, relayed by the space bar like the two above).
+   void OnSpaceSwitchSettledForToday();
+-  void OnListSlideProgress(float dx_live, float dx_old);
+-  void OnListSlideEnded();
++
++  // SpaceCarousel::Delegate:
++  TabStripView* CarouselStrip() override;
++  helium_workspace::WorkspaceTabController* CarouselController() override;
++  std::vector<std::string> CarouselSpaceOrder() override;
++  void CarouselResyncViews() override;
++  void CarouselFitStrip() override;
++  void OnCarouselFrame(float live_dx) override;
++  void OnCarouselBlend(const std::map<std::string, float>& greys) override;
++  void OnCarouselEnded() override;
+   void SetMediaStripExpanded(bool expanded);
+   void OnMediaStripPointerLeft();
+   void SyncMediaCapsules();
+Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
++++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
+@@ -72,6 +72,10 @@
+     # rather than ":common" because they need the complete WorkspaceService
+     # type, which is in //chrome/browser/ui -- a dependency ":common" cannot
+     # take without a cycle.
++    # M6 轮4: the space carousel (the switch's motion) reads the controller
++    # the same way.
++    "space_carousel.cc",
++    "space_carousel.h",
+     "workspace_entry_menu_model.cc",
+     "workspace_entry_menu_model.h",
+     "workspace_entry_view.cc",
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+@@ -0,0 +1,376 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/tabs/common/space_carousel.h"
++
++#include <algorithm>
++#include <cmath>
++#include <utility>
++
++#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/transform.h"
++#include "ui/views/controls/scroll_view.h"
++#include "ui/views/view.h"
++
++namespace {
++
++// The clock's length. Only a ceiling -- a motion ends when its spring
++// settles (≈0.3s); running this long would mean a spring that never did.
++constexpr double kClockSeconds = 10.0;
++
++}  // namespace
++
++SpaceCarousel::Slot::Slot() = default;
++SpaceCarousel::Slot::Slot(Slot&&) = default;
++SpaceCarousel::Slot& SpaceCarousel::Slot::operator=(Slot&&) = default;
++SpaceCarousel::Slot::~Slot() = default;
++
++SpaceCarousel::SpaceCarousel(views::View* host, Delegate* delegate)
++    : views::AnimationDelegateViews(host),
++      delegate_(delegate),
++      clock_(base::Seconds(kClockSeconds),
++             gfx::LinearAnimation::kDefaultFrameRate,
++             this) {}
++
++SpaceCarousel::~SpaceCarousel() = default;
++
++void SpaceCarousel::OnSwitchWillStart(int direction) {
++  pending_ = false;
++  helium_workspace::WorkspaceTabController* const controller =
++      delegate_->CarouselController();
++  TabStripView* const strip = delegate_->CarouselStrip();
++  // A landing (startup, a restore, the fallback when this window's space
++  // was deleted elsewhere) does not move; nor does a list that is not up.
++  if (direction == 0 || !controller || !strip || !strip->GetWidget() ||
++      !strip->GetVisible() || !strip->layer() || strip->width() <= 0) {
++    Stop();
++    return;
++  }
++  const std::string& from = controller->current_space_id();
++  if (active_ && (from != live_space_ || strip->width() != width_)) {
++    // Not the list this motion was showing (or the sidebar was resized
++    // under it): land and start over from rest.
++    Stop();
++  }
++  // Where the user left the list, for when the space comes back (and for
++  // its picture while it slides out).
++  SaveScroll(from);
++  if (!active_) {
++    const int index = BarIndexOf(from);
++    live_slot_ = std::max(index, 0);
++    live_space_ = from;
++    x_ = live_slot_;
++  }
++  pending_ = true;
++  pending_direction_ = direction > 0 ? 1 : -1;
++  pending_from_ = from;
++}
++
++void SpaceCarousel::OnSwitchActivated() {
++  if (!pending_) {
++    return;
++  }
++  pending_ = false;
++  helium_workspace::WorkspaceTabController* const controller =
++      delegate_->CarouselController();
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (!controller || !strip || strip->width() <= 0) {
++    Stop();
++    return;
++  }
++  const std::string to = controller->current_space_id();
++  const std::string from = pending_from_;
++  if (to == from) {
++    return;
++  }
++  const bool was_active = active_;
++  const helium::SpringState now =
++      was_active ? StateAt(ClockSeconds())
++                 : helium::SpringState{static_cast<double>(live_slot_), 0.0};
++
++  // Where |to| stands relative to |from|: its distance in bar order, the way
++  // the controller said the switch goes. Next / Previous wrapping around an
++  // end says the opposite -- that one slides a single width its own way,
++  // past nothing (as before 轮4; ⚠ Arc's wrap not measured).
++  const int from_index = BarIndexOf(from);
++  const int to_index = BarIndexOf(to);
++  const bool wrapping = from_index < 0 || to_index < 0 ||
++                        (to_index - from_index) * pending_direction_ <= 0;
++  const int from_slot = live_slot_;
++  const int to_slot = wrapping ? from_slot + pending_direction_
++                               : from_slot + (to_index - from_index);
++
++  // The slots the motion will show: everything between here and there, and
++  // one more the way a moving spring may run on before it turns.
++  double lo = std::min(now.x, static_cast<double>(to_slot));
++  double hi = std::max(now.x, static_cast<double>(to_slot));
++  if (now.v > 0.0) {
++    hi += 1.0;
++  } else if (now.v < 0.0) {
++    lo -= 1.0;
++  }
++  // The new live slot shows the live list; the old one is a picture now.
++  slots_.erase(to_slot);
++  std::vector<std::pair<int, std::string>> wanted;
++  for (int slot = static_cast<int>(std::floor(lo));
++       slot <= static_cast<int>(std::ceil(hi)); ++slot) {
++    if (slot == to_slot || slots_.contains(slot)) {
++      continue;
++    }
++    std::string space = slot == from_slot
++                            ? from
++                            : SpaceForSlot(slot, from_slot, from, wrapping);
++    if (!space.empty()) {
++      wanted.emplace_back(slot, std::move(space));
++    }
++  }
++  // Photographed now: the new space's tab is already active, so none of
++  // these lists has an active row -- no white card, no card shadow (Arc g38
++  // f_00203) -- and the old space's untouched blank page is not yet closed.
++  for (auto& [slot, space] : wanted) {
++    Slot picture;
++    picture.space_id = space;
++    picture.layers = CaptureSpace(space);
++    slots_[slot] = std::move(picture);
++  }
++  if (!wanted.empty()) {
++    controller->SetViewSpaceOverride(std::string());
++    delegate_->CarouselResyncViews();
++  }
++  RestoreLiveViews(to);
++
++  // The bar: from what it shows now -- the old current in colour at rest,
++  // or wherever a cross-fade that is still running has got to -- to the new
++  // current in colour and everything else grey.
++  std::map<std::string, float> start;
++  if (was_active) {
++    start = BlendAt(now.x);
++  } else {
++    start[from] = 0.0f;
++  }
++  if (!start.contains(to)) {
++    start[to] = 1.0f;
++  }
++  blend_start_ = start;
++  blend_end_.clear();
++  for (const auto& [space, grey] : start) {
++    blend_end_[space] = space == to ? 0.0f : 1.0f;
++  }
++  blend_origin_x_ = now.x;
++  live_slot_ = to_slot;
++  live_space_ = to;
++  target_ = to_slot;
++  width_ = strip->width();
++  origin_ = now;
++  x_ = now.x;
++  if (clock_.is_animating()) {
++    origin_seconds_ = ClockSeconds();
++  } else {
++    origin_seconds_ = 0.0;
++    clock_.Start();
++  }
++  cap_first_step_ = true;
++  active_ = true;
++  Apply();
++}
++
++void SpaceCarousel::Stop() {
++  pending_ = false;
++  if (clock_.is_animating()) {
++    clock_.Stop();
++  }
++  slots_.clear();
++  picture_bottom_ = 0;
++  x_ = target_ = live_slot_;
++  if (!active_) {
++    return;
++  }
++  active_ = false;
++  if (TabStripView* const strip = delegate_->CarouselStrip()) {
++    strip->SetListOffset(0.0f);
++    strip->SetListClipBottom(0);
++  }
++  delegate_->OnCarouselFrame(0.0f);
++  blend_start_.clear();
++  blend_end_.clear();
++  delegate_->OnCarouselBlend({});
++  delegate_->OnCarouselEnded();
++}
++
++void SpaceCarousel::AnimationProgressed(const gfx::Animation* animation) {
++  if (animation != &clock_ || !active_) {
++    return;
++  }
++  if (cap_first_step_) {
++    // The pictures and the layout above took this frame's time, not the
++    // user's: one step on from where the list was shown.
++    cap_first_step_ = false;
++    origin_seconds_ =
++        helium::CapFirstStepOrigin(origin_seconds_, ClockSeconds());
++  }
++  const helium::SpringState state = StateAt(ClockSeconds());
++  if (helium::SpringSettled(state, target_, width_)) {
++    x_ = target_;
++    Apply();
++    Stop();
++    return;
++  }
++  x_ = state.x;
++  Apply();
++}
++
++void SpaceCarousel::AnimationEnded(const gfx::Animation* animation) {
++  // The clock's ceiling, reached only by a spring that never settled.
++  if (animation == &clock_ && active_) {
++    Stop();
++  }
++}
++
++double SpaceCarousel::ClockSeconds() const {
++  return clock_.GetCurrentValue() * kClockSeconds;
++}
++
++helium::SpringState SpaceCarousel::StateAt(double seconds) const {
++  return helium::StepCriticalSpring(origin_, target_, helium::kSpaceSlideOmega,
++                                    std::max(0.0, seconds - origin_seconds_));
++}
++
++std::string SpaceCarousel::SpaceForSlot(int slot,
++                                        int live_slot,
++                                        const std::string& live_space,
++                                        bool wrapping) const {
++  if (slot == live_slot) {
++    return live_space;
++  }
++  if (wrapping) {
++    return std::string();
++  }
++  const std::vector<std::string> order = delegate_->CarouselSpaceOrder();
++  const int live_index = BarIndexOf(live_space);
++  if (live_index < 0) {
++    return std::string();
++  }
++  const int index = live_index + (slot - live_slot);
++  if (index < 0 || index >= static_cast<int>(order.size())) {
++    return std::string();
++  }
++  return order[index];
++}
++
++int SpaceCarousel::BarIndexOf(const std::string& space_id) const {
++  const std::vector<std::string> order = delegate_->CarouselSpaceOrder();
++  for (size_t i = 0; i < order.size(); ++i) {
++    if (order[i] == space_id) {
++      return static_cast<int>(i);
++    }
++  }
++  return -1;
++}
++
++std::vector<std::unique_ptr<HeliumViewSnapshotLayer>>
++SpaceCarousel::CaptureSpace(const std::string& space_id) {
++  helium_workspace::WorkspaceTabController* const controller =
++      delegate_->CarouselController();
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (!controller || !strip) {
++    return {};
++  }
++  controller->SetViewSpaceOverride(space_id);
++  delegate_->CarouselResyncViews();
++  // At this space's own height: the strip is as tall as its contents.
++  delegate_->CarouselFitStrip();
++  picture_bottom_ = std::max(picture_bottom_, strip->height());
++  ApplyScroll(space_id);
++  return strip->CaptureListSnapshot();
++}
++
++void SpaceCarousel::RestoreLiveViews(const std::string& live_space) {
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (!strip) {
++    return;
++  }
++  // Laid out for the live space first, at its height (so its scrollers
++  // know their contents' heights), then its own scroll position -- the one
++  // its picture was taken at, if it had one -- and laid out again.
++  delegate_->CarouselFitStrip();
++  ApplyScroll(live_space);
++  strip->DeprecatedLayoutImmediately();
++}
++
++void SpaceCarousel::SaveScroll(const std::string& space_id) {
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (!strip || space_id.empty()) {
++    return;
++  }
++  ScrollOffsets offsets;
++  if (views::ScrollView* const pinned = strip->pinned_tabs_scroll_view()) {
++    offsets.pinned = pinned->CurrentOffset().y();
++  }
++  if (views::ScrollView* const today = strip->unpinned_tabs_scroll_view()) {
++    offsets.today = today->CurrentOffset().y();
++  }
++  scroll_offsets_[space_id] = offsets;
++}
++
++void SpaceCarousel::ApplyScroll(const std::string& space_id) {
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (!strip) {
++    return;
++  }
++  // ⚠ Arc's own memory of a space's scroll position was not measured; ours
++  // makes a space's picture and the live list it becomes the same image. A
++  // space not yet left this session starts at the top.
++  const auto it = scroll_offsets_.find(space_id);
++  const ScrollOffsets offsets =
++      it != scroll_offsets_.end() ? it->second : ScrollOffsets();
++  if (views::ScrollView* const pinned = strip->pinned_tabs_scroll_view()) {
++    pinned->ScrollToOffset(
++        gfx::PointF(pinned->CurrentOffset().x(), offsets.pinned));
++  }
++  if (views::ScrollView* const today = strip->unpinned_tabs_scroll_view()) {
++    today->ScrollToOffset(
++        gfx::PointF(today->CurrentOffset().x(), offsets.today));
++  }
++}
++
++void SpaceCarousel::Apply() {
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (!strip) {
++    return;
++  }
++  const double width = width_;
++  const float live_dx = static_cast<float>((live_slot_ - x_) * width);
++  strip->SetListOffset(live_dx);
++  // A picture of a longer list than the committed one reaches below the
++  // strip's bottom edge; it slides out whole (every Arc list is as long as
++  // its own rows).
++  strip->SetListClipBottom(std::max(strip->height(), picture_bottom_));
++  delegate_->OnCarouselFrame(live_dx);
++  for (auto& [slot, picture] : slots_) {
++    const gfx::Transform transform = gfx::Transform::MakeTranslation(
++        static_cast<float>((slot - x_) * width), 0.0f);
++    for (auto& layer : picture.layers) {
++      layer->layer()->SetTransform(transform);
++    }
++  }
++  delegate_->OnCarouselBlend(BlendAt(x_));
++}
++
++std::map<std::string, float> SpaceCarousel::BlendAt(double x) const {
++  // A motion that starts on its own target (nothing to cover) is simply
++  // there.
++  const double progress = std::abs(target_ - blend_origin_x_) < 1e-6
++                              ? 1.0
++                              : helium::SlideBlend(x, blend_origin_x_, target_);
++  std::map<std::string, float> greys;
++  for (const auto& [space, start] : blend_start_) {
++    const auto end = blend_end_.find(space);
++    const float to = end != blend_end_.end() ? end->second : start;
++    greys[space] = start + (to - start) * static_cast<float>(progress);
++  }
++  return greys;
++}
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.h
+@@ -0,0 +1,170 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_TABS_COMMON_SPACE_CAROUSEL_H_
++#define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_SPACE_CAROUSEL_H_
++
++#include <map>
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "chrome/browser/ui/helium/arc_space_motion.h"
++#include "ui/gfx/animation/linear_animation.h"
++#include "ui/views/animation/animation_delegate_views.h"
++
++class HeliumViewSnapshotLayer;
++class TabStripView;
++
++namespace helium_workspace {
++class WorkspaceTabController;
++}  // namespace helium_workspace
++
++namespace views {
++class View;
++}  // namespace views
++
++// helium-fork M6 轮4: the space carousel (decisions.md 「M6 轮4」④, design
++// tasks/4/brief.md §2). The spaces stand side by side in bar order, one
++// sidebar width apart; slot i sits (i − x)·W from where the list rests, and
++// x -- the carousel's position, in slots -- is driven by one critically
++// damped spring (arc_space_motion.h). The committed space is the live list
++// (TabStripView's four sliding views); every other space on screen is a
++// picture taken while the views were briefly pointed at it
++// (WorkspaceTabController::shown_space_id). A click, a key, a far jump and a
++// switch that arrives mid-slide are all "aim the spring at another slot":
++// Arc g38 slid a two- and a three-space jump through the spaces in between
++// on the one-space curve, and a new switch picks up from wherever the list
++// is. Transforms only per frame; the views re-layout only at the discrete
++// moments a picture is taken.
++class SpaceCarousel : public views::AnimationDelegateViews {
++ public:
++  class Delegate {
++   public:
++    virtual TabStripView* CarouselStrip() = 0;
++    virtual helium_workspace::WorkspaceTabController* CarouselController() = 0;
++    // The profile's space ids in bar order.
++    virtual std::vector<std::string> CarouselSpaceOrder() = 0;
++    // Re-filters the sidebar and Today to the controller's shown_space_id()
++    // -- synchronously; the carousel lays the strip out itself.
++    virtual void CarouselResyncViews() = 0;
++    // Gives the strip the bounds the region's layout would give it for the
++    // space the views show now -- it is as tall as its contents -- and lays
++    // it out.
++    virtual void CarouselFitStrip() = 0;
++    // Every frame: the live list's offset (the row shadows ride it).
++    virtual void OnCarouselFrame(float live_dx) = 0;
++    // The bottom bar's cross-fade: how grey each icon the motion involves
++    // is right now (0 in full colour, 1 fully grey); icons not listed keep
++    // their resting look. An empty map clears it.
++    virtual void OnCarouselBlend(const std::map<std::string, float>& greys) = 0;
++    // At rest again: the live list's offset is 0, every picture is gone.
++    virtual void OnCarouselEnded() = 0;
++
++   protected:
++    virtual ~Delegate() = default;
++  };
++
++  SpaceCarousel(views::View* host, Delegate* delegate);
++  SpaceCarousel(const SpaceCarousel&) = delete;
++  SpaceCarousel& operator=(const SpaceCarousel&) = delete;
++  ~SpaceCarousel() override;
++
++  // The controller's switch, relayed by the region: WillChange (the views
++  // still show the space being left) and Activated (the new space's tab is
++  // active, the old space's blank page not yet closed).
++  void OnSwitchWillStart(int direction);
++  void OnSwitchActivated();
++
++  // Whether anything but the committed list at rest is on screen.
++  bool IsActive() const { return active_; }
++  // Lands at once: the live list at rest, every picture gone. Safe idle.
++  void Stop();
++
++ private:
++  struct Slot {
++    Slot();
++    Slot(Slot&&);
++    Slot& operator=(Slot&&);
++    ~Slot();
++
++    std::string space_id;
++    std::vector<std::unique_ptr<HeliumViewSnapshotLayer>> layers;
++  };
++  struct ScrollOffsets {
++    float pinned = 0.0f;
++    float today = 0.0f;
++  };
++
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationEnded(const gfx::Animation* animation) override;
++
++  // Seconds since the clock started, as of its last tick.
++  double ClockSeconds() const;
++  helium::SpringState StateAt(double seconds) const;
++  // The space in slot |slot| for a motion whose live slot |live_slot| holds
++  // |live_space|; empty past either end of the bar or when |wrapping|.
++  std::string SpaceForSlot(int slot,
++                           int live_slot,
++                           const std::string& live_space,
++                           bool wrapping) const;
++  int BarIndexOf(const std::string& space_id) const;
++  // Points the views at |space_id| and photographs the list. The views are
++  // left pointed there; RestoreLiveViews() points them back.
++  std::vector<std::unique_ptr<HeliumViewSnapshotLayer>> CaptureSpace(
++      const std::string& space_id);
++  void RestoreLiveViews(const std::string& live_space);
++  void SaveScroll(const std::string& space_id);
++  void ApplyScroll(const std::string& space_id);
++  void Apply();
++  // The involved icons' greys at |x|.
++  std::map<std::string, float> BlendAt(double x) const;
++
++  const raw_ptr<Delegate> delegate_;
++  // A clock and nothing more: the spring is evaluated off its elapsed time
++  // (compositor-driven through AnimationDelegateViews, so every vsync).
++  gfx::LinearAnimation clock_;
++
++  bool active_ = false;
++  // Between OnSwitchWillStart and OnSwitchActivated.
++  bool pending_ = false;
++  int pending_direction_ = 0;
++  std::string pending_from_;
++
++  int live_slot_ = 0;
++  std::string live_space_;
++  // Pictures, by slot. The live slot never has one.
++  std::map<int, Slot> slots_;
++  // The spring: from |origin_| at |origin_seconds_| on the clock toward
++  // |target_|; |x_| is the position last applied.
++  double target_ = 0.0;
++  helium::SpringState origin_;
++  double origin_seconds_ = 0.0;
++  // Set by a (re)aim: its first frame steps the spring by at most
++  // helium::kSpaceSpringMaxFirstStep.
++  bool cap_first_step_ = false;
++  double x_ = 0.0;
++  // The sidebar width the pictures were taken at.
++  int width_ = 0;
++  // The lowest bottom edge of any picture, in the strip's coordinates: a
++  // space with more rows than the committed one was photographed in a
++  // taller strip, and the strip stops clipping there while the motion runs.
++  int picture_bottom_ = 0;
++  // The bar's cross-fade (Arc g38: the old and the new current emoji trade
++  // saturation on the list's spring): each involved icon runs from its
++  // grey at the motion's start to its grey at the end, by how far x has come
++  // from |blend_origin_x_| toward the target. A switch that arrives mid-slide
++  // starts from whatever is on screen at that moment (reviewer 4a diff r0:
++  // re-aiming at the space passing by used to freeze the fade and flip it
++  // at the end).
++  std::map<std::string, float> blend_start_;
++  std::map<std::string, float> blend_end_;
++  double blend_origin_x_ = 0.0;
++  // Each space's two scrollers, as they were when it was last left.
++  std::map<std::string, ScrollOffsets> scroll_offsets_;
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_SPACE_CAROUSEL_H_
+Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h
++++ src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h
+@@ -124,7 +124,7 @@
+   // at once -- no interpolation, no add/remove fade, no host-size tween.
+   // A space switch relayouts the Today container wholesale (the leaving
+   // space's rows to zero rects, the arriving space's back) and Arc moves
+-  // that as one horizontal slide (TabStripView::SlideListRegion); a
++  // that as one horizontal slide (SpaceCarousel since M6 轮4); a
+   // vertical settle inside the slide is what the user rejected (2026-09-03).
+   void SnapToTargetLayout();
+ 
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -184,8 +184,7 @@
+ };
+ 
+ TabStripView::TabStripView(TabCollectionNode* collection_node)
+-    : views::AnimationDelegateViews(this),
+-      collection_node_(collection_node),
++    : collection_node_(collection_node),
+       target_views_tracker_(std::make_unique<TargetViewsTracker>(
+           collection_node->orientation())) {
+   // Paint to a layer and mask to bounds to prevent tabs from overflowing and
+@@ -247,15 +246,14 @@
+   // layers sit inside this view's (which masks to bounds, so the arriving
+   // list is clipped at the strip's edges); the scrollers' contents already
+   // paint to layers (ScrollWithLayers), so text rendering does not change.
+-  // 3a-r1: and the "+ New Tab" row, which brings its own layer.
++  // 3a-r1: and the "+ New Tab" row, which brings its own layer. M6 轮4: the
++  // space carousel moves them (SetListOffset).
+   for (views::View* view : {static_cast<views::View*>(pinned_tabs_scroll_view_),
+                             static_cast<views::View*>(tabs_separator_),
+                             static_cast<views::View*>(unpinned_tabs_scroll_view_)}) {
+     view->SetPaintToLayer();
+     view->layer()->SetFillsBoundsOpaquely(false);
+   }
+-  slide_animation_.SetSlideDuration(base::Milliseconds(180));
+-  slide_animation_.SetTweenType(gfx::Tween::LINEAR_OUT_SLOW_IN);
+ 
+   collection_node->set_add_child_to_node(base::BindRepeating(
+       &TabStripView::AddScrollViewContents, base::Unretained(this)));
+@@ -405,18 +403,13 @@
+   recorder.canvas()->DrawImageInt(image_, 0, 0);
+ }
+ 
+-// ---- the slide ----
++// ---- the carousel's hands (M6 轮4) ----
+ 
+-void TabStripView::SetSlideCallbacks(SlideProgressCallback progress,
+-                                     base::RepeatingClosure ended) {
+-  slide_progress_callback_ = std::move(progress);
+-  slide_ended_callback_ = std::move(ended);
+-}
+-
+-void TabStripView::CaptureListSnapshot() {
+-  DropSlideSnapshots();
++std::vector<std::unique_ptr<HeliumViewSnapshotLayer>>
++TabStripView::CaptureListSnapshot() {
++  std::vector<std::unique_ptr<HeliumViewSnapshotLayer>> snapshots;
+   if (!layer() || width() <= 0) {
+-    return;
++    return snapshots;
+   }
+   const float scale = layer()->device_scale_factor();
+   const auto add = [&](views::View* view, const gfx::Rect& visible_in_view,
+@@ -428,7 +421,7 @@
+     }
+     snapshot->layer()->SetBounds(bounds_in_strip);
+     layer()->Add(snapshot->layer());
+-    slide_snapshots_.push_back(std::move(snapshot));
++    snapshots.push_back(std::move(snapshot));
+   };
+   // The scrollers' contents, through the part of them that is on screen
+   // (GetVisibleRect is in contents coordinates); the snapshot sits where
+@@ -446,8 +439,8 @@
+     add(tabs_separator_, tabs_separator_->GetLocalBounds(),
+         tabs_separator_->bounds());
+   }
+-  // 3a-r1: the leaving "+ New Tab" row, where it stands in *this* strip --
+-  // the region used to snapshot it into its bottom container's layer, which
++  // 3a-r1: the "+ New Tab" row, where it stands in *this* strip -- the
++  // region used to snapshot it into its bottom container's layer, which
+   // the arriving list's height then carried off to a row that was not its
+   // own (user 2026-09-18 recording).
+   if (today_new_tab_button_ && today_new_tab_button_->GetVisible() &&
+@@ -455,6 +448,7 @@
+     add(today_new_tab_button_, today_new_tab_button_->GetLocalBounds(),
+         today_new_tab_button_->bounds());
+   }
++  return snapshots;
+ }
+ 
+ bool TabStripView::today_new_tab_row_on_top() const {
+@@ -467,68 +461,33 @@
+   InvalidateLayout();
+ }
+ 
+-void TabStripView::DropSlideSnapshots() {
+-  // A layer leaves its parent in its destructor.
+-  slide_snapshots_.clear();
+-}
+-
+-void TabStripView::SlideListRegion(int direction) {
+-  if (direction == 0 || width() <= 0) {
+-    // A landing (startup, restore): nothing moves, and whatever was
+-    // snapshotted for a carousel is not wanted.
+-    DropSlideSnapshots();
+-    if (slide_ended_callback_) {
+-      slide_ended_callback_.Run();
+-    }
+-    return;
+-  }
+-  slide_direction_ = direction > 0 ? 1 : -1;
+-  // A switch mid-slide restarts from the edge: the list that was arriving
+-  // has just been replaced anyway.
+-  slide_animation_.Reset(0.0);
+-  ApplySlideTransform(0.0);
+-  slide_animation_.Show();
+-}
+-
+-void TabStripView::ApplySlideTransform(double progress) {
+-  // One strip: the leaving list is a strip width behind the arriving one.
+-  const float dx_live =
+-      static_cast<float>((1.0 - progress) * slide_direction_ * width());
+-  const float dx_old = dx_live - static_cast<float>(slide_direction_ * width());
+-  slide_dx_live_ = dx_live;
+-  const gfx::Transform live = gfx::Transform::MakeTranslation(dx_live, 0.0f);
++void TabStripView::SetListOffset(float dx) {
++  slide_dx_live_ = dx;
++  const gfx::Transform transform = gfx::Transform::MakeTranslation(dx, 0.0f);
+   for (views::View* view :
+        {static_cast<views::View*>(pinned_tabs_scroll_view_),
+         static_cast<views::View*>(tabs_separator_),
+         static_cast<views::View*>(today_new_tab_button_),
+         static_cast<views::View*>(unpinned_tabs_scroll_view_)}) {
+     if (view && view->layer()) {
+-      view->layer()->SetTransform(live);
++      view->layer()->SetTransform(transform);
+     }
+   }
+-  const gfx::Transform old = gfx::Transform::MakeTranslation(dx_old, 0.0f);
+-  for (auto& snapshot : slide_snapshots_) {
+-    snapshot->layer()->SetTransform(old);
+-  }
+-  if (slide_progress_callback_) {
+-    slide_progress_callback_.Run(dx_live, dx_old);
+-  }
+ }
+ 
+-void TabStripView::AnimationProgressed(const gfx::Animation* animation) {
+-  if (animation == &slide_animation_) {
+-    ApplySlideTransform(slide_animation_.GetCurrentValue());
++void TabStripView::SetListClipBottom(int bottom) {
++  if (!layer()) {
++    return;
+   }
+-}
+-
+-void TabStripView::AnimationEnded(const gfx::Animation* animation) {
+-  if (animation == &slide_animation_) {
+-    ApplySlideTransform(1.0);
+-    DropSlideSnapshots();
+-    if (slide_ended_callback_) {
+-      slide_ended_callback_.Run();
+-    }
++  const gfx::Rect clip =
++      bottom > height() ? gfx::Rect(0, 0, width(), bottom) : gfx::Rect();
++  if (clip == layer()->clip_rect()) {
++    return;
+   }
++  // cc: without masks_to_bounds the clip rect alone clips the subtree, and
++  // it may reach past the layer's bounds (cc::Layer::EffectiveClipRect).
++  layer()->SetMasksToBounds(clip.IsEmpty());
++  layer()->SetClipRect(clip);
+ }
+ 
+ void TabStripView::AddedToWidget() {
+@@ -540,7 +499,6 @@
+ 
+ void TabStripView::RemovedFromWidget() {
+   widget_observation_.Reset();
+-  DropSlideSnapshots();
+ }
+ 
+ void TabStripView::OnMouseEntered(const ui::MouseEvent& event) {
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+@@ -9,15 +9,12 @@
+ #include <memory>
+ #include <vector>
+ 
+-#include "base/functional/callback.h"
+ #include "base/scoped_observation.h"
+ #include "components/prefs/pref_change_registrar.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/compositor/layer_delegate.h"
+-#include "ui/gfx/animation/slide_animation.h"
+ #include "ui/gfx/image/image_skia.h"
+-#include "ui/views/animation/animation_delegate_views.h"
+ #include "ui/views/view.h"
+ #include "ui/views/widget/widget_observer.h"
+ 
+@@ -85,7 +82,6 @@
+ // scrolling to the active tab view when the active tab changes.
+ // Layout is managed by `TabStripViewLayout`.
+ class TabStripView final : public views::View,
+-                           public views::AnimationDelegateViews,
+                            public views::WidgetObserver {
+   METADATA_HEADER(TabStripView, views::View)
+ 
+@@ -125,38 +121,34 @@
+   // the divider when the list outgrows the strip. Follows the pref live.
+   bool today_new_tab_row_on_top() const;
+ 
+-  // helium-fork M6-r1: slides the list region -- the pinned scroller, the
+-  // separator and the Today scroller, i.e. everything below the favorites
+-  // band -- in from the right (|direction| > 0: the new space is further
+-  // right in bar order) or the left (< 0), over the whole strip width.
+-  // Arc measured 2026-09-03 (decisions "M6-r1" §3, re-fitted "M6-r3" §1): a
+-  // carousel where the old list leaves as the new one arrives, one strip,
+-  // LINEAR_OUT_SLOW_IN over ~180ms. M6-r3: the leaving list is the snapshot
+-  // CaptureListSnapshot() took a moment earlier, driven out in lockstep --
+-  // its offset is the arriving list's minus a strip width. 0 (a landing)
+-  // animates nothing and drops any snapshot. Layer transforms only -- no
+-  // layout runs per frame.
+-  void SlideListRegion(int direction);
+-
+-  // helium-fork M6-r3: taken while the outgoing space is still on screen
+-  // (the controller's OnCurrentSpaceWillChange): the pinned scroller's and
+-  // Today's visible content and the separator, each into a snapshot layer
+-  // laid over its live counterpart. SlideListRegion() drives them out.
+-  void CaptureListSnapshot();
+-  // M6-r4: the arriving list's offset this instant (0 at rest). A layout
+-  // that runs mid-slide sees the scrollers' layer transforms through
++  // helium-fork M6 轮4: the space carousel (SpaceCarousel, owned by the
++  // region) moves the list region -- the pinned scroller, the separator, the
++  // "+ New Tab" row and the Today scroller, i.e. everything below the
++  // favorites band (Arc g38: the band and the address row stay) -- |dx|
++  // points sideways. Layer transforms only; no layout runs per frame.
++  // (M6-r1 … r4 ran a one-width LINEAR_OUT_SLOW_IN 180ms slide from here;
++  // the carousel's spring replaced it -- decisions 「M6 轮4」④.)
++  void SetListOffset(float dx);
++  // While the carousel runs, this view's layer clips at |bottom| (its own
++  // coordinates) instead of its bottom edge -- the strip is as tall as the
++  // committed list, and a longer space's picture has to slide whole. At or
++  // above the edge (0 included) it is the plain mask to bounds again.
++  void SetListClipBottom(int bottom);
++
++  // The list region as it is painted right now, one layer per part (the
++  // pinned scroller's and Today's visible content, the separator, the
++  // "+ New Tab" row), each laid over its live counterpart's untransformed
++  // place in this view's layer. View::Paint does not see layer transforms,
++  // so a list that is itself mid-slide is painted where it rests. The
++  // carousel takes these while the views show a space other than the
++  // committed one, and moves them with transforms of its own.
++  std::vector<std::unique_ptr<HeliumViewSnapshotLayer>> CaptureListSnapshot();
++  // M6-r4: the live list's offset this instant (0 at rest). A layout that
++  // runs mid-slide sees the scrollers' layer transforms through
+   // ConvertRectToTarget, so anything positioned off a row that the region
+   // moves by the same transform per frame (the active row's card shadow)
+   // subtracts this to store the landed rect.
+   float slide_dx_live() const { return slide_dx_live_; }
+-  // Per frame: |dx_live| is the arriving list's offset, |dx_old| the
+-  // leaving one's (dx_live minus a strip width, signed by the direction).
+-  // The region moves the New Tab button -- Arc slides it with the list --
+-  // off these, and cleans up on |ended|.
+-  using SlideProgressCallback =
+-      base::RepeatingCallback<void(float dx_live, float dx_old)>;
+-  void SetSlideCallbacks(SlideProgressCallback progress,
+-                         base::RepeatingClosure ended);
+ 
+   void SetCollapsedState(bool is_collapsed);
+   void SetIsAnimatingSize(bool is_animating);
+@@ -234,19 +226,9 @@
+ 
+   friend class TabStripViewLayout;
+ 
+-  // views::AnimationDelegateViews (the slide):
+-  void AnimationProgressed(const gfx::Animation* animation) override;
+-  void AnimationEnded(const gfx::Animation* animation) override;
+-  void ApplySlideTransform(double progress);
+   void OnNewTabPositionChanged();
+-  void DropSlideSnapshots();
+ 
+-  int slide_direction_ = 0;
+   float slide_dx_live_ = 0.0f;
+-  gfx::SlideAnimation slide_animation_{this};
+-  std::vector<std::unique_ptr<HeliumViewSnapshotLayer>> slide_snapshots_;
+-  SlideProgressCallback slide_progress_callback_;
+-  base::RepeatingClosure slide_ended_callback_;
+ 
+   raw_ptr<TabCollectionNode> collection_node_ = nullptr;
+   raw_ptr<WorkspaceFavoritesBandView> favorites_band_ = nullptr;
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+@@ -321,7 +321,10 @@
+   }
+   const helium_workspace::WorkspaceTabController* const controller =
+       helium_workspace::WorkspaceTabController::From(browser_view->browser());
+-  return controller ? controller->current_space_id() : std::string();
++  // M6 轮4: the space the views draw (see WorkspaceTabController::
++  // shown_space_id) -- the space carousel photographs other spaces through
++  // this very filter.
++  return controller ? controller->shown_space_id() : std::string();
+ }
+ 
+ 
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -480,8 +480,10 @@
+ void WorkspaceSidebarView::RefreshCurrentSpaceId() {
+   const helium_workspace::WorkspaceTabController* const controller =
+       helium_workspace::WorkspaceTabController::From(GetBrowserWindow());
++  // M6 轮4: the space the views draw -- the committed one, or the one the
++  // space carousel is photographing right now.
+   current_space_id_ =
+-      controller ? controller->current_space_id() : std::string();
++      controller ? controller->shown_space_id() : std::string();
+ }
+ 
+ bool WorkspaceSidebarView::IsCurrentSpaceCollapsed() const {
+@@ -933,6 +935,12 @@
+ }
+ 
+ void WorkspaceSidebarView::OnCurrentSpaceChanged() {
++  ResyncToShownSpace();
++  // Rows just moved under a pointer that did not.
++  ScheduleHoverResync();
++}
++
++void WorkspaceSidebarView::ResyncToShownSpace() {
+   // ⛔ Both blends' size guards compare entry counts, which two spaces can
+   // share; drop the snapshots outright rather than lerp unrelated rows.
+   if (folder_animation_.is_animating()) {
+@@ -963,8 +971,6 @@
+       container && !container->IsDragging()) {
+     container->SnapLayoutToTarget();
+   }
+-  // Rows just moved under a pointer that did not.
+-  ScheduleHoverResync();
+ }
+ 
+ void WorkspaceSidebarView::AnimationProgressed(const gfx::Animation* animation) {
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -125,6 +125,12 @@
+   // between two spaces with the same row count would pass the size guards
+   // and lerp unrelated rows), re-filters, and re-lays out.
+   void OnCurrentSpaceChanged() override;
++  // M6 轮4: the same re-filter for whatever space the controller's
++  // shown_space_id() names right now, minus the hover resync -- the space
++  // carousel's snapshot pass, which points the views at another space,
++  // photographs it and points them back within one task. Nothing is
++  // painted in between.
++  void ResyncToShownSpace();
+ 
+   // TabStripModelObserver:
+   void OnTabStripModelChanged(
+Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
++++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <algorithm>
+ #include <memory>
++#include <optional>
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
+@@ -190,15 +191,27 @@
+     UpdateFilter();
+   }
+ 
++  // M6 轮4: how grey the space carousel wants this icon mid-switch (0 in
++  // full colour, 1 fully grey); nullopt at rest.
++  void SetGreyOverride(std::optional<float> grey) {
++    if (grey_override_ == grey) {
++      return;
++    }
++    grey_override_ = grey;
++    UpdateFilter();
++  }
++
+   void UpdateFilter() {
+     // Arc: non-current icons are fully desaturated and not dimmed (their
+     // luminance matches the current one's, measured across g1's frames).
+-    const bool grey = dimmed_ || !current_;
+-    layer()->SetLayerGrayscale(grey ? 1.0f : 0.0f);
++    const float grey = grey_override_.value_or(dimmed_ || !current_ ? 1.0f
++                                                                    : 0.0f);
++    layer()->SetLayerGrayscale(grey);
+     // A monochrome vector icon has no saturation to lose, so it tells
+     // current from not by opacity instead -- our ruling, Arc unmeasured
+-    // (decisions 「M6 轮2」§4).
+-    layer()->SetOpacity(grey && vector_ ? 0.55f : 1.0f);
++    // (decisions 「M6 轮2」§4). M6 轮4: the carousel's cross-fade runs the
++    // same 1 -> 0.55 in step with the emoji's saturation.
++    layer()->SetOpacity(vector_ ? 1.0f - 0.45f * grey : 1.0f);
+     SchedulePaint();
+   }
+ 
+@@ -277,6 +290,7 @@
+   bool current_ = false;
+   bool dimmed_ = false;
+   bool vector_ = false;
++  std::optional<float> grey_override_;
+   // T053: this icon's own space menu is up.
+   bool menu_open_ = false;
+   raw_ptr<views::Label> emoji_ = nullptr;
+@@ -352,12 +366,14 @@
+     base::RepeatingClosure on_menu_pressed,
+     base::RepeatingClosure on_current_space_changed,
+     base::RepeatingCallback<void(int)> on_current_space_will_change,
+-    base::RepeatingClosure on_space_switch_settled)
++    base::RepeatingClosure on_space_switch_settled,
++    base::RepeatingClosure on_space_switch_activated)
+     : browser_(browser),
+       on_menu_pressed_(std::move(on_menu_pressed)),
+       on_current_space_changed_(std::move(on_current_space_changed)),
+       on_current_space_will_change_(std::move(on_current_space_will_change)),
+-      on_space_switch_settled_(std::move(on_space_switch_settled)) {
++      on_space_switch_settled_(std::move(on_space_switch_settled)),
++      on_space_switch_activated_(std::move(on_space_switch_activated)) {
+   auto menu_button = std::make_unique<MenuButton>(base::BindRepeating(
+       [](WorkspaceSpaceBarView* bar) { bar->on_menu_pressed_.Run(); },
+       base::Unretained(this)));
+@@ -492,6 +508,27 @@
+   on_space_switch_settled_.Run();
+ }
+ 
++void WorkspaceSpaceBarView::OnSpaceSwitchActivated() {
++  on_space_switch_activated_.Run();
++}
++
++void WorkspaceSpaceBarView::SetSwitchBlend(
++    const std::map<std::string, float>& greys) {
++  for (SpaceButton* button : buttons_) {
++    const auto it = greys.find(button->space_id());
++    button->SetGreyOverride(
++        it != greys.end()
++            ? std::optional<float>(std::clamp(it->second, 0.0f, 1.0f))
++            : std::nullopt);
++  }
++}
++
++void WorkspaceSpaceBarView::ClearSwitchBlend() {
++  for (SpaceButton* button : buttons_) {
++    button->SetGreyOverride(std::nullopt);
++  }
++}
++
+ void WorkspaceSpaceBarView::Rebuild() {
+   for (SpaceButton* button : buttons_) {
+     RemoveChildViewT(button);
+Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
++++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_WORKSPACE_SPACE_BAR_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_TABS_VERTICAL_WORKSPACE_SPACE_BAR_VIEW_H_
+ 
++#include <map>
+ #include <memory>
+ #include <string>
+ #include <vector>
+@@ -66,7 +67,8 @@
+       base::RepeatingClosure on_menu_pressed,
+       base::RepeatingClosure on_current_space_changed,
+       base::RepeatingCallback<void(int)> on_current_space_will_change,
+-      base::RepeatingClosure on_space_switch_settled);
++      base::RepeatingClosure on_space_switch_settled,
++      base::RepeatingClosure on_space_switch_activated);
+   WorkspaceSpaceBarView(const WorkspaceSpaceBarView&) = delete;
+   WorkspaceSpaceBarView& operator=(const WorkspaceSpaceBarView&) = delete;
+   ~WorkspaceSpaceBarView() override;
+@@ -86,6 +88,14 @@
+   enum class FormMode { kNone, kCreate, kManage };
+   void SetFormMode(FormMode mode);
+ 
++  // M6 轮4 (Arc g38): while the space carousel moves, the icons it involves
++  // -- the old and the new current, and any a re-aimed slide left part-way
++  // -- are as grey as |greys| says (0 in full colour, 1 fully grey); every
++  // other icon keeps its resting look. Cleared, everything is at rest again
++  // (UpdateCurrent's look).
++  void SetSwitchBlend(const std::map<std::string, float>& greys);
++  void ClearSwitchBlend();
++
+   // Runs one space-menu command for |space_id| the way the icon's own menu
+   // would (M6 轮2 2b: the Manage Spaces sheet's rows hand theirs here once
+   // the sheet has closed, so Rename / New Folder / Delete act on the
+@@ -108,6 +118,7 @@
+   void OnCurrentSpaceChanged() override;
+   void OnCurrentSpaceWillChange(int direction) override;
+   void OnSpaceSwitchSettled() override;
++  void OnSpaceSwitchActivated() override;
+ 
+  private:
+   class SpaceButton;
+@@ -134,6 +145,7 @@
+   const base::RepeatingClosure on_current_space_changed_;
+   const base::RepeatingCallback<void(int)> on_current_space_will_change_;
+   const base::RepeatingClosure on_space_switch_settled_;
++  const base::RepeatingClosure on_space_switch_activated_;
+ 
+   std::vector<raw_ptr<SpaceButton>> buttons_;
+   raw_ptr<views::ImageButton> menu_button_ = nullptr;
