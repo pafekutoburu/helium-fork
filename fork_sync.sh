@@ -10,10 +10,10 @@
 set -u
 
 # ── 每月参数区（改这里） ────────────────────────────────────────────────
-TARGET_TAG="0.16.3"            # 本仓要合的上游 release tag
-MACOS_SHA="396158f08aa69842059fdb6f1cbc8e4cb274661b"  # macos 仓要合的上游 commit（无 tag 时钉 SHA）
+TARGET_TAG="0.18.3"            # 本仓要合的上游 release tag
+MACOS_SHA="95911fb3741773327e60b054cc6463b58ed203aa"  # macos 仓要合的上游 commit（无 tag 时钉 SHA）
 ARCHIVE_REF="archive/pre-${TARGET_TAG}"               # 备份 ref 名
-EXPECTED_FORK=63               # 我们的补丁数（series 末段）
+EXPECTED_FORK=81               # 我们的补丁数（series 末段）
 # EXPECTED_MERGED 不硬编码：stage2 从 series.merged 现算并打印，人工核对。
 # ───────────────────────────────────────────────────────────────────────
 
@@ -48,7 +48,7 @@ stage1() {  # 退开发态 + 两仓合流（先子仓后父仓）
     cat <<'GUIDE'
 ⚠ 冲突（预期只在 patches/series）。解法定案：
   上游新增的 EOF 行在前，我们 helium-fork 段整段在后（保持是最后一段、平台块之前）。
-  解完自证: grep -v '^$' patches/series | tail -63 应全为 helium-fork/；然后 git add + git merge --continue。
+  解完自证: grep -v '^$' patches/series | tail -81 应全为 helium-fork/；然后 git add + git merge --continue。
   之后手动跑父仓那半（本 stage 重跑会先撞 unmerge 检查，直接照下面三行）：
     git -C ../  fetch upstream && git -C ../ merge <MACOS_SHA> --no-edit
     git -C ../ add helium-chromium && git -C ../ commit
