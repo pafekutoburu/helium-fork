@@ -1,6 +1,6 @@
 --- a/components/sync/engine/BUILD.gn
 +++ b/components/sync/engine/BUILD.gn
-@@ -86,6 +86,10 @@ static_library("engine") {
+@@ -95,6 +95,10 @@ static_library("engine") {
      "events/protocol_event_buffer.cc",
      "events/protocol_event_buffer.h",
      "events/protocol_event_observer.h",
@@ -11,7 +11,7 @@
      "forwarding_data_type_processor.cc",
      "forwarding_data_type_processor.h",
      "get_updates_delegate.cc",
-@@ -169,6 +173,7 @@ static_library("engine") {
+@@ -181,6 +185,7 @@ static_library("engine") {
      "//base",
      "//components/signin/public/identity_manager",
      "//components/sync/base",
@@ -144,7 +144,8 @@
 +
 +HttpResponse SyncVaultConnectionManager::PostBuffer(
 +    const std::string& buffer_in,
-+    std::string* buffer_out) {
++    std::string* buffer_out,
++    const signin::AccessTokenInfo& /*access_token_info*/) {
 +  CHECK(buffer_out);
 +  buffer_out->clear();
 +
@@ -205,8 +206,7 @@
 +        history_was_collected || command_result.state_changed ||
 +        !vault_state.initialized || vault_state.data.empty();
 +    if (must_persist) {
-+      std::optional<std::string> serialized_state =
-+          loopback_server_->SerializeStateToString();
++      auto serialized_state = loopback_server_->SerializeStateToBytes();
 +      if (!serialized_state) {
 +        loopback_server_.reset();
 +        return HttpResponse::ForHttpStatusCode(net::HTTP_INTERNAL_SERVER_ERROR);
@@ -214,7 +214,7 @@
 +      if (serialized_state->size() > kSyncVaultMaximumReconstructedBytes &&
 +          loopback_server_->GarbageCollectOldestHistory(
 +              serialized_state->size() - kSyncVaultMaximumReconstructedBytes)) {
-+        serialized_state = loopback_server_->SerializeStateToString();
++        serialized_state = loopback_server_->SerializeStateToBytes();
 +        if (!serialized_state) {
 +          loopback_server_.reset();
 +          return HttpResponse::ForHttpStatusCode(
@@ -296,7 +296,7 @@
 +}  // namespace syncer
 --- /dev/null
 +++ b/components/sync/engine/sync_vault/sync_vault_connection_manager.h
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,67 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -345,8 +345,10 @@
 +  ~SyncVaultConnectionManager() override;
 +
 + private:
-+  HttpResponse PostBuffer(const std::string& buffer_in,
-+                          std::string* buffer_out) override;
++  HttpResponse PostBuffer(
++      const std::string& buffer_in,
++      std::string* buffer_out,
++      const signin::AccessTokenInfo& access_token_info) override;
 +
 +  HttpResponse ResponseForVaultError(SyncVaultStoreError error);
 +  void ReportDiagnostics(

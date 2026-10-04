@@ -65,15 +65,15 @@
  #include <algorithm>
 +#include <array>
  #include <memory>
+ #include <ranges>
  #include <string_view>
- #include <utility>
-@@ -182,9 +183,23 @@ LocationBarView* GetLocationBarViewForAc
-   return browser_view ? browser_view->GetLocationBarView() : nullptr;
+@@ -174,8 +175,23 @@ int IncrementalMinimumWidth(const views:
+   return (view && view->GetVisible()) ? view->GetMinimumSize().width() : 0;
  }
  
 +// The padding between intent chips and other trailing decorations.
 +constexpr int kIntentChipIntraItemPadding = 4;
- 
++
  // The padding between the content setting icons and other trailing decorations.
 -constexpr int kContentSettingIntraItemPadding = 8;
 +constexpr int kContentSettingIntraItemPadding = kIntentChipIntraItemPadding;
@@ -90,9 +90,9 @@
 +    kActionVirtualCardEnroll,
 +});
  
- }  // namespace
- 
-@@ -239,7 +254,10 @@ LocationBarView::LocationBarView(Browser
+ // Capsule dimensions and padding for the elevated page action toolbar.
+ constexpr int kPageActionCapsuleEdgePadding = 2;
+@@ -237,7 +253,10 @@ LocationBarView::LocationBarView(Browser
                   !v->GetOmniboxController()->IsPopupOpen();
          }));
      views::FocusRing::Get(this)->SetOutsetFocusRingDisabled(true);
@@ -104,7 +104,7 @@
  
  #if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
      if (features::IsOsLevelGeolocationPermissionSupportEnabled()) {
-@@ -305,9 +323,9 @@ void LocationBarView::Init() {
+@@ -316,9 +335,9 @@ void LocationBarView::Init() {
        CONTEXT_OMNIBOX_PRIMARY, views::style::STYLE_PRIMARY);
  
    const gfx::FontList& omnibox_chip_font_list = typography_provider.GetFont(
@@ -116,26 +116,22 @@
  
    auto location_icon_view =
        std::make_unique<LocationIconView>(omnibox_chip_font_list, this, this);
-@@ -452,11 +470,17 @@ void LocationBarView::Init() {
+@@ -463,7 +482,13 @@ void LocationBarView::Init() {
      page_action_items = page_actions::GetActivePageActionItems(*browser_);
    }
  
+-  static constexpr int kBetweenIconSpacing = 8;
 +  std::erase_if(page_action_items, [](const actions::ActionItem* action_item) {
 +    return std::ranges::find(kHiddenPageActionIds,
 +                             action_item->GetActionId().value()) !=
 +           kHiddenPageActionIds.end();
 +  });
 +
-   // We don't need to bridge the new page action container with the legacy one
-   // if page actions migration is enabled.
-   const bool should_bridge_containers =
-       !base::FeatureList::IsEnabled(features::kPageActionsMigration);
--  static constexpr int kBetweenIconSpacing = 8;
 +  static constexpr int kBetweenIconSpacing = kIntentChipIntraItemPadding;
    const page_actions::PageActionViewParams page_action_params{
        .icon_size =
            GetLayoutConstant(LayoutConstant::kLocationBarTrailingIconSize),
-@@ -532,7 +556,7 @@ int LocationBarView::GetBorderRadius() c
+@@ -515,7 +540,7 @@ int LocationBarView::GetBorderRadius() c
  // static
  int LocationBarView::ComputeBorderRadius(gfx::Size size) {
    return ChromeLayoutProvider::Get()->GetCornerRadiusMetric(
@@ -144,7 +140,7 @@
  }
  
  // static
-@@ -759,9 +783,9 @@ void LocationBarView::Layout(PassKey) {
+@@ -744,9 +769,9 @@ void LocationBarView::Layout(PassKey) {
    // TODO(manukh): Move constants to layout_constants.cc.
    // The padding between the left edges of the location bar and the LHS icon,
    // e.g. the page info icon, the google G icon, the selected suggestion icon.
@@ -156,7 +152,7 @@
  
    // Apply indentation to align the omnibox input icon and the text with those
    // of the suggestions in the popup. However, there are two exceptions where
-@@ -780,22 +804,22 @@ void LocationBarView::Layout(PassKey) {
+@@ -765,22 +790,22 @@ void LocationBarView::Layout(PassKey) {
                               !location_icon_view_->ShouldShowLabel() &&
                               !ShouldShowKeywordBubble();
    if (should_indent) {
@@ -183,7 +179,7 @@
    }
  
    LocationBarLayout leading_decorations(LocationBarLayout::Position::kLeftEdge,
-@@ -1433,7 +1457,7 @@ int LocationBarView::GetMinimumTrailingW
+@@ -1338,7 +1363,7 @@ int LocationBarView::GetMinimumTrailingW
  }
  
  gfx::Rect LocationBarView::GetLocalBoundsWithoutEndcaps() const {
@@ -192,6 +188,18 @@
    gfx::Rect bounds_without_endcaps(GetLocalBounds());
    bounds_without_endcaps.Inset(gfx::Insets::VH(0, border_radius));
    return bounds_without_endcaps;
+@@ -1396,9 +1421,8 @@ void LocationBarView::RefreshBackground(
+         /*antialias=*/true, /*should_border_scale=*/true));
+   }
+ 
+-  // Keep the views::Textfield in sync. It needs an opaque background to
+-  // correctly enable subpixel AA.
+-  omnibox_view_->SetBackgroundColor(background_color_);
++  // The location bar already paints the background behind the text field.
++  omnibox_view_->SetBackgroundColor(SK_ColorTRANSPARENT);
+ 
+   // The divider between indicators and request chips should have the same color
+   // as the omnibox.
 --- a/chrome/browser/ui/views/location_bar/location_icon_view.cc
 +++ b/chrome/browser/ui/views/location_bar/location_icon_view.cc
 @@ -111,7 +111,7 @@ SkColor LocationIconView::GetForegroundC
@@ -215,7 +223,7 @@
  BEGIN_METADATA(LocationIconView)
 --- a/chrome/browser/ui/views/location_bar/location_icon_state_helper.cc
 +++ b/chrome/browser/ui/views/location_bar/location_icon_state_helper.cc
-@@ -73,22 +73,13 @@ bool ShouldShowSecurityChipText(const Lo
+@@ -85,22 +85,13 @@ bool ShouldShowSecurityChipText(const Lo
      return false;
    }
  

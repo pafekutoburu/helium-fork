@@ -11,41 +11,40 @@
    // location bar.
 --- a/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
 +++ b/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
-@@ -232,8 +232,7 @@ RoundedOmniboxResultsFrame::RoundedOmnib
+@@ -235,8 +235,7 @@ RoundedOmniboxResultsFrame::RoundedOmnib
      LocationBar* location_bar,
      bool forward_mouse_events)
      : contents_(contents), forward_mouse_events_(forward_mouse_events) {
 -  const int corner_radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
 -      views::ShapeContextTokens::kOmniboxExpandedRadius);
 +  const int corner_radius = 12;
-   // Host the contents in its own View to simplify layout and customization.
-   auto contents_host_builder =
-       views::Builder<views::View>()
-@@ -296,29 +295,10 @@ int RoundedOmniboxResultsFrame::GetNonRe
+   auto* webui_content = GetOmniboxPopupWebUIBaseContent();
+   const bool masks_to_bounds =
+       webui_content && webui_content->ShouldSizeWebViewToPreferredHeight();
+@@ -306,29 +305,7 @@ int RoundedOmniboxResultsFrame::GetNonRe
  
  // static
  gfx::Insets RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets() {
 -  if (ui::TouchUiController::Get()->touch_ui()) {
-+  if ((false)) {
-     return gfx::Insets::TLBR(6, 1, 5, 1);
-   }
+-    return gfx::Insets::TLBR(6, 1, 5, 1);
+-  }
 -#if BUILDFLAG(IS_MAC)
--  // On macOS, the popup is hosted in a separate native window. Converting
--  // sub-pixel Views layout coordinates of the location bar to integer screen
--  // coordinates for the OS window positioning introduces rounding discrepancies
--  // (up to 1px). Additionally, differences in visual border rendering thickness
--  // (1px CSS outline in WebUI vs 0.5px native retina border) require a slightly
--  // tighter fit.
+-  // On macOS, the popup is hosted in a separate native window. Differences in
+-  // visual border rendering thickness (1px CSS outline in WebUI vs 0.5px native
+-  // retina border) require a slightly tighter horizontal fit (5px instead of
+-  // 6px).
 -  //
--  // To avoid adding platform-specific 1px hacks or relative offsets in the
--  // shared WebUI CSS:
--  // - We set the vertical inset to 4px (1px smaller than default 5px). This
--  //   effectively offsets the widget top down by 1px, centering the 32px
--  //   WebUI searchbox inside the 34px native height.
--  // - We set the horizontal inset to 5px (1px smaller than default 6px). This
--  //   narrows the widget by 2px overall, aligning the searchbox's visual
--  //   boundaries with the native location bar's visual border.
--  return gfx::Insets::VH(4, 5);
+-  // When WebUIOmniboxFullPopup is enabled:
+-  // - Top inset is kept at 5px so the widget anchors flush with the bottom of
+-  //   the tab line (y = LocationBar_y - 5 = 0).
+-  // - Horizontal insets are 5px (1px tighter) to align visual boundaries with
+-  //   the native location bar.
+-  // - Bottom inset is 4px to accommodate the 32px WebUI searchbox.
+-  // When disabled, we fall back to standard (5, 6) insets.
+-  if (omnibox::IsWebUIOmniboxFullPopupEnabled()) {
+-    return gfx::Insets::TLBR(5, 5, 4, 5);
+-  }
+-  return gfx::Insets::VH(5, 6);
 -#else
 -  return gfx::Insets::VH(5, 6);
 -#endif
@@ -135,7 +134,7 @@
  BEGIN_METADATA(OmniboxRowView)
 --- a/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
 +++ b/chrome/browser/ui/views/omnibox/omnibox_match_cell_view.cc
-@@ -52,9 +52,6 @@ static constexpr int kUniformRowHeightIc
+@@ -51,9 +51,6 @@ static constexpr int kUniformRowHeightIc
  // since the text will have to be further right to accommodate the icons.
  static constexpr int kIphTextIndent = 14;
  
@@ -145,7 +144,7 @@
  // The right-side inset of the toolbelt suggestion.
  static constexpr int kToolbeltTextInsetRight = 8;
  
-@@ -347,40 +344,7 @@ void OmniboxMatchCellView::OnSecondaryTe
+@@ -325,40 +322,7 @@ void OmniboxMatchCellView::OnSecondaryTe
  
  void OmniboxMatchCellView::SetIcon(const gfx::ImageSkia& image,
                                     const AutocompleteMatch& match) {
@@ -186,7 +185,7 @@
  }
  
  void OmniboxMatchCellView::ClearIcon() {
-@@ -593,7 +557,7 @@ gfx::Size OmniboxMatchCellView::Calculat
+@@ -561,7 +525,7 @@ gfx::Size OmniboxMatchCellView::Calculat
    } else if (layout_style_ == LayoutStyle::IPH_SUGGESTION ||
               layout_style_ == LayoutStyle::TOOLBELT) {
      // IPH and toolbelt suggestions have extra height.
@@ -195,7 +194,7 @@
    } else {
      // The height for traditional 1-line matches.
      height = kRowHeight;
-@@ -614,7 +578,7 @@ int OmniboxMatchCellView::GetImageIndent
+@@ -582,7 +546,7 @@ int OmniboxMatchCellView::GetImageIndent
    // not derived from other matches' `indent` below.
    if (layout_style_ == LayoutStyle::IPH_SUGGESTION ||
        layout_style_ == LayoutStyle::TOOLBELT) {
@@ -204,7 +203,7 @@
    }
  
    // The entity, answer, and icon images are horizontally centered within their
-@@ -625,7 +589,7 @@ int OmniboxMatchCellView::GetImageIndent
+@@ -593,7 +557,7 @@ int OmniboxMatchCellView::GetImageIndent
    // b) Entities, answers, and icons continue to be center-aligned.
    // c) Regardless of the state of those other features and their widths.
    // This applies to both touch-UI and non-touch-UI.
@@ -213,7 +212,7 @@
  
    indent += omnibox_feature_configs::AdjustOmniboxIndent()
                  .Get()
-@@ -635,51 +599,7 @@ int OmniboxMatchCellView::GetImageIndent
+@@ -603,51 +567,7 @@ int OmniboxMatchCellView::GetImageIndent
  }
  
  int OmniboxMatchCellView::GetTextIndent() const {
@@ -337,14 +336,3 @@
      focus_ring->SetColorId(kColorOmniboxResultsFocusIndicator);
  
      GetViewAccessibility().SetRole(ax::mojom::Role::kListBoxOption);
---- a/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
-+++ b/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
-@@ -632,7 +632,7 @@ int OmniboxViewViews::GetUnelidedTextWid
- }
- 
- gfx::Size OmniboxViewViews::GetMinimumSize() const {
--  constexpr int kMinCharacters = 20;
-+  constexpr int kMinCharacters = 32;
-   return gfx::Size(
-       GetFontList().GetExpectedTextWidth(kMinCharacters) + GetInsets().width(),
-       GetPreferredSize().height());

@@ -16,7 +16,7 @@
  #include "components/safe_browsing/core/common/features.h"
  #include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
  #include "components/saved_tab_groups/public/features.h"
-@@ -3135,14 +3133,9 @@ void AddSearchStrings(content::WebUIData
+@@ -3213,14 +3211,9 @@ void AddSearchStrings(content::WebUIData
    html_source->AddString("searchExplanationLearnMoreURL",
                           chrome::kOmniboxLearnMoreURL);
  
@@ -59,7 +59,7 @@
  }
  
  std::optional<ProgramAndLocationMatch> GetProgramAndLocationMatch(
-@@ -403,31 +387,25 @@ RegionalCapabilitiesService::GetRegional
+@@ -428,31 +412,25 @@ bool RegionalCapabilitiesService::IsSear
  }
  
  bool RegionalCapabilitiesService::IsInSearchEngineChoiceScreenRegion() {
@@ -95,7 +95,7 @@
  }
  #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
  
-@@ -555,14 +533,7 @@ RegionalCapabilitiesService::GetChoiceSc
+@@ -587,14 +565,7 @@ RegionalCapabilitiesService::GetChoiceSc
  }
  
  bool RegionalCapabilitiesService::IsInEeaCountry() {

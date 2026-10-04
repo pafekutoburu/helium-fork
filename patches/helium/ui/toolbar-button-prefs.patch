@@ -1,6 +1,6 @@
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -674,6 +674,30 @@ inline constexpr char kCtrlTabMru[] = "b
+@@ -677,6 +677,30 @@ inline constexpr char kCtrlTabMru[] = "b
  inline constexpr char kHeliumCrashReportingMode[] =
      "helium.crash_reporting.mode";
  
@@ -33,7 +33,7 @@
  inline constexpr char kVoiceTypingSettings[] = "browser.voice_typing_settings";
 --- a/chrome/browser/ui/browser_ui_prefs.cc
 +++ b/chrome/browser/ui/browser_ui_prefs.cc
-@@ -144,6 +144,13 @@ void RegisterBrowserUserPrefs(user_prefs
+@@ -150,6 +150,13 @@ void RegisterBrowserUserPrefs(user_prefs
    registry->RegisterBooleanPref(prefs::kPinSplitTabButton, false,
                                  pref_registration_flags);
  
@@ -49,7 +49,7 @@
    registry->RegisterBooleanPref(prefs::kWebAppCreateInQuickLaunchBar, true);
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -317,6 +317,20 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+@@ -322,6 +322,20 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
    (*s_allowlist)[::prefs::kSplitViewDragAndDropEnabled] =
        settings_api::PrefType::kBoolean;
  
@@ -72,7 +72,7 @@
    (*s_allowlist)[::prefs::kCurrentThemeID] = settings_api::PrefType::kString;
 --- a/chrome/browser/ui/actions/chrome_action_id.h
 +++ b/chrome/browser/ui/actions/chrome_action_id.h
-@@ -495,6 +495,9 @@
+@@ -514,6 +514,9 @@
  #define TOOLBAR_PINNABLE_ACTION_IDS \
    E(kActionHome, IDC_HOME) \
    E(kActionForward, IDC_FORWARD) \
@@ -80,8 +80,8 @@
 +  E(kActionExtensions) \
 +  E(kActionMediaControls) \
    E(kActionNewIncognitoWindow, IDC_NEW_INCOGNITO_WINDOW) \
+   E(kActionNewIsolatedWindow, IDC_NEW_ISOLATED_WINDOW) \
    E(kActionSendSharedTabGroupFeedback, IDC_SEND_SHARED_TAB_GROUP_FEEDBACK) \
-   E(kActionShowPasswordManager, IDC_SHOW_PASSWORD_MANAGER) \
 --- a/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
 +++ b/chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.cc
 @@ -214,6 +214,13 @@ void PinnedToolbarActionsModel::UpdatePi
@@ -166,7 +166,7 @@
      return;
 --- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -54,6 +54,7 @@
+@@ -55,6 +55,7 @@
  #include "chrome/browser/ui/color/chrome_color_id.h"
  #include "chrome/browser/ui/global_error/global_error_service.h"
  #include "chrome/browser/ui/global_error/global_error_service_factory.h"
@@ -174,7 +174,7 @@
  #include "chrome/browser/ui/intent_picker_tab_helper.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/omnibox/omnibox_view.h"
-@@ -616,6 +617,59 @@ void ToolbarView::Init() {
+@@ -637,6 +638,59 @@ void ToolbarView::Init() {
      UpdateGlicButtonVisibility();
    }
  
@@ -234,7 +234,7 @@
    InitLayout();
  
    for (auto* button : std::array<views::Button*, 5>{back_, forward_, reload_,
-@@ -1931,6 +1985,35 @@ void ToolbarView::OnShowHomeButtonChange
+@@ -1980,6 +2034,35 @@ void ToolbarView::OnShowHomeButtonChange
    }
  }
  
@@ -272,7 +272,7 @@
      // Update the internal margins for touch layout.
 --- a/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -330,6 +330,18 @@ class ToolbarView : public views::Access
+@@ -343,6 +343,18 @@ class ToolbarView : public views::Access
  
    void OnShowHomeButtonChanged();
  
@@ -291,7 +291,7 @@
    void OnTouchUiChanged();
  
    void InitGlicContainer();
-@@ -437,6 +449,18 @@ class ToolbarView : public views::Access
+@@ -451,6 +463,18 @@ class ToolbarView : public views::Access
    // Controls whether or not a home button should be shown on the toolbar.
    BooleanPrefMember show_home_button_;
  
@@ -402,7 +402,7 @@
  }
  
  CustomizeToolbarHandler::~CustomizeToolbarHandler() = default;
-@@ -211,8 +265,76 @@ void CustomizeToolbarHandler::ListAction
+@@ -211,8 +265,94 @@ void CustomizeToolbarHandler::ListAction
                .Rasterize(&provider),
            scale_factor)));
  
@@ -414,7 +414,10 @@
 +      side_panel::customize_chrome::mojom::CategoryId::kNavigation,
 +      GURL(webui::EncodePNGAndMakeDataURI(
 +          ui::ImageModel::FromVectorIcon(
-+              vector_icons::kBackArrowChromeRefreshOldIcon, icon_color_id)
++              features::IsRoundedIconsEnabled()
++                  ? vector_icons::kArrowBackIcon
++                  : vector_icons::kBackArrowChromeRefreshOldIcon,
++              icon_color_id)
 +              .Rasterize(&provider),
 +          scale_factor)));
 +
@@ -425,7 +428,10 @@
 +      side_panel::customize_chrome::mojom::CategoryId::kNavigation,
 +      GURL(webui::EncodePNGAndMakeDataURI(
 +          ui::ImageModel::FromVectorIcon(
-+              vector_icons::kReloadChromeRefreshOldIcon, icon_color_id)
++              features::IsRoundedIconsEnabled()
++                  ? vector_icons::kRefreshIcon
++                  : vector_icons::kReloadChromeRefreshOldIcon,
++              icon_color_id)
 +              .Rasterize(&provider),
 +          scale_factor)));
 +
@@ -436,7 +442,10 @@
 +      side_panel::customize_chrome::mojom::CategoryId::kYourChrome,
 +      GURL(webui::EncodePNGAndMakeDataURI(
 +          ui::ImageModel::FromVectorIcon(
-+              vector_icons::kAccountCircleChromeRefreshOldIcon, icon_color_id)
++              features::IsRoundedIconsEnabled()
++                  ? vector_icons::kAccountCircleIcon
++                  : vector_icons::kAccountCircleChromeRefreshOldIcon,
++              icon_color_id)
 +              .Rasterize(&provider),
 +          scale_factor)));
 +
@@ -447,7 +456,10 @@
 +      side_panel::customize_chrome::mojom::CategoryId::kYourChrome,
 +      GURL(webui::EncodePNGAndMakeDataURI(
 +          ui::ImageModel::FromVectorIcon(
-+              vector_icons::kExtensionChromeRefreshOldIcon, icon_color_id)
++              features::IsRoundedIconsEnabled()
++                  ? vector_icons::kChromeExtensionIcon
++                  : vector_icons::kExtensionChromeRefreshOldIcon,
++              icon_color_id)
 +              .Rasterize(&provider),
 +          scale_factor)));
 +
@@ -457,7 +469,10 @@
 +      prefs()->GetBoolean(prefs::kShowMenuButton), false,
 +      side_panel::customize_chrome::mojom::CategoryId::kYourChrome,
 +      GURL(webui::EncodePNGAndMakeDataURI(
-+          ui::ImageModel::FromVectorIcon(kBrowserToolsOldIcon, icon_color_id)
++          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
++                                             ? kMoreVertIcon
++                                             : kBrowserToolsOldIcon,
++                                         icon_color_id)
 +              .Rasterize(&provider),
 +          scale_factor)));
 +
@@ -469,7 +484,10 @@
 +      side_panel::customize_chrome::mojom::CategoryId::kYourChrome,
 +      GURL(webui::EncodePNGAndMakeDataURI(
 +          ui::ImageModel::FromVectorIcon(
-+              kMediaToolbarButtonChromeRefreshOldIcon, icon_color_id)
++              features::IsRoundedIconsEnabled()
++                  ? kQueueMusicIcon
++                  : kMediaToolbarButtonChromeRefreshOldIcon,
++              icon_color_id)
 +              .Rasterize(&provider),
 +          scale_factor)));
 +
@@ -480,9 +498,9 @@
  
    auto split_tab_action = side_panel::customize_chrome::mojom::Action::New(
        MojoActionForChromeAction(kActionSplitTab).value(),
-@@ -230,6 +352,11 @@ void CustomizeToolbarHandler::ListAction
-   actions.push_back(std::move(split_tab_action));
+@@ -229,6 +369,11 @@ void CustomizeToolbarHandler::ListAction
  
+   actions.push_back(std::move(split_tab_action));
  
 +  actions.push_back(std::move(extensions_action));
 +  actions.push_back(std::move(media_controls_action));
@@ -492,7 +510,7 @@
    const auto add_action =
        [&actions, this, &provider, scale_factor, bwi](
            actions::ActionId id,
-@@ -285,17 +412,16 @@ void CustomizeToolbarHandler::ListAction
+@@ -284,17 +429,16 @@ void CustomizeToolbarHandler::ListAction
          actions.push_back(std::move(mojo_action));
        };
  
@@ -516,7 +534,7 @@
  
    add_action(kActionPrint,
               side_panel::customize_chrome::mojom::CategoryId::kTools);
-@@ -362,6 +488,24 @@ void CustomizeToolbarHandler::PinAction(
+@@ -361,6 +505,24 @@ void CustomizeToolbarHandler::PinAction(
      case kActionSplitTab:
        prefs()->SetBoolean(prefs::kPinSplitTabButton, pin);
        break;
@@ -543,7 +561,7 @@
        const std::optional<std::string> metrics_name =
 --- a/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
 +++ b/chrome/browser/ui/views/extensions/extensions_toolbar_desktop.cc
-@@ -587,7 +587,11 @@ void ExtensionsToolbarDesktop::AnchorAnd
+@@ -589,7 +589,11 @@ void ExtensionsToolbarDesktop::AnchorAnd
  
    // Fix the position of widgets. Without this fix, extension-installed-bubble
    // and extension-uninstall-dialog may be out of the window border on Linux.
@@ -556,7 +574,7 @@
      views::View* anchor_view =
          views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
              kToolbarAppMenuButtonElementId,
-@@ -1113,7 +1117,9 @@ void ExtensionsToolbarDesktop::UpdateCon
+@@ -1122,7 +1126,9 @@ void ExtensionsToolbarDesktop::UpdateCon
  }
  
  bool ExtensionsToolbarDesktop::ShouldContainerBeVisible() const {
@@ -569,7 +587,7 @@
    // The container (and extensions-menu button) should not be visible if we have
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
-@@ -10859,6 +10859,9 @@ Keep your key file in a safe place. You
+@@ -11096,6 +11096,9 @@ Keep your key file in a safe place. You
        <message name="IDS_ACCNAME_FIND" desc="The accessible name for the find button.">
          Find
        </message>
@@ -579,3 +597,83 @@
        <message name="IDS_ACCNAME_BOOKMARKS" desc="The accessible name for the Bookmarks toolbar.">
          Bookmarks
        </message>
+--- a/chrome/browser/ui/views/frame/app_menu_button.cc
++++ b/chrome/browser/ui/views/frame/app_menu_button.cc
+@@ -19,7 +19,7 @@
+ #include "chrome/browser/ui/views/app_menu/action_app_menu.h"
+ #include "chrome/browser/ui/views/chrome_typography.h"
+ #include "chrome/browser/ui/views/frame/app_menu_button_observer.h"
+-#include "chrome/browser/ui/views/interaction/browser_elements_views.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/toolbar/app_menu.h"
+ #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+@@ -54,11 +54,18 @@ views::BubbleAnchor AppMenuButton::GetAn
+   // The app menu button is always present but might be non-visible or offscreen
+   // in certain cases (e.g. content-fullscreen). In this case, use the fallback
+   // anchor instead.
+-  auto* const elements = BrowserElementsViews::From(this);
+-  CHECK(elements);
+-  auto* const element = elements->GetElement(kFallbackPopupAnchorElementId);
+-  CHECK(element);
+-  return views::BubbleAnchor(element);
++  if (auto* const widget = GetWidget()) {
++    if (auto* const browser_view =
++            BrowserView::GetBrowserViewForNativeWindow(
++                widget->GetNativeWindow())) {
++      if (auto* const anchor = browser_view->fallback_popup_anchor()) {
++        return views::BubbleAnchor(anchor);
++      }
++    }
++  }
++
++  // This is only reachable for an AppMenuButton outside a BrowserView.
++  return views::BubbleAnchor(this);
+ }
+ 
+ bool AppMenuButton::IsDrawn() const {
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -5006,6 +5006,10 @@ void BrowserView::Layout(PassKey) {
+     rect.Outset(gfx::Outsets::TLBR(1, 1, 0, 1));
+ 
+     if (fallback_popup_anchor_) {
++      const gfx::Rect browser_bounds = GetLocalBounds();
++      rect.set_x(GetMirrored() ? browser_bounds.x()
++                               : browser_bounds.right() - rect.width());
++      rect.set_y(std::max(browser_bounds.y(), rect.y()));
+       fallback_popup_anchor_->MaybeUpdateAnchor(rect);
+     }
+ 
+@@ -5086,6 +5090,9 @@ void BrowserView::AddedToWidget() {
+       base::BindRepeating(&BrowserView::GetActiveContentsWebView,
+                           base::Unretained(this)));
+ 
++  fallback_popup_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
++      kFallbackPopupAnchorElementId, *this);
++
+   // Stow a pointer to this object onto the window handle so that we can get at
+   // it later when all we have is a native view.
+   GetWidget()->SetNativeWindowProperty(kBrowserViewKey, this);
+@@ -5248,8 +5255,6 @@ void BrowserView::AddedToWidget() {
+ 
+   dialog_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
+       kBrowserDialogAnchorElementId, *this);
+-  fallback_popup_anchor_ = std::make_unique<views::ViewSubregionAnchor>(
+-      kFallbackPopupAnchorElementId, *this);
+ 
+   initialized_ = true;
+ }
+--- a/chrome/browser/ui/views/frame/browser_view.h
++++ b/chrome/browser/ui/views/frame/browser_view.h
+@@ -289,6 +289,10 @@ class BrowserView : public BrowserWindow
+   const ToolbarView* toolbar() const { return toolbar_; }
+   ToolbarView* toolbar() { return toolbar_; }
+ 
++  views::ViewSubregionAnchor* fallback_popup_anchor() {
++    return fallback_popup_anchor_.get();
++  }
++
+   // Bookmark bar may be null, for example for pop-ups.
+   BookmarkBarView* bookmark_bar() { return bookmark_bar_view_; }
+ 

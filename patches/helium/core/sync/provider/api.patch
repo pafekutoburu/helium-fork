@@ -1,6 +1,6 @@
 --- a/extensions/common/extension_features.cc
 +++ b/extensions/common/extension_features.cc
-@@ -77,6 +77,8 @@ BASE_FEATURE(kApiProxyOverrideRulesPriva
+@@ -86,6 +86,8 @@ BASE_FEATURE(kApiProxyOverrideRulesPriva
  BASE_FEATURE(kApiRuntimeGetPlatformInfoNaClArch,
               base::FEATURE_ENABLED_BY_DEFAULT);
  
@@ -11,9 +11,9 @@
  BASE_FEATURE(kWebRequestPerContextEventDispatch,
 --- a/extensions/common/extension_features.h
 +++ b/extensions/common/extension_features.h
-@@ -100,6 +100,9 @@ BASE_DECLARE_FEATURE(kApiProxyOverrideRu
- // runtime.getPlatformInfo() API.
- BASE_DECLARE_FEATURE(kApiRuntimeGetPlatformInfoNaClArch);
+@@ -123,6 +123,9 @@ BASE_DECLARE_FEATURE(kApiDesktopAndroidN
+ // messaging extension IDs.
+ BASE_DECLARE_FEATURE(kApiDesktopAndroidNativeMessagingBypassExtensionAllowlist);
  
 +// Controls the availability of the experimental syncVaultProvider API.
 +BASE_DECLARE_FEATURE(kApiSyncVaultProvider);
@@ -23,7 +23,7 @@
  ///////////////////////////////////////////////////////////////////////////////
 --- a/extensions/common/features/feature_flags.cc
 +++ b/extensions/common/features/feature_flags.cc
-@@ -26,6 +26,7 @@ const base::Feature* kFeatureFlags[] = {
+@@ -27,6 +27,7 @@ const base::Feature* kFeatureFlags[] = {
      &extensions_features::kApiGlicAccessFromGoogleWebpage,
      &extensions_features::kApiMimeHandler,
      &extensions_features::kApiGlicPrivate,
@@ -33,17 +33,15 @@
      &extensions_features::kApiProxyOverrideRulesPrivate,
 --- a/extensions/common/mojom/api_permission_id.mojom
 +++ b/extensions/common/mojom/api_permission_id.mojom
-@@ -297,6 +297,7 @@ enum APIPermissionID {
-   kBluetoothSocket = 270,
-   kBluetoothLowEnergy = 271,
-   kBluetoothPeripheral = 272,
-+  kSyncVaultProvider = 273,
- 
-   // Add new entries at the end of the enum and be sure to update the
+@@ -303,4 +303,5 @@ enum APIPermissionID {
    // "ExtensionPermission3" enum in
+   // tools/metrics/histograms/metadata/extensions/enums.xml (by running
+   // update_extension_permission.py).
++  kSyncVaultProvider = 1000,
+ };
 --- a/chrome/common/extensions/api/_api_features.json
 +++ b/chrome/common/extensions/api/_api_features.json
-@@ -1070,6 +1070,11 @@
+@@ -1063,6 +1063,11 @@
        "chrome://file-manager/*"
      ]
    }],
@@ -57,7 +55,7 @@
      "contexts": ["privileged_extension"]
 --- a/chrome/common/extensions/api/_permission_features.json
 +++ b/chrome/common/extensions/api/_permission_features.json
-@@ -1156,6 +1156,13 @@
+@@ -1148,6 +1148,13 @@
        "81986D4F846CEDDDB962643FA501D1780DD441BB"   // http://crbug.com/40546373
      ]
    },
@@ -73,17 +71,21 @@
      "extension_types": ["extension", "platform_app"],
 --- a/chrome/common/extensions/api/api_sources.gni
 +++ b/chrome/common/extensions/api/api_sources.gni
-@@ -101,6 +101,7 @@ if (enable_extensions) {
+@@ -101,7 +101,10 @@ if (enable_extensions) {
    ]
  
    if (is_win || is_mac || is_linux) {
-+    types_only_schema_sources_ += [ "sync_vault_provider.webidl" ]
-     schema_sources_ += [ "web_authentication_proxy.webidl" ]
+-    schema_sources_ += [ "web_authentication_proxy.webidl" ]
++    schema_sources_ += [
++      "sync_vault_provider.webidl",
++      "web_authentication_proxy.webidl",
++    ]
    }
  
+   if (is_win || is_mac || is_linux || is_chromeos) {
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
-@@ -5477,6 +5477,9 @@ are declared in tools/grit/grit_args.gni
+@@ -5534,6 +5534,9 @@ are declared in tools/grit/grit_args.gni
          <message name="IDS_EXTENSION_PROMPT_WARNING_VPN" desc="Permission string for access to VPN API.">
            Access your network traffic
          </message>
@@ -363,7 +365,7 @@
         {}},
 --- a/tools/metrics/histograms/metadata/extensions/enums.xml
 +++ b/tools/metrics/histograms/metadata/extensions/enums.xml
-@@ -819,6 +819,16 @@ Called by update_extension_histograms.py
+@@ -806,6 +806,16 @@ Called by update_extension_histograms.py
    <int value="576" label="DICTATION_PRIVATE_ON_END_STREAM"/>
    <int value="577" label="DICTATION_PRIVATE_ON_CONTEXT_UPDATE"/>
    <int value="578" label="DICTATION_PRIVATE_ON_BROWSER_LOG_EVENT"/>
@@ -380,11 +382,11 @@
  </enum>
  
  <!-- LINT.ThenChange(//extensions/browser/extension_event_histogram_value.h:HistogramValue) -->
-@@ -3314,6 +3324,7 @@ Called by update_extension_permission.py
-   <int value="270" label="kBluetoothSocket"/>
+@@ -3307,6 +3317,7 @@ Called by update_extension_permission.py
    <int value="271" label="kBluetoothLowEnergy"/>
    <int value="272" label="kBluetoothPeripheral"/>
-+  <int value="273" label="kSyncVaultProvider"/>
+   <int value="273" label="kPublicSuffix"/>
++  <int value="1000" label="kSyncVaultProvider"/>
  </enum>
  
  <enum name="ExtensionPinReason">
@@ -421,3 +423,187 @@
    UNKNOWN = 0,
    WEBNAVIGATION_GETALLFRAMES = 1,
    BROWSINGDATA_REMOVEWEBSQL = 2,
+--- a/chrome/browser/extensions/api/BUILD.gn
++++ b/chrome/browser/extensions/api/BUILD.gn
+@@ -54,6 +54,7 @@ group("api_implementations") {
+     "//chrome/browser/extensions/api/runtime",
+     "//chrome/browser/extensions/api/search",
+     "//chrome/browser/extensions/api/side_panel",
++    "//chrome/browser/extensions/api/sync_vault_provider",
+     "//chrome/browser/extensions/api/tab_capture",
+     "//chrome/browser/extensions/api/tab_groups",
+     "//chrome/browser/extensions/api/web_navigation",
+--- a/chrome/browser/extensions/api/api_browser_context_keyed_service_factories.cc
++++ b/chrome/browser/extensions/api/api_browser_context_keyed_service_factories.cc
+@@ -45,6 +45,7 @@
+ #include "chrome/browser/extensions/api/settings_overrides/settings_overrides_api.h"
+ #include "chrome/browser/extensions/api/settings_private/settings_private_event_router_factory.h"
+ #include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
++#include "chrome/browser/extensions/api/sync_vault_provider/sync_vault_provider_service.h"
+ #include "components/safe_browsing/buildflags.h"
+ #include "extensions/browser/api/networking_private/networking_private_delegate_factory.h"
+ #include "pdf/buildflags.h"
+@@ -140,6 +141,7 @@ void EnsureApiBrowserContextKeyedService
+   extensions::SettingsPrivateEventRouterFactory::GetInstance();
+   extensions::SettingsOverridesAPI::GetFactoryInstance();
+   extensions::SidePanelService::GetFactoryInstance();
++  extensions::SyncVaultProviderServiceFactory::GetInstance();
+ #if BUILDFLAG(IS_CHROMEOS)
+   extensions::TerminalPrivateAPI::GetFactoryInstance();
+   extensions::VerifyTrustApiService::GetFactoryInstance();
+--- /dev/null
++++ b/chrome/browser/extensions/api/sync_vault_provider/BUILD.gn
+@@ -0,0 +1,32 @@
++# Copyright 2026 The Helium Authors
++# You can use, redistribute, and/or modify this source code under
++# the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++import("//extensions/buildflags/buildflags.gni")
++
++assert(enable_extensions)
++
++source_set("sync_vault_provider") {
++  sources = [
++    "sync_vault_provider_api.cc",
++    "sync_vault_provider_api.h",
++    "sync_vault_provider_service.cc",
++    "sync_vault_provider_service.h",
++  ]
++
++  public_deps = [
++    "//base",
++    "//chrome/browser/profiles:profile",
++    "//chrome/common/extensions",
++    "//chrome/common/extensions/api",
++    "//components/keyed_service/core",
++    "//extensions/browser",
++    "//extensions/common",
++  ]
++
++  deps = [
++    "//components/sync/engine/sync_vault",
++    "//content/public/browser",
++    "//third_party/blink/public/mojom/service_worker:storage",
++  ]
++}
+--- /dev/null
++++ b/chrome/browser/extensions/api/sync_vault_provider/sync_vault_provider_api.cc
+@@ -0,0 +1,73 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/extensions/api/sync_vault_provider/sync_vault_provider_api.h"
++
++#include <optional>
++#include <utility>
++
++#include "chrome/browser/extensions/api/sync_vault_provider/sync_vault_provider_service.h"
++#include "chrome/common/extensions/api/sync_vault_provider.h"
++
++namespace extensions {
++
++namespace provider_api = api::sync_vault_provider;
++
++SyncVaultProviderRespondFunction::~SyncVaultProviderRespondFunction() = default;
++
++ExtensionFunction::ResponseAction SyncVaultProviderRespondFunction::Run() {
++  auto params = provider_api::Respond::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  SyncVaultProviderService* service =
++      SyncVaultProviderServiceFactory::GetForBrowserContext(browser_context());
++  if (!service) {
++    return RespondNow(
++        Error("Sync vault providers are unavailable in this profile."));
++  }
++  std::optional<std::string> error =
++      service->Respond(extension_id(), std::move(params->response));
++  return error ? RespondNow(Error(std::move(*error)))
++               : RespondNow(NoArguments());
++}
++
++SyncVaultProviderNotifyVaultChangedFunction::
++    ~SyncVaultProviderNotifyVaultChangedFunction() = default;
++
++ExtensionFunction::ResponseAction
++SyncVaultProviderNotifyVaultChangedFunction::Run() {
++  auto params = provider_api::NotifyVaultChanged::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  SyncVaultProviderService* service =
++      SyncVaultProviderServiceFactory::GetForBrowserContext(browser_context());
++  if (!service) {
++    return RespondNow(
++        Error("Sync vault providers are unavailable in this profile."));
++  }
++  std::optional<std::string> error =
++      service->NotifyVaultChanged(extension_id(), params->change);
++  return error ? RespondNow(Error(std::move(*error)))
++               : RespondNow(NoArguments());
++}
++
++SyncVaultProviderNotifyProviderStateChangedFunction::
++    ~SyncVaultProviderNotifyProviderStateChangedFunction() = default;
++
++ExtensionFunction::ResponseAction
++SyncVaultProviderNotifyProviderStateChangedFunction::Run() {
++  auto params =
++      provider_api::NotifyProviderStateChanged::Params::Create(args());
++  EXTENSION_FUNCTION_VALIDATE(params);
++  SyncVaultProviderService* service =
++      SyncVaultProviderServiceFactory::GetForBrowserContext(browser_context());
++  if (!service) {
++    return RespondNow(
++        Error("Sync vault providers are unavailable in this profile."));
++  }
++  std::optional<std::string> error =
++      service->NotifyProviderStateChanged(extension_id(), params->change.state);
++  return error ? RespondNow(Error(std::move(*error)))
++               : RespondNow(NoArguments());
++}
++
++}  // namespace extensions
+--- /dev/null
++++ b/chrome/browser/extensions/api/sync_vault_provider/sync_vault_provider_api.h
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_EXTENSIONS_API_SYNC_VAULT_PROVIDER_SYNC_VAULT_PROVIDER_API_H_
++#define CHROME_BROWSER_EXTENSIONS_API_SYNC_VAULT_PROVIDER_SYNC_VAULT_PROVIDER_API_H_
++
++#include "extensions/browser/extension_function.h"
++
++namespace extensions {
++
++class SyncVaultProviderRespondFunction : public ExtensionFunction {
++ private:
++  ~SyncVaultProviderRespondFunction() override;
++  ResponseAction Run() override;
++
++  DECLARE_EXTENSION_FUNCTION("syncVaultProvider.respond",
++                             SYNCVAULTPROVIDER_RESPOND)
++};
++
++class SyncVaultProviderNotifyVaultChangedFunction : public ExtensionFunction {
++ private:
++  ~SyncVaultProviderNotifyVaultChangedFunction() override;
++  ResponseAction Run() override;
++
++  DECLARE_EXTENSION_FUNCTION("syncVaultProvider.notifyVaultChanged",
++                             SYNCVAULTPROVIDER_NOTIFYVAULTCHANGED)
++};
++
++class SyncVaultProviderNotifyProviderStateChangedFunction
++    : public ExtensionFunction {
++ private:
++  ~SyncVaultProviderNotifyProviderStateChangedFunction() override;
++  ResponseAction Run() override;
++
++  DECLARE_EXTENSION_FUNCTION("syncVaultProvider.notifyProviderStateChanged",
++                             SYNCVAULTPROVIDER_NOTIFYPROVIDERSTATECHANGED)
++};
++
++}  // namespace extensions
++
++#endif  // CHROME_BROWSER_EXTENSIONS_API_SYNC_VAULT_PROVIDER_SYNC_VAULT_PROVIDER_API_H_

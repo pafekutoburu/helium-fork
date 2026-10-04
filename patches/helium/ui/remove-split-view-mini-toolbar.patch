@@ -1,6 +1,6 @@
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -164,7 +164,6 @@
+@@ -171,7 +171,6 @@
  #include "chrome/browser/ui/views/frame/multi_contents_view.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view_delegate.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
@@ -8,7 +8,7 @@
  #include "chrome/browser/ui/views/frame/scrim_view.h"
  #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
  #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
-@@ -2426,10 +2425,6 @@ void BrowserView::UpdateToolbar(content:
+@@ -2445,10 +2444,6 @@ void BrowserView::UpdateToolbar(content:
    if (toolbar_) {
      toolbar_->Update(contents);
    }
@@ -56,7 +56,7 @@
  #include "chrome/browser/ui/views/frame/scrim_view.h"
  #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
  #include "chrome/browser/ui/views/frame/top_container_view.h"
-@@ -159,14 +158,11 @@ ContentsContainerView::ContentsContainer
+@@ -157,14 +156,11 @@ ContentsContainerView::ContentsContainer
              .Build());
    }
  
@@ -73,7 +73,7 @@
  
    view_bounds_observer_.Observe(contents_view_);
  }
-@@ -207,7 +203,6 @@ void ContentsContainerView::UpdateBorder
+@@ -205,7 +201,6 @@ void ContentsContainerView::UpdateBorder
        SetBorder(nullptr);
        UpdateBorderRoundedCorners();
  
@@ -81,7 +81,7 @@
        container_outline_->SetVisible(false);
        if (capture_contents_border_view_) {
          capture_contents_border_view_->SetIsInSplit(false);
-@@ -221,9 +216,6 @@ void ContentsContainerView::UpdateBorder
+@@ -219,9 +214,6 @@ void ContentsContainerView::UpdateBorder
      }
  
      container_outline_->UpdateState(is_active, is_highlighted);
@@ -91,7 +91,7 @@
      if (capture_contents_border_view_) {
        capture_contents_border_view_->SetIsInSplit(true);
      }
-@@ -603,24 +595,6 @@ views::ProposedLayout ContentsContainerV
+@@ -600,24 +592,6 @@ views::ProposedLayout ContentsContainerV
                                         non_devtools_contents_bounds);
    }
  
@@ -118,7 +118,7 @@
                                         container_outline_->GetVisible(),
 --- a/chrome/browser/ui/views/frame/multi_contents_view.h
 +++ b/chrome/browser/ui/views/frame/multi_contents_view.h
-@@ -31,7 +31,6 @@ class MultiContentsDropTargetView;
+@@ -32,7 +32,6 @@ class MultiContentsDropTargetView;
  class MultiContentsResizeArea;
  class MultiContentsViewDelegate;
  class MultiContentsViewDropTargetController;
@@ -126,7 +126,7 @@
  
  namespace content {
  class WebContents;
-@@ -203,10 +202,6 @@ class MultiContentsView
+@@ -207,10 +206,6 @@ class MultiContentsView
      return contents_container_views_[1]->contents_view();
    }
  

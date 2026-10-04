@@ -1,6 +1,6 @@
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -242,6 +242,8 @@
+@@ -244,6 +244,8 @@
  #include "chrome/browser/background/extensions/background_mode_manager.h"
  #endif
  
@@ -9,7 +9,7 @@
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
  #include "chrome/browser/extensions/activity_log/activity_log.h"
  #include "chrome/browser/extensions/commands/command_service.h"
-@@ -1902,6 +1904,8 @@ void RegisterProfilePrefs(user_prefs::Pr
+@@ -1968,6 +1970,8 @@ void RegisterProfilePrefs(user_prefs::Pr
  
  #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
  
@@ -20,7 +20,7 @@
    extensions::AudioAPI::RegisterUserPrefs(registry);
 --- /dev/null
 +++ b/chrome/browser/sync/private_sync/private_sync_prefs.cc
-@@ -0,0 +1,266 @@
+@@ -0,0 +1,258 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -36,6 +36,7 @@
 +#include "base/strings/string_number_conversions.h"
 +#include "base/uuid.h"
 +#include "base/values.h"
++#include "components/crx_file/id_util.h"
 +#include "components/prefs/pref_registry_simple.h"
 +#include "components/prefs/pref_service.h"
 +
@@ -49,7 +50,6 @@
 +constexpr char kVaultUuidField[] = "vault_uuid";
 +constexpr char kEncryptedVaultKeyField[] = "encrypted_vault_key";
 +constexpr char kKeyModeField[] = "key_mode";
-+constexpr char kConsentFingerprintField[] = "consent_fingerprint";
 +constexpr char kEncryptedCheckpointField[] = "encrypted_checkpoint";
 +constexpr char kRecoveryKeyMode[] = "recovery_key";
 +constexpr char kAccountBoundEnvelopeMode[] = "account_bound_envelope";
@@ -84,12 +84,12 @@
 +  const std::string* vault_uuid = value.FindString(kVaultUuidField);
 +  const std::string* encrypted_key = value.FindString(kEncryptedVaultKeyField);
 +  const std::string* key_mode = value.FindString(kKeyModeField);
-+  const std::string* consent_fingerprint =
-+      value.FindString(kConsentFingerprintField);
++  const std::string* encrypted_checkpoint =
++      value.FindString(kEncryptedCheckpointField);
 +  if (value.FindInt(kSchemaVersionField) != kCurrentSchemaVersion ||
-+      !provider_kind || !provider_id || provider_id->empty() || !vault_uuid ||
-+      !key_mode || !encrypted_key || !consent_fingerprint ||
-+      consent_fingerprint->empty() ||
++      !provider_kind || !provider_id ||
++      !crx_file::id_util::IdIsValid(*provider_id) || !vault_uuid || !key_mode ||
++      !encrypted_key || !encrypted_checkpoint ||
 +      !base::Uuid::ParseLowercase(*vault_uuid).is_valid()) {
 +    return std::nullopt;
 +  }
@@ -97,6 +97,11 @@
 +  std::optional<std::vector<uint8_t>> protected_key =
 +      base::Base64Decode(*encrypted_key);
 +  if (!protected_key || protected_key->empty()) {
++    return std::nullopt;
++  }
++  std::optional<std::vector<uint8_t>> protected_checkpoint =
++      base::Base64Decode(*encrypted_checkpoint);
++  if (!protected_checkpoint || protected_checkpoint->empty()) {
 +    return std::nullopt;
 +  }
 +  Configuration configuration;
@@ -115,17 +120,7 @@
 +  } else {
 +    return std::nullopt;
 +  }
-+  configuration.consent_fingerprint = *consent_fingerprint;
-+
-+  if (const std::string* encrypted_checkpoint =
-+          value.FindString(kEncryptedCheckpointField)) {
-+    std::optional<std::vector<uint8_t>> protected_checkpoint =
-+        base::Base64Decode(*encrypted_checkpoint);
-+    if (!protected_checkpoint || protected_checkpoint->empty()) {
-+      return std::nullopt;
-+    }
-+    configuration.encrypted_checkpoint = std::move(*protected_checkpoint);
-+  }
++  configuration.encrypted_checkpoint = std::move(*protected_checkpoint);
 +  return configuration;
 +}
 +
@@ -143,11 +138,8 @@
 +               configuration.key_mode == KeyMode::kAccountBoundEnvelope
 +                   ? kAccountBoundEnvelopeMode
 +                   : kRecoveryKeyMode)
-+          .Set(kConsentFingerprintField, configuration.consent_fingerprint);
-+  if (configuration.encrypted_checkpoint) {
-+    value.Set(kEncryptedCheckpointField,
-+              base::Base64Encode(*configuration.encrypted_checkpoint));
-+  }
++          .Set(kEncryptedCheckpointField,
++               base::Base64Encode(configuration.encrypted_checkpoint));
 +  prefs->SetDict(kConfiguration, std::move(value));
 +}
 +
@@ -289,7 +281,7 @@
 +}  // namespace browser_sync::private_sync_prefs
 --- /dev/null
 +++ b/chrome/browser/sync/private_sync/private_sync_prefs.h
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,95 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -325,8 +317,7 @@
 +  std::string vault_uuid;
 +  std::vector<uint8_t> encrypted_vault_key;
 +  KeyMode key_mode = KeyMode::kRecoveryKey;
-+  std::string consent_fingerprint;
-+  std::optional<std::vector<uint8_t>> encrypted_checkpoint;
++  std::vector<uint8_t> encrypted_checkpoint;
 +
 +  bool operator==(const Configuration&) const = default;
 +};
@@ -388,16 +379,24 @@
 +#endif  // CHROME_BROWSER_SYNC_PRIVATE_SYNC_PRIVATE_SYNC_PREFS_H_
 --- a/chrome/browser/sync/BUILD.gn
 +++ b/chrome/browser/sync/BUILD.gn
-@@ -31,6 +31,9 @@ source_set("sync") {
-     "glue/sync_start_util.h",
-     "local_or_syncable_bookmark_sync_service_factory.cc",
-     "local_or_syncable_bookmark_sync_service_factory.h",
+@@ -34,6 +34,9 @@ source_set("sync") {
+     "prefs/cross_device_pref_tracker/chrome_cross_device_pref_provider.h",
+     "prefs/cross_device_pref_tracker/cross_device_pref_tracker_factory.cc",
+     "prefs/cross_device_pref_tracker/cross_device_pref_tracker_factory.h",
 +    "private_sync/private_sync_prefs.cc",
 +    "private_sync/private_sync_prefs.h",
 +    "private_sync/private_sync_provider.h",
-     "prefs/chrome_syncable_prefs_database.cc",
-     "prefs/chrome_syncable_prefs_database.h",
-     "prefs/cross_device_pref_tracker/chrome_cross_device_pref_provider.cc",
+     "send_tab_to_self_sync_service_factory.cc",
+     "send_tab_to_self_sync_service_factory.h",
+     "session_sync_service_factory.cc",
+@@ -67,6 +70,7 @@ source_set("sync") {
+     "//chrome/browser/translate",
+     "//components/browser_sync",
+     "//components/collaboration/public",
++    "//components/crx_file",
+     "//components/favicon/core",
+     "//components/keyed_service/core",
+     "//components/prefs",
 --- /dev/null
 +++ b/chrome/browser/sync/private_sync/private_sync_provider.h
 @@ -0,0 +1,25 @@

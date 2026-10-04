@@ -1,14 +1,14 @@
 --- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -16,6 +16,7 @@
- #include "build/build_config.h"
- #include "chrome/browser/ui/animation/browser_animation_controller.h"
+@@ -19,6 +19,7 @@
+ #include "chrome/browser/ui/animation/browser_animation_types.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
 +#include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/ui_features.h"
-@@ -56,6 +57,10 @@ namespace {
+@@ -63,6 +64,10 @@ namespace {
  // Minimum area next to caption buttons to use as a grab handle.
  constexpr int kVerticalTabsGrabHandleSize = 40;
  
@@ -19,7 +19,17 @@
  // Maximum portion of the window a "size-restricted" contents-height side panel
  // can take up. This is not the only limit on side panel size.
  constexpr float kMaxContentsHeightSidePanelFraction = 2.f / 3.f;
-@@ -583,6 +588,14 @@ BrowserViewTabbedLayoutImpl::GetTabStrip
+@@ -590,7 +595,8 @@ gfx::Size BrowserViewTabbedLayoutImpl::G
+     const BrowserLayoutParams& params) const {
+   gfx::Size toolbar_size = views().toolbar->GetMinimumSize();
+   const auto tab_strip_type = GetTabStripType();
+-  if (tab_strip_type == TabStripType::kVertical) {
++  if (tab_strip_type == TabStripType::kVertical ||
++      GetHeliumLayout() != HeliumLayoutType::kClassic) {
+     toolbar_size.Enlarge(GetExclusionWidth(params), 0);
+   }
+   const gfx::Size bookmark_bar_size =
+@@ -619,6 +625,14 @@ BrowserViewTabbedLayoutImpl::GetTabStrip
                                           : TabStripType::kNone;
  }
  
@@ -34,7 +44,7 @@
  BrowserViewTabbedLayoutImpl::VerticalTabStripCollapsedState
  BrowserViewTabbedLayoutImpl::GetVerticalTabStripCollapsedState() const {
    if (!views().vertical_tab_strip_region_view) {
-@@ -1308,15 +1321,20 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1359,15 +1373,20 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
                      layout_data_->tab_strip_type == TabStripType::kHorizontal);
    }
  
@@ -60,7 +70,7 @@
                            params.visual_client_area.width(),
 --- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -56,6 +56,7 @@
+@@ -57,6 +57,7 @@
  #include "chrome/browser/ui/global_error/global_error_service.h"
  #include "chrome/browser/ui/global_error/global_error_service_factory.h"
  #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
@@ -68,7 +78,7 @@
  #include "chrome/browser/ui/intent_picker_tab_helper.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/omnibox/omnibox_view.h"
-@@ -181,6 +182,11 @@ DEFINE_UI_CLASS_PROPERTY_KEY(bool, kActi
+@@ -183,6 +184,11 @@ DEFINE_UI_CLASS_PROPERTY_KEY(bool, kActi
  
  namespace {
  
@@ -78,9 +88,9 @@
 +constexpr int kExtensionsFlexOrder = kToolbarFlexOrderOffset + 3;
 +
  // Gets the display mode for a given browser.
- ToolbarView::DisplayMode GetDisplayMode(Browser* browser) {
+ ToolbarView::DisplayMode GetDisplayMode(BrowserWindowInterface* browser) {
    // Checked in this order because even tabbed PWAs use the CUSTOM_TAB
-@@ -734,10 +740,15 @@ void ToolbarView::Init() {
+@@ -754,10 +760,17 @@ void ToolbarView::Init() {
  
    InitLayout();
  
@@ -92,11 +102,13 @@
                                                      home_, avatar_}) {
      if (button) {
        button->set_tag(GetViewCommandMap().at(button->GetID()));
-+      button->SetProperty(views::kFlexBehaviorKey, flex_preferred);
++      if (button == back_ || button == reload_) {
++        button->SetProperty(views::kFlexBehaviorKey, flex_preferred);
++      }
      }
    }
  
-@@ -1648,27 +1659,6 @@ views::View* ToolbarView::GetDefaultFocu
+@@ -1659,27 +1672,6 @@ views::View* ToolbarView::GetDefaultFocu
  void ToolbarView::InitLayout() {
    const int default_margin =
        GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin);
@@ -124,7 +136,7 @@
  
    layout_manager_ =
        SetLayoutManager(std::make_unique<CenteredLocationBarLayout>(
-@@ -1681,13 +1671,7 @@ void ToolbarView::InitLayout() {
+@@ -1692,13 +1684,7 @@ void ToolbarView::InitLayout() {
        .SetCollapseMargins(true)
        .SetDefault(views::kMarginsKey, gfx::Insets::VH(0, default_margin));
  
@@ -139,16 +151,16 @@
  
    if (extensions_container_) {
      const views::FlexSpecification extensions_flex_rule =
-@@ -1754,7 +1738,7 @@ void ToolbarView::InitLayout() {
-         views::kFlexBehaviorKey,
-         toolbar_webview_->GetFlexSpecification(
-             toolbar_controller_->webui_toolbar_button_flex_order(),
--            location_bar_flex_order));
-+            kLocationBarFlexOrder));
-   }
- 
-   LayoutCommon();
-@@ -1811,6 +1795,74 @@ void ToolbarView::LayoutCommon() {
+@@ -1776,7 +1762,7 @@ void ToolbarView::InitLayout() {
+           views::kFlexBehaviorKey,
+           toolbar_webview_->GetFlexSpecification(
+               toolbar_controller_->webui_toolbar_button_flex_order(),
+-              location_bar_flex_order));
++              kLocationBarFlexOrder));
+     } else {
+       // If `toolbar_controller_` is nullptr, then the WebUI toolbar is managing
+       // all controls, so don't need to worry about integrating with
+@@ -1872,6 +1858,37 @@ void ToolbarView::LayoutCommon() {
    // Cast button visibility is controlled externally.
  }
  
@@ -157,30 +169,14 @@
 +    return;
 +  }
 +
-+  const auto flex_preferred =
-+      views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
-+                               views::MaximumFlexSizeRule::kPreferred);
 +  const int location_bar_margin =
 +      GetLayoutConstant(LayoutConstant::kLocationBarMargin);
-+  const auto min_location_bar_flex = views::MinimumFlexSizeRule::kPreferred;
-+  const views::FlexSpecification location_bar_flex_rule =
-+      views::FlexSpecification(min_location_bar_flex,
-+                               views::MaximumFlexSizeRule::kUnbounded)
-+          .WithOrder(kLocationBarFlexOrder);
-+
 +  const bool is_compact_layout = IsCompactLayout();
-+  const auto make_flex_rule = [&](auto* layout_manager, int order) {
-+    return is_compact_layout
-+               ? flex_preferred
-+               : views::FlexSpecification(layout_manager->GetDefaultFlexRule())
-+                     .WithOrder(order);
-+  };
-+
 +  if (location_bar_view_) {
-+    location_bar_view_->SetProperty(views::kFlexBehaviorKey,
-+                                    location_bar_flex_rule);
 +    if (is_compact_layout) {
-+      location_bar_view_->SetPreferredSize(gfx::Size(kPreferredCompactWidth, 0));
++      location_bar_view_->SetPreferredSize(gfx::Size(
++          kPreferredCompactWidth,
++          GetLayoutConstant(LayoutConstant::kLocationBarHeight)));
 +      location_bar_view_->SetProperty(
 +          views::kMarginsKey, gfx::Insets::TLBR(0, location_bar_margin, 0, 0));
 +    } else {
@@ -188,27 +184,6 @@
 +      location_bar_view_->SetProperty(views::kMarginsKey,
 +                                      gfx::Insets::VH(0, location_bar_margin));
 +    }
-+  } else {
-+    // If the location bar is part of a WebView, make that stretchable.
-+    toolbar_webview_->SetProperty(views::kFlexBehaviorKey,
-+                                  location_bar_flex_rule);
-+  }
-+
-+  // Pinned actions (including downloads) and extensions
-+  // should not shrink in compact layout.
-+  if (pinned_toolbar_actions_container_) {
-+    pinned_toolbar_actions_container_->SetProperty(
-+        views::kFlexBehaviorKey,
-+        make_flex_rule(
-+            pinned_toolbar_actions_container_->GetAnimatingLayoutManager(),
-+            kToolbarActionsFlexOrder));
-+  }
-+
-+  if (extensions_container_) {
-+    extensions_container_->SetProperty(
-+        views::kFlexBehaviorKey,
-+        make_flex_rule(extensions_container_->GetAnimatingLayoutManager(),
-+                       kExtensionsFlexOrder));
 +  }
 +
 +  InvalidateLayout();
@@ -225,7 +200,7 @@
      AppMenuIconController::TypeAndSeverity type_and_severity) {
 --- a/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -172,6 +172,9 @@ class ToolbarView : public views::Access
+@@ -176,6 +176,9 @@ class ToolbarView : public views::Access
    // Records user metrics based on hit test results within the toolbar view.
    void RecordHitTestMetrics(bool is_caption_area);
  
@@ -233,9 +208,9 @@
 +  void UpdateToolbarLayout();
 +
    // Accessors.
-   Browser* browser() const { return browser_; }
+   BrowserWindowInterface* browser() const { return browser_; }
    views::Button* GetChromeLabsButton() const;
-@@ -284,6 +287,9 @@ class ToolbarView : public views::Access
+@@ -301,6 +304,9 @@ class ToolbarView : public views::Access
    // Logic that must be done on initialization and then on layout.
    void LayoutCommon();
  
@@ -255,8 +230,8 @@
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout.h"
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl.h"
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
-@@ -87,6 +88,7 @@ class BrowserViewTabbedLayoutImpl : publ
-   bool AvoidCrackingForFractionalDisplay() const;
+@@ -83,6 +84,7 @@ class BrowserViewTabbedLayoutImpl : publ
+   int GetVerticalTabStripContentOverlap() const;
  
    // Returns the type of tabstrip present.
 +  HeliumLayoutType GetHeliumLayout() const;

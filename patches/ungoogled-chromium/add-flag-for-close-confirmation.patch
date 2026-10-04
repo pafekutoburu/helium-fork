@@ -8,7 +8,7 @@
  #include "base/functional/bind.h"
  #include "base/location.h"
  #include "base/task/single_thread_task_runner.h"
-@@ -30,6 +31,7 @@
+@@ -32,6 +33,7 @@
  #include "chrome/browser/ui/tabs/tab_group_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
@@ -16,7 +16,7 @@
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
  #include "chrome/browser/ui/web_applications/web_app_tabbed_utils.h"
  #include "chrome/browser/web_applications/policy/web_app_policy_manager.h"
-@@ -474,6 +476,8 @@ bool UnloadController::TryToCloseWindow(
+@@ -477,6 +479,8 @@ bool UnloadController::TryToCloseWindow(
  void UnloadController::ResetTryToCloseWindow() {
    cancel_download_confirmation_state_ =
        CancelDownloadConfirmationState::kNotPrompted;
@@ -25,7 +25,7 @@
    if (!is_calling_before_unload_handlers()) {
      return;
    }
-@@ -792,10 +796,12 @@ UnloadController::MaybeWarnBeforeClosing
+@@ -793,10 +797,12 @@ UnloadController::MaybeWarnBeforeClosing
      return WarnBeforeClosingResult::kOkToClose;
    }
  
@@ -42,12 +42,15 @@
    }
  
    DCHECK(!warn_before_closing_callback_)
-@@ -893,6 +899,59 @@ bool UnloadController::CanCloseWithInPro
+@@ -894,6 +900,60 @@ bool UnloadController::CanCloseWithInPro
    return false;
  }
  
 +bool UnloadController::CanCloseWithMultipleTabs() {
 +  if (!base::CommandLine::ForCurrentProcess()->HasSwitch("close-confirmation"))
++    return true;
++
++  if (browser_->tab_strip_model()->count() == 0)
 +    return true;
 +
 +  // If we've prompted, we need to hear from the user before we
@@ -81,8 +84,6 @@
 +  } else {
 +    if (total_window_count == 0)
 +      return true;
-+    if (browser_->tab_strip_model()->count() == 0)
-+      browser_->tab_strip_model()->delegate()->AddTabAt(GURL(), -1, true);
 +  }
 +
 +  close_multitab_confirmation_state_ = CancelDownloadConfirmationState::kWaitingForResponse;
@@ -102,7 +103,7 @@
  base::WeakPtr<UnloadController> UnloadController::GetWeakPtr() {
    return weak_factory_.GetWeakPtr();
  }
-@@ -918,6 +977,22 @@ void UnloadController::InProgressDownloa
+@@ -919,6 +979,22 @@ void UnloadController::InProgressDownloa
  
    std::move(warn_before_closing_callback_)
        .Run(WarnBeforeClosingResult::kDoNotClose);
@@ -127,7 +128,7 @@
  void UnloadController::FinishWarnBeforeClosing(WarnBeforeClosingResult result) {
 --- a/chrome/browser/ui/unload_controller.h
 +++ b/chrome/browser/ui/unload_controller.h
-@@ -14,6 +14,7 @@
+@@ -15,6 +15,7 @@
  #include "base/memory/weak_ptr.h"
  #include "chrome/browser/tab_contents/web_contents_collection.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -135,7 +136,7 @@
  #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
  #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
  
-@@ -253,6 +254,9 @@ class UnloadController : public WebConte
+@@ -269,6 +270,9 @@ class UnloadController : public WebConte
    // Returns true if the window can close, false otherwise.
    bool CanCloseWithInProgressDownloads();
  
@@ -145,7 +146,7 @@
    base::WeakPtr<UnloadController> GetWeakPtr();
  
   private:
-@@ -272,6 +276,8 @@ class UnloadController : public WebConte
+@@ -288,6 +292,8 @@ class UnloadController : public WebConte
    // downloads running.
    void InProgressDownloadResponse(bool cancel_downloads);
  
@@ -154,7 +155,7 @@
   private:
    void RenderProcessGone(content::WebContents* web_contents,
                           base::TerminationStatus status) override;
-@@ -361,6 +367,9 @@ class UnloadController : public WebConte
+@@ -377,6 +383,9 @@ class UnloadController : public WebConte
    CancelDownloadConfirmationState cancel_download_confirmation_state_ =
        CancelDownloadConfirmationState::kNotPrompted;
  
@@ -163,7 +164,7 @@
 +
    WarnBeforeClosingCallback warn_before_closing_callback_;
  
-   base::WeakPtrFactory<UnloadController> weak_factory_{this};
+   using BrowserDidCloseCallbackList =
 --- a/chrome/browser/ungoogled_flag_choices.h
 +++ b/chrome/browser/ungoogled_flag_choices.h
 @@ -61,4 +61,13 @@ const FeatureEntry::Choice kCloseWindowW
