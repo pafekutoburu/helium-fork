@@ -1,0 +1,3223 @@
+Index: src/chrome/browser/ui/BUILD.gn
+===================================================================
+--- src.orig/chrome/browser/ui/BUILD.gn
++++ src/chrome/browser/ui/BUILD.gn
+@@ -3543,6 +3543,8 @@
+       "views/frame/immersive_mode_controller_mac.mm",
+       "views/frame/immersive_mode_overlay_views_mac.h",
+       "views/frame/immersive_mode_overlay_views_mac.mm",
++      "views/frame/space_swipe_monitor_mac.h",
++      "views/frame/space_swipe_monitor_mac.mm",
+       "views/frame/helium_sf_symbol_image_mac.mm",
+       "views/helium/frame_corner_radius_mac.mm",
+       "views/helium/native_frame_materials_mac.h",
+Index: src/chrome/browser/ui/helium/arc_space_form.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_space_form.h
++++ src/chrome/browser/ui/helium/arc_space_form.h
+@@ -37,6 +37,19 @@
+ inline constexpr int kSpaceFormIllustrationTop = 50;
+ inline constexpr int kSpaceFormIllustrationWidth = 65;
+ inline constexpr int kSpaceFormIllustrationHeight = 42;
++// Its three cards (Arc's picture, approximated -- decisions 「M6 轮2」§4):
++// each 0.48 × 0.92 of the box, fanned -14° and +14° behind the front one
++// (0°), all about the box's centre; a grey "screen" inset 18% from the
++// sides, 22% from the top and 30% from the bottom. Radius 4 (the screen's
++// 2): a picture of cards -- the shell's one radius (above) is for its own
++// rounded rects. Since M6 轮4 4b-r5 the end of the strip pulls one of these
++// cards out and lands it here (arc_space_motion.h).
++inline constexpr double kSpaceFormCardWidth =
++    kSpaceFormIllustrationWidth * 0.48;
++inline constexpr double kSpaceFormCardHeight =
++    kSpaceFormIllustrationHeight * 0.92;
++inline constexpr double kSpaceFormCardRadius = 4.0;
++inline constexpr double kSpaceFormCardFan = 14.0;
+ // "Create a Space": cap height 13pt (≈18pt bold), cap top at Arc y 143.5.
+ inline constexpr int kSpaceFormTitleFontSize = 18;
+ inline constexpr int kSpaceFormTitleTop = 108;
+Index: src/chrome/browser/ui/helium/arc_space_motion.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_space_motion.h
++++ src/chrome/browser/ui/helium/arc_space_motion.h
+@@ -7,8 +7,10 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <numbers>
+ 
+ #include "base/time/time.h"
++#include "chrome/browser/ui/helium/arc_space_form.h"
+ 
+ // helium-fork M6 轮4: the space-level transitions -- the switch carousel,
+ // the two-finger swipe, the bottom bar making way -- measured on Arc
+@@ -47,17 +49,79 @@
+ // unmeasured; it completes here.
+ inline constexpr double kSpaceSwipeCommitFraction = 0.5;
+ 
+-// Arc g42 seg3: past the last space the list moves 0.128–0.141 of what the
+-// fingers would have moved it (0.5 × finger), close to linear.
+-inline constexpr double kSpaceSwipeRubberBand = 0.135;
+-
+-// Arc g42 seg3 / seg4: the ⊕ that trails in from the right edge past the
+-// last space stops 36pt short of it (x≈263 in a 299pt sidebar) and turns
+-// solid once 0.5 × finger passes about 185pt -- ⚠ Arc flips somewhere in
+-// 155–214, the exact point was not measured. A release while it is solid
+-// opens the Create a Space form.
+-inline constexpr int kSpaceSwipePlusRestInset = 36;
+-inline constexpr double kSpaceSwipePlusSolidAt = 185.0;
++// Arc g42 seg3 / seg4, re-measured frame by frame on 2026-09-23 for 4b
++// (the 36pt / 185pt read off the contact sheet first were rough): past the
++// last space a ⊕ comes in -- a 30pt disc, vertically centred on the window
++// (541.75 of 1084pt), trailing in from beyond the sidebar's right edge at
++// 0.387pt per point of 0.5 × finger past the end and resting with its
++// centre 27pt inside the edge (271.75 in a 299pt sidebar, reached at
++// ≈112pt). Its ring draws itself anticlockwise from 12 o'clock with the
++// fingers and closes at 0.5 × finger ≈166pt (both samples: the fill starts
++// between 164 and 168.5) -- where the disc fills in, the "+" turns light,
++// with a brief swell to ≈33pt. A release while it is filled opens the Create
++// a Space form; the ⊕ then leaves to the right. Arc's list meanwhile gives
++// 0.128–0.141 of 0.5 × finger, close to linear (g42 seg3).
++//
++// ⚠ Ours since 4b-r1 (user 2026-09-30, on a recording of 4b doing as Arc
++// does: 「加号比列表动得快…这两个元素之间的运动要匹配…所有元素同步往左滑」):
++// a ⊕ coming in at 0.387 over a list giving 0.135 rides in over the rows.
++// The lists and the end's disc move as one piece instead -- one travel for
++// both (SwipeEndTravel), the disc a fixed gap beyond the list's edge, so it
++// shows only as far as the list has made room. And the first space's end is
++// the last one's mirror (the same ruling, ②): a disc with a menu glyph that
++// opens Manage Spaces, where 4b slid a picture of the sheet in.
++//
++// ⚠ Ours since 4b-r2 (user 2026-09-30, on a recording of 4b-r1:
++// 「加号出来的太快了，防误操作的空间太少了。用户刚往左拉一点点，加号就出来了」 --
++// Arc's ⊕ comes in as early): the first stretch past an end is slack. The
++// lists only lean on the edge -- under 6pt by the time the fingers have
++// gone 100pt -- and the disc stays out of sight; pulled further, the lists
++// give and the disc rides their edge in, its ring drawing from there.
++//
++// ⚠ Ours since 4b-r3 (user 2026-09-30, on 4b-r2: 「加号的圆环从0画成一个满圆的
++// 行程有点太短了，稍微再长一点」): 4b-r2 still closed the ring at Arc's 166,
++// squeezing it into the 116 the slack left -- three quarters drawn by the
++// time the disc was wholly in. It took Arc's whole 166 from the end of the
++// slack: closed at 216, about half drawn as the disc gets in.
++//
++// ⚠ Ours since 4b-r4 (user 2026-10-01, on 4b-r3: 「我觉得圆圈画满的行程还可以
++// 再长」): 216 of it, closing at 266 -- two fifths drawn as the disc gets in.
++//
++// ⚠ Ours since 4b-r5 (user 2026-10-01, after four rounds of mock-ups, of
++// the one that has 「用1个元素桥接两个画面」 -- decisions 「M6 轮4」⑮): what
++// an end brings in is a card, not a disc (below, kSpaceSwipeCard*). The
++// travel, the slack and the point where it fills in are the disc's.
++inline constexpr double kSpaceSwipeEndSolidAt = 266.0;
++inline constexpr double kSpaceSwipeEndSlack = 50.0;
++
++// ⚠ Ours (4b-r2): the travel. The pull p is taken up through a soft knee at
++// the slack -- u(p) = g·p + (1 − g)·k·[ln(1 + e^((p − slack)/k)) −
++// ln(1 + e^(−slack/k))], a tenth of the pull giving while the slack lasts --
++// and the lists move t = c·u / (1 + c·u / limit), 4b-r1's iOS-style rubber
++// band: 0.6pt at 10, 5.9 at 50 (the slack), 9.0 at 60, 24.2 at 100, 42.8 at
++// 166, 56.7 at 240, never past the limit. Its steepest, past the knee, is
++// 0.39 -- 4b-r1's (and Arc's ⊕'s) 0.387 entry pace -- and the limit is
++// what had the disc's centre 22pt in from the sidebar's edge where 4b-r2's
++// ring closed, at 166 (Arc's ⊕ rests at 27; the slack's own few points are
++// the difference). 4b-r3 drew the ring out and left the travel as it was:
++// where the ring closes now the lists have gone 52.8 and the disc's centre
++// is 32pt in.
++inline constexpr double kSpaceSwipeEndSlackGive = 0.1;
++inline constexpr double kSpaceSwipeEndSlackKnee = 10.0;
++inline constexpr double kSpaceSwipeEndRate = 0.55;
++inline constexpr double kSpaceSwipeEndTravelLimit = 120.4;
++
++// ⚠ Ours (4b-r2, user 2026-09-30: 「加号 icon 消失，它又原路返回了。我觉得这个
++// 不太好看」 and 「Arc 原本的 Create space 是…出现的，但我们现在的处理就是它
++// 突然出现的。用户的操作和 UI 出现的路径不一致」): a release on a filled disc
++// turns the page the way the fingers were going. Everything below the top
++// row goes on off that side -- the lists from where the rubber band had
++// them -- and the sheet comes in behind it from the other, on the switch's
++// own spring from rest (Arc g45 opens its Create form from the menu so: the
++// page out to the left, the form in from the right, 0.2s). Arc's own
++// release on a filled ⊕ put the form up at once and sent the ⊕ back out
++// (g42 seg4). 4b-r2 / r3 / r4's disc rode the seam between the two pages
++// and faded; since 4b-r5 the card flies into the sheet (SwipeCardFlightAt).
+ 
+ // ⚠ Ours (Arc: "the first stretch picks the axis and it stays", g43): the
+ // axis is decided once either finger total reaches this many points.
+@@ -157,9 +221,220 @@
+   return std::clamp(target, first, last);
+ }
+ 
+-// The list's travel for |overshoot| slots of finger past the last space.
+-inline double RubberBandTravel(double overshoot) {
+-  return overshoot * kSpaceSwipeRubberBand;
++// How far the lists -- and the card at that end -- have moved for |past|
++// points of 0.5 × finger beyond either end of the strip.
++inline double SwipeEndTravel(double past) {
++  if (past <= 0.0) {
++    return 0.0;
++  }
++  // k·ln(1 + e^(x/k)), without overflow either way.
++  const auto soft = [](double x) {
++    constexpr double k = kSpaceSwipeEndSlackKnee;
++    return x > 0.0 ? x + k * std::log1p(std::exp(-x / k))
++                   : k * std::log1p(std::exp(x / k));
++  };
++  const double taken =
++      kSpaceSwipeEndSlackGive * past +
++      (1.0 - kSpaceSwipeEndSlackGive) *
++          (soft(past - kSpaceSwipeEndSlack) - soft(-kSpaceSwipeEndSlack));
++  const double linear = kSpaceSwipeEndRate * taken;
++  return linear / (1.0 + linear / kSpaceSwipeEndTravelLimit);
++}
++
++// How far beyond the lists' edge an end's card rides: what the slack gives
++// (≈5.9pt), so the card's near side reaches the sidebar's edge just as the
++// slack is taken up.
++inline double SwipeEndGap() {
++  return SwipeEndTravel(kSpaceSwipeEndSlack);
++}
++
++// ---- M6 轮4 4b: the two-finger swipe (tasks/4/brief.md §3) ----
++
++// Where the fingers have taken the carousel, in slots: from |start_x|, 0.5 ×
++// the fingers' horizontal travel (Arc g39), |width| points to a slot.
++// Natural scrolling: scrollingDeltaX > 0 moves the content right, toward
++// the previous space -- lower slots. Unbounded: SwipeShownX has the ends.
++inline double SwipeDragX(double start_x, double finger_dx, double width) {
++  return width > 0.0 ? start_x - kSpaceSwipeFollowRatio * finger_dx / width
++                     : start_x;
++}
++
++// How far beyond an end of the strip the carousel at |x| (slots of |width|
++// points) is, in points of 0.5 × finger: past the last slot, before the
++// first.
++inline double SwipePastLast(double x, int last, double width) {
++  return x > last ? (x - last) * width : 0.0;
++}
++inline double SwipeBeforeFirst(double x, int first, double width) {
++  return x < first ? (first - x) * width : 0.0;
++}
++
++// Where the lists show a carousel at |x| (slots; a drag and its spring back
++// may take x past either end): beyond an end they give SwipeEndTravel of
++// it, the same at both.
++inline double SwipeShownX(double x, int first, int last, double width) {
++  if (width <= 0.0) {
++    return std::clamp(x, static_cast<double>(first), static_cast<double>(last));
++  }
++  if (x > last) {
++    return last + SwipeEndTravel(SwipePastLast(x, last, width)) / width;
++  }
++  if (x < first) {
++    return first - SwipeEndTravel(SwipeBeforeFirst(x, first, width)) / width;
++  }
++  return x;
++}
++
++// ---- 4b-r5: the card at each end (user 2026-10-01, decisions 「M6 轮4」⑮) ----
++//
++// Past the last space, one of the Create form's illustration cards
++// (arc_space_form.h) at 5/6 its size, a "+" inside; before the first, the
++// current space's own card, its icon inside. It rides the lists' edge, the
++// slack's gap beyond it (the disc's rule since 4b-r1), its outline drawing
++// as the fingers go -- from 12 o'clock, their way: anticlockwise past the
++// last space, clockwise before the first. Filled in, it materialises --
++// Create's into the illustration's card, Manage's into a white card under
++// its icon -- and a release flies it through the page turn to where it
++// lands in the incoming sheet (SwipeCardFlightAt).
++inline constexpr double kSpaceSwipeCardScale = 5.0 / 6.0;
++inline constexpr double kSpaceSwipeCardWidth =
++    kSpaceFormCardWidth * kSpaceSwipeCardScale;
++inline constexpr double kSpaceSwipeCardHeight =
++    kSpaceFormCardHeight * kSpaceSwipeCardScale;
++inline constexpr double kSpaceSwipeCardOutlineWidth = 1.6;
++
++// An end's card: its centre, in points in from the sidebar's edge on its
++// side (negative: still outside it), for |past| points of 0.5 × finger
++// beyond that end.
++inline double SwipeEndCardCenterInset(double past) {
++  return SwipeEndTravel(past) - (SwipeEndGap() + kSpaceSwipeCardWidth / 2.0);
++}
++
++// How much of the card's outline is drawn, 0..1 -- from where the card
++// starts to come in to where it fills in.
++inline double SwipeEndOutline(double past) {
++  return std::clamp((past - kSpaceSwipeEndSlack) /
++                        (kSpaceSwipeEndSolidAt - kSpaceSwipeEndSlack),
++                    0.0, 1.0);
++}
++
++// Whether the card is filled in -- a release now opens that end's sheet,
++// and nothing short of it does: a flick goes back like any release (⚠ ours;
++// Arc's flick on a ⊕ still hollow was not measured).
++inline bool SwipeEndSolid(double past) {
++  return past >= kSpaceSwipeEndSolidAt;
++}
++
++// ---- Filling in (4b-r4; the card's since 4b-r5) ----
++//
++// The user's recording of Arc 1.166.0 (2026-10-01, two pulls, alike;
++// tasks/evidence/4b-r4/user-arc-recording), read at ~60fps -- finer than 4b's
++// reading of g42 (180ms, a swell to 33.5pt, the glyph turning light at the
++// end): the frame the ring closes the dark "+" goes; the white inside
++// shrinks to nothing in 150ms, leaving the glyph white on the dark disc; the
++// disc swells from 45ms, most at 115ms (+12%), and is back by 185ms. The
++// trackpad gives one tap with it (user: 「触控板会有一下震动，跟弹动的动画是
++// 同步的」 -- ⚠ which of macOS's patterns Arc plays was not measured).
++// 4b-r5: the card materialises over those first 150ms -- its white and its
++// screen coming up as the outline and the "+" go -- and swells the same.
++inline constexpr base::TimeDelta kSpaceSwipeEndFill = base::Milliseconds(200);
++inline constexpr double kSpaceSwipeEndMaterializeMs = 150.0;
++inline constexpr double kSpaceSwipeEndSwell = 0.12;
++inline constexpr double kSpaceSwipeEndSwellFromMs = 45.0;
++inline constexpr double kSpaceSwipeEndSwellToMs = 185.0;
++
++// How far the card has materialised |ms| into the fill, 0..1.
++inline double SwipeEndMaterialize(double ms) {
++  return std::clamp(ms / kSpaceSwipeEndMaterializeMs, 0.0, 1.0);
++}
++
++// The card's swell |ms| into the fill: it is (1 + this) of its size.
++inline double SwipeEndFillSwell(double ms) {
++  if (ms <= kSpaceSwipeEndSwellFromMs || ms >= kSpaceSwipeEndSwellToMs) {
++    return 0.0;
++  }
++  return kSpaceSwipeEndSwell *
++         std::sin(std::numbers::pi * (ms - kSpaceSwipeEndSwellFromMs) /
++                  (kSpaceSwipeEndSwellToMs - kSpaceSwipeEndSwellFromMs));
++}
++
++// The page turn after a release on a filled card: how far along it is, 0..1,
++// |t| seconds in -- the switch's spring from rest.
++inline SpringState SheetSlideAt(double t) {
++  return StepCriticalSpring({0.0, 0.0}, 1.0, kSpaceSlideOmega,
++                            std::max(0.0, t));
++}
++
++// 4b-r5: the card through the page turn. It leaves from where the release
++// left it and lands where it belongs in the incoming sheet -- Create's on
++// the form's illustration as its front card, Manage's in the current
++// space's row as its icon -- on the turn's own spring (|g|, 0..1, is the
++// turn's progress), so it lands as the sheet does; an Esc on the way flies
++// it back the same way. Its path is the one in the animation the user
++// approved (tasks/evidence/4b-r5/anim/anim.py; 2026-10-01 「就按这个做」): a
++// quadratic Bézier whose control point is 40pt from where it left, the way
++// the page goes, and 60pt below the middle of its rise -- it sets off with
++// the page and climbs late. It tilts toward the way the page goes at
++// mid-flight (7°) and grows (Create: 5/6 to the illustration's size); as
++// it lands, the form's two back cards fan open to ±kSpaceFormCardFan
++// (SwipeCardStackFan). Manage's -- ⚠ ours, the animation only showed
++// Create -- is its mirror, shrinking to 0.55 of the illustration card, the
++// card fading out over the last 40% so that its icon lands alone.
++inline constexpr double kSpaceSwipeCardFlightLead = 40.0;
++inline constexpr double kSpaceSwipeCardFlightSag = 60.0;
++inline constexpr double kSpaceSwipeCardFlightTilt = 7.0;
++inline constexpr double kSpaceSwipeCardLandScale = 0.55;
++inline constexpr double kSpaceSwipeCardFadeFrom = 0.6;
++inline constexpr double kSpaceSwipeCardFanFrom = 0.55;
++
++struct SwipeCardFlight {
++  // The card's centre (the flight's own coordinates, pt).
++  double x = 0.0;
++  double y = 0.0;
++  // Of the illustration card's size.
++  double scale = 1.0;
++  // About its centre, clockwise.
++  double degrees = 0.0;
++  // The card's own, not its icon's.
++  double card_opacity = 1.0;
++};
++
++// |way|: -1 when the page goes left (Create), +1 right (Manage).
++inline SwipeCardFlight SwipeCardFlightAt(double g,
++                                         double from_x,
++                                         double from_y,
++                                         double to_x,
++                                         double to_y,
++                                         double from_scale,
++                                         double to_scale,
++                                         int way,
++                                         bool lands_as_icon) {
++  const double t = std::clamp(g, 0.0, 1.0);
++  const double via_x = from_x + way * kSpaceSwipeCardFlightLead;
++  const double via_y = (from_y + to_y) / 2.0 + kSpaceSwipeCardFlightSag;
++  const double a = (1.0 - t) * (1.0 - t);
++  const double b = 2.0 * (1.0 - t) * t;
++  const double c = t * t;
++  SwipeCardFlight out;
++  out.x = a * from_x + b * via_x + c * to_x;
++  out.y = a * from_y + b * via_y + c * to_y;
++  out.scale = from_scale + (to_scale - from_scale) * t;
++  out.degrees =
++      way * kSpaceSwipeCardFlightTilt * std::sin(std::numbers::pi * t);
++  if (lands_as_icon && t > kSpaceSwipeCardFadeFrom) {
++    const double f =
++        (t - kSpaceSwipeCardFadeFrom) / (1.0 - kSpaceSwipeCardFadeFrom);
++    out.card_opacity = 1.0 - f * f * (3.0 - 2.0 * f);
++  }
++  return out;
++}
++
++// How far Create's two back cards have fanned open, 0..1 of
++// ±kSpaceFormCardFan, |g| into the turn: closed behind where the front card
++// lands until it is 55% of the way, open as it lands (the animation's).
++inline double SwipeCardStackFan(double g) {
++  return std::clamp(
++      (g - kSpaceSwipeCardFanFrom) / (1.0 - kSpaceSwipeCardFanFrom), 0.0, 1.0);
+ }
+ 
+ // How far along a slide from |origin| to |target| the carousel at |x| is,
+Index: src/chrome/browser/ui/helium/arc_space_motion_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_space_motion_unittest.cc
++++ src/chrome/browser/ui/helium/arc_space_motion_unittest.cc
+@@ -127,11 +127,215 @@
+   EXPECT_EQ(0, SwipeReleaseTarget(-0.9, 0, 0, 0, 4));
+ }
+ 
+-TEST(ArcSpaceMotionTest, TheRubberBandIsLinear) {
+-  EXPECT_DOUBLE_EQ(0.0, RubberBandTravel(0.0));
+-  EXPECT_DOUBLE_EQ(0.135, RubberBandTravel(1.0));
+-  // Arc g42 seg3: 0.5 × finger at 296pt moved the list about 38pt.
+-  EXPECT_NEAR(40.0, RubberBandTravel(296.0), 0.1);
++TEST(ArcSpaceMotionTest, TheEndsHaveSlackBeforeTheyGive) {
++  EXPECT_DOUBLE_EQ(0.0, SwipeEndTravel(0.0));
++  EXPECT_DOUBLE_EQ(0.0, SwipeEndTravel(-5.0));
++  // User 2026-09-30 on 4b-r1: the ⊕ was out after the first few points.
++  // Now the first 50pt of 0.5 × finger (100pt of the fingers' own travel)
++  // only lean on the edge -- 4b-r1 had moved 16.9pt by then -- and the end's
++  // card (the disc before 4b-r5) stays out of sight all along, its outline
++  // undrawn.
++  EXPECT_NEAR(0.6, SwipeEndTravel(10.0), 0.05);
++  EXPECT_NEAR(5.85, SwipeEndTravel(kSpaceSwipeEndSlack), 0.01);
++  EXPECT_LT(SwipeEndTravel(25.0), 2.0);
++  for (double past = 0.0; past <= kSpaceSwipeEndSlack; past += 0.5) {
++    EXPECT_LE(SwipeEndCardCenterInset(past),
++              -kSpaceSwipeCardWidth / 2.0 + 1e-9)
++        << past;
++    EXPECT_DOUBLE_EQ(0.0, SwipeEndOutline(past)) << past;
++  }
++  // Just past it the card's edge is in.
++  EXPECT_GT(SwipeEndCardCenterInset(55.0), -kSpaceSwipeCardWidth / 2.0);
++}
++
++TEST(ArcSpaceMotionTest, PastTheKneeTheEndsGiveLessTheFurtherTheyArePulled) {
++  // Through the knee the give grows -- never past the pace Arc's ⊕ came in
++  // at (g42: 0.387pt a point) by more than a hair -- and from there on every
++  // further point gives less than the one before, short of the limit.
++  double travel = 0.0;
++  double step = 0.0;
++  double steepest = 0.0;
++  for (int tenth = 1; tenth <= 20000; ++tenth) {
++    const double next = SwipeEndTravel(tenth / 10.0);
++    ASSERT_GT(next, travel) << tenth;
++    const double now = (next - travel) * 10.0;
++    if (tenth > 800) {
++      ASSERT_LT(now, step) << tenth;
++    }
++    steepest = std::max(steepest, now);
++    step = now;
++    travel = next;
++  }
++  EXPECT_NEAR(0.39, steepest, 0.01);
++  EXPECT_LT(travel, kSpaceSwipeEndTravelLimit);
++  EXPECT_NEAR(9.0, SwipeEndTravel(60.0), 0.05);
++  EXPECT_NEAR(24.2, SwipeEndTravel(100.0), 0.05);
++  // Where 4b-r2's ring closed the lists had gone about as far as 4b-r1's
++  // (43.5), and a long pull about as far too (4b-r1: 55.0 at 240).
++  EXPECT_NEAR(42.85, SwipeEndTravel(166.0), 0.01);
++  EXPECT_NEAR(56.7, SwipeEndTravel(240.0), 0.05);
++  // 4b-r3 closed it further on, 4b-r4 further still, the travel unchanged.
++  EXPECT_NEAR(52.79, SwipeEndTravel(216.0), 0.01);
++  EXPECT_NEAR(60.48, SwipeEndTravel(kSpaceSwipeEndSolidAt), 0.01);
++}
++
++TEST(ArcSpaceMotionTest, TheFingersMoveTheCarouselByHalfTheirTravel) {
++  // Fingers one sidebar width to the right: half a space back.
++  EXPECT_DOUBLE_EQ(1.5, SwipeDragX(2.0, 299.0, 299.0));
++  EXPECT_DOUBLE_EQ(3.0, SwipeDragX(2.0, -598.0, 299.0));
++  EXPECT_DOUBLE_EQ(2.0, SwipeDragX(2.0, 0.0, 299.0));
++  EXPECT_DOUBLE_EQ(2.0, SwipeDragX(2.0, 100.0, 0.0));
++}
++
++TEST(ArcSpaceMotionTest, TheListsGiveTheSameAtBothEnds) {
++  EXPECT_DOUBLE_EQ(2.3, SwipeShownX(2.3, 0, 4, 299.0));
++  // Half a slot past the last space of a 299pt sidebar: 149.5pt.
++  EXPECT_DOUBLE_EQ(149.5, SwipePastLast(4.5, 4, 299.0));
++  EXPECT_DOUBLE_EQ(0.0, SwipePastLast(3.9, 4, 299.0));
++  EXPECT_DOUBLE_EQ(4.0 + SwipeEndTravel(149.5) / 299.0,
++                   SwipeShownX(4.5, 0, 4, 299.0));
++  // Before the first: the mirror image (4b kept the lists still there and
++  // slid a picture of the Manage sheet in over them).
++  EXPECT_DOUBLE_EQ(149.5, SwipeBeforeFirst(-0.5, 0, 299.0));
++  EXPECT_DOUBLE_EQ(0.0, SwipeBeforeFirst(0.4, 0, 299.0));
++  EXPECT_DOUBLE_EQ(0.0 - SwipeEndTravel(149.5) / 299.0,
++                   SwipeShownX(-0.5, 0, 4, 299.0));
++  // No width to measure by: the lists stay on the strip.
++  EXPECT_DOUBLE_EQ(4.0, SwipeShownX(4.5, 0, 4, 0.0));
++  EXPECT_DOUBLE_EQ(0.0, SwipeShownX(-0.5, 0, 4, 0.0));
++}
++
++TEST(ArcSpaceMotionTest, TheEndCardRidesTheListsEdge) {
++  // 4b-r5 (user 2026-10-01: 「用1个元素桥接两个画面」): an end brings in one of
++  // the Create form's illustration cards at 5/6 its size.
++  EXPECT_DOUBLE_EQ(31.2, kSpaceFormCardWidth);
++  EXPECT_NEAR(38.64, kSpaceFormCardHeight, 1e-9);
++  EXPECT_DOUBLE_EQ(26.0, kSpaceSwipeCardWidth);
++  EXPECT_NEAR(32.2, kSpaceSwipeCardHeight, 1e-9);
++  // Hidden past the edge at first, its near side the slack's give beyond the
++  // lists' edge.
++  EXPECT_NEAR(5.85, SwipeEndGap(), 0.01);
++  EXPECT_NEAR(-(SwipeEndGap() + 13.0), SwipeEndCardCenterInset(0.0), 1e-9);
++  // User 2026-09-30, on 4b: the ⊕ came in 2.9 times as fast as the list and
++  // over its rows. What comes in at the end keeps its near side the same
++  // distance beyond the list's edge wherever the fingers are (4b-r2: the
++  // slack's give, so it comes in only as the slack is taken up).
++  for (double past : {10.0, 60.0, 112.0, 166.0, 210.0, 400.0}) {
++    EXPECT_NEAR(SwipeEndTravel(past) - SwipeEndGap(),
++                SwipeEndCardCenterInset(past) + kSpaceSwipeCardWidth / 2.0,
++                1e-9)
++        << past;
++  }
++  // The outline draws from the end of the slack and closes -- the card fills
++  // in -- 216pt later (4b-r3, user 2026-09-30: 4b-r2's 116 drew in too short
++  // a pull, so 166; 4b-r4, 2026-10-01: 「还可以再长」), its centre 41.6pt in
++  // by then.
++  EXPECT_DOUBLE_EQ(216.0, kSpaceSwipeEndSolidAt - kSpaceSwipeEndSlack);
++  EXPECT_NEAR(41.63, SwipeEndCardCenterInset(kSpaceSwipeEndSolidAt), 0.05);
++  EXPECT_DOUBLE_EQ(0.0, SwipeEndOutline(0.0));
++  EXPECT_DOUBLE_EQ(0.0, SwipeEndOutline(kSpaceSwipeEndSlack));
++  EXPECT_DOUBLE_EQ(0.5, SwipeEndOutline(158.0));
++  EXPECT_DOUBLE_EQ(1.0, SwipeEndOutline(266.0));
++  EXPECT_DOUBLE_EQ(1.0, SwipeEndOutline(400.0));
++  // As the card gets wholly in (its centre 13pt inside) a third of its
++  // outline is drawn.
++  EXPECT_NEAR(13.0, SwipeEndCardCenterInset(123.8), 0.05);
++  EXPECT_NEAR(0.34, SwipeEndOutline(123.8), 0.01);
++  EXPECT_FALSE(SwipeEndSolid(216.0));
++  EXPECT_FALSE(SwipeEndSolid(265.9));
++  EXPECT_TRUE(SwipeEndSolid(266.0));
++}
++
++TEST(ArcSpaceMotionTest, TheCardMaterialisesInTheFillsTime) {
++  // Where the disc's white inside shrank (Arc 1.166.0, 150ms) the card's
++  // white and screen come up...
++  EXPECT_DOUBLE_EQ(0.0, SwipeEndMaterialize(0.0));
++  EXPECT_NEAR(1.0 / 3.0, SwipeEndMaterialize(50.0), 1e-9);
++  EXPECT_DOUBLE_EQ(1.0, SwipeEndMaterialize(150.0));
++  EXPECT_DOUBLE_EQ(1.0, SwipeEndMaterialize(200.0));
++  // ...and it swells as the disc did: from 45ms, 12% at 115ms, back by
++  // 185ms -- within the fill's 200ms.
++  EXPECT_DOUBLE_EQ(0.0, SwipeEndFillSwell(0.0));
++  EXPECT_DOUBLE_EQ(0.0, SwipeEndFillSwell(45.0));
++  EXPECT_NEAR(0.12, SwipeEndFillSwell(115.0), 1e-9);
++  EXPECT_NEAR(0.75 / 15.0, SwipeEndFillSwell(166.7), 0.005);  // Arc: +0.72pt
++  EXPECT_DOUBLE_EQ(0.0, SwipeEndFillSwell(185.0));
++  EXPECT_LE(kSpaceSwipeEndSwellToMs, kSpaceSwipeEndFill.InMillisecondsF());
++  EXPECT_LE(kSpaceSwipeEndMaterializeMs, kSpaceSwipeEndFill.InMillisecondsF());
++}
++
++TEST(ArcSpaceMotionTest, ThePageTurnRidesTheSwitchSpringAndTheCardFliesIn) {
++  // A release on a filled card turns the page on the switch's own spring,
++  // from rest: half-way at 53ms, settled where a one-space slide does.
++  EXPECT_DOUBLE_EQ(0.0, SheetSlideAt(0.0).x);
++  EXPECT_DOUBLE_EQ(0.0, SheetSlideAt(-1.0).x);
++  EXPECT_NEAR(0.5, SheetSlideAt(0.0534).x, 0.002);
++  for (double t : {0.02, 0.1, 0.25}) {
++    EXPECT_DOUBLE_EQ(
++        StepCriticalSpring({0.0, 0.0}, 1.0, kSpaceSlideOmega, t).x,
++        SheetSlideAt(t).x)
++        << t;
++  }
++  EXPECT_FALSE(SpringSettled(SheetSlideAt(0.25), 1.0, 299.0));
++  EXPECT_TRUE(SpringSettled(SheetSlideAt(0.33), 1.0, 299.0));
++
++  // 4b-r5: Create's card leaves from where the release left it and lands as
++  // the form's front card, on the turn's own progress.
++  const auto create = [](double g) {
++    return SwipeCardFlightAt(g, 214.0, 450.0, 130.0, 119.0,
++                             kSpaceSwipeCardScale, 1.0, -1, false);
++  };
++  EXPECT_DOUBLE_EQ(214.0, create(0.0).x);
++  EXPECT_DOUBLE_EQ(450.0, create(0.0).y);
++  EXPECT_DOUBLE_EQ(kSpaceSwipeCardScale, create(0.0).scale);
++  EXPECT_DOUBLE_EQ(0.0, create(0.0).degrees);
++  EXPECT_NEAR(130.0, create(1.0).x, 1e-9);
++  EXPECT_DOUBLE_EQ(119.0, create(1.0).y);
++  EXPECT_DOUBLE_EQ(1.0, create(1.0).scale);
++  EXPECT_NEAR(0.0, create(1.0).degrees, 1e-9);
++  // The animation's path: a quadratic Bézier through (214 - 40, the
++  // rise's middle + 60) = (174, 344.5). A quarter of the way it has gone
++  // 20pt the page's way but risen only 60 -- (193.75, 389.75); half-way it
++  // is at (173, 314.5), 30pt below the straight line's middle (172, 284.5).
++  // Tilted 7° toward the way the page goes at mid-flight; its own card
++  // never fades.
++  EXPECT_NEAR(193.75, create(0.25).x, 1e-9);
++  EXPECT_NEAR(389.75, create(0.25).y, 1e-9);
++  EXPECT_NEAR(173.0, create(0.5).x, 1e-9);
++  EXPECT_NEAR(314.5, create(0.5).y, 1e-9);
++  EXPECT_NEAR(-7.0, create(0.5).degrees, 1e-9);
++  for (double g : {0.0, 0.3, 0.7, 1.0}) {
++    EXPECT_DOUBLE_EQ(1.0, create(g).card_opacity) << g;
++  }
++  // Out of range it stays at either end.
++  EXPECT_NEAR(create(1.0).x, create(1.4).x, 1e-9);
++  EXPECT_NEAR(create(0.0).y, create(-0.2).y, 1e-9);
++
++  // Manage's: the mirror, shrinking, its card fading out over the last 40%
++  // so that its icon lands alone in the row's slot.
++  const auto manage = [](double g) {
++    return SwipeCardFlightAt(g, 46.0, 450.0, 32.0, 150.0, kSpaceSwipeCardScale,
++                             kSpaceSwipeCardLandScale, 1, true);
++  };
++  // Through (46 + 40, 300 + 60) = (86, 360): half-way at (62.5, 330).
++  EXPECT_NEAR(62.5, manage(0.5).x, 1e-9);
++  EXPECT_NEAR(330.0, manage(0.5).y, 1e-9);
++  EXPECT_NEAR(7.0, manage(0.5).degrees, 1e-9);
++  EXPECT_DOUBLE_EQ(1.0, manage(0.0).card_opacity);
++  EXPECT_DOUBLE_EQ(1.0, manage(0.6).card_opacity);
++  EXPECT_NEAR(0.5, manage(0.8).card_opacity, 1e-9);
++  EXPECT_NEAR(0.0, manage(1.0).card_opacity, 1e-9);
++  EXPECT_NEAR(kSpaceSwipeCardLandScale, manage(1.0).scale, 1e-9);
++  EXPECT_NEAR(32.0, manage(1.0).x, 1e-9);
++  EXPECT_NEAR(150.0, manage(1.0).y, 1e-9);
++
++  // Create's two back cards: closed until the card is 55% of the way, open
++  // as it lands.
++  EXPECT_DOUBLE_EQ(0.0, SwipeCardStackFan(0.0));
++  EXPECT_DOUBLE_EQ(0.0, SwipeCardStackFan(0.55));
++  EXPECT_NEAR(0.5, SwipeCardStackFan(0.775), 1e-9);
++  EXPECT_DOUBLE_EQ(1.0, SwipeCardStackFan(1.0));
++  EXPECT_DOUBLE_EQ(1.0, SwipeCardStackFan(1.3));
+ }
+ 
+ TEST(ArcSpaceMotionTest, TheBarBlendFollowsTheSlide) {
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -2873,6 +2873,17 @@
+   if (arc_field_edit_active_ || !toolbar_) {
+     return false;
+   }
++  // helium-fork M6 轮4 4b-r2: a page turn is carrying the sidebar's address
++  // row off with its events turned off (VerticalTabStripRegionView::
++  // StartSheetSlide) -- and this monitor runs before views would honour
++  // that. A press on the moving row begins nothing (reviewer 4b-r2 diff r0).
++  if (vertical_tab_strip_region_view_) {
++    if (views::View* const row =
++            vertical_tab_strip_region_view_->arc_address_row();
++        row && !row->GetCanProcessEventsWithinSubtree()) {
++      return false;
++    }
++  }
+   LocationBarView* const location_bar = toolbar_->location_bar_view();
+   if (!location_bar) {
+     return false;
+@@ -2953,6 +2964,12 @@
+       !vertical_tab_strip_region_view_) {
+     return;
+   }
++  // helium-fork M6 轮4 4b-r2: Cmd+L (or anything else that asks for the
++  // field) while a page turn is carrying the address row off lands the turn
++  // first -- its sheet up, as if it had already arrived -- so no edit begins
++  // on a row that is leaving (reviewer 4b-r2 diff r1). The checks below then
++  // see the row as it is.
++  vertical_tab_strip_region_view_->LandSheetSlide();
+   views::View* const address_row =
+       vertical_tab_strip_region_view_->arc_address_row();
+   // Only when the sidebar row hosts the toolbar and the row is actually on
+Index: src/chrome/browser/ui/views/frame/space_swipe_monitor_mac.h
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/space_swipe_monitor_mac.h
+@@ -0,0 +1,127 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_FRAME_SPACE_SWIPE_MONITOR_MAC_H_
++#define CHROME_BROWSER_UI_VIEWS_FRAME_SPACE_SWIPE_MONITOR_MAC_H_
++
++#include <memory>
++
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/timer/timer.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/views/cocoa/native_widget_mac_event_monitor.h"
++
++namespace views {
++class View;
++class Widget;
++}  // namespace views
++
++// helium-fork M6 轮4 4b: the two-finger horizontal swipe on the sidebar
++// (decisions.md 「M6 轮4」② g39–g44, tasks/4/brief.md §3.1). A window-level
++// NSEvent monitor (NativeWidgetMacNSWindowHost::AddEventMonitor, the
++// precedent is MenuPreTargetHandlerMac): it runs before AppKit's hit test,
++// so it sees the sidebar's blank stretches (window-drag area, invisible to
++// views) and the lists' scroll views, which swallow every scroll event,
++// horizontal ones included; and it can take a whole NSEvent away.
++//
++// One gesture at a time, by its NSEvent phases:
++//   began / may-begin inside the claim area and past the delegate's gates
++//     -> undecided (events pass through);
++//   the first finger travel of kSpaceSwipeAxisLock picks the axis for good
++//     (Arc g43): vertical -> everything passes, momentum too, until the next
++//     gesture; horizontal -> every event of the gesture is taken, the
++//     finger total goes to the delegate;
++//   fingers up -> wait kSpaceSwipeMomentumWait for momentum to begin: it did
++//     = a flick, the way the momentum goes; it did not = a slow release;
++//     the momentum that follows a horizontal gesture is taken whole.
++// ⛔ Esc while the fingers hold the list cancels the drag first (the key is
++// taken); a new gesture always starts over, and a claimed one whose events
++// go to another window is over (reviewer 4b diff r0).
++class SpaceSwipeMonitorMac : public views::NativeWidgetMacEventMonitor::Client {
++ public:
++  class Delegate {
++   public:
++    // Whether a gesture that begins at |point| (the region's coordinates)
++    // may be claimed: inside the sidebar below its top row, nothing modal
++    // (sheet, drag, resize, menu, inline rename), the sidebar expanded.
++    virtual bool CanStartSpaceSwipe(const gfx::Point& point) = 0;
++    // The axis is horizontal: a drag starts (grabbing a running slide).
++    virtual void OnSpaceSwipeBegin() = 0;
++    // The fingers' horizontal travel since the gesture began, in points,
++    // as scrollingDeltaX reports it (the system's natural-scrolling setting
++    // already applied: > 0 moves the content right).
++    virtual void OnSpaceSwipeUpdate(double finger_dx) = 0;
++    // The fingers lifted. |flick| is the momentum's direction in the same
++    // terms (+1 content right, -1 left), 0 for a slow release.
++    virtual void OnSpaceSwipeEnd(int flick) = 0;
++    // The system took the gesture away (a Mission Control swipe, the window
++    // losing it): no release judgement, back to where it was.
++    virtual void OnSpaceSwipeCancel() = 0;
++    // 4b-r2: Esc after the release was judged -- a release on a filled end
++    // disc is still turning the page to its sheet. True when that was so and
++    // the turn is going back (the key then goes no further).
++    virtual bool OnSpaceSwipeEscapeAfterRelease() = 0;
++
++   protected:
++    virtual ~Delegate() = default;
++  };
++
++  SpaceSwipeMonitorMac(views::Widget* widget,
++                       views::View* region,
++                       Delegate* delegate);
++  SpaceSwipeMonitorMac(const SpaceSwipeMonitorMac&) = delete;
++  SpaceSwipeMonitorMac& operator=(const SpaceSwipeMonitorMac&) = delete;
++  ~SpaceSwipeMonitorMac();
++
++  // The region can no longer take the drag (a sheet opened, the sidebar
++  // folded, the space list changed under it): nothing more is reported for
++  // this gesture, but its remaining events -- momentum included -- are
++  // still taken, so the list does not scroll off under the fingers.
++  void Abort();
++
++  // 4b-r4: one tap of the trackpad under the fingers, as an end's disc fills
++  // in (user 2026-10-01, on Arc: 「触控板会有一下震动，跟弹动的动画是同步的」).
++  // Nothing on a trackpad without haptics, or with them off in System
++  // Settings.
++  static void PerformEndDiscHaptic();
++
++ private:
++  enum class State {
++    kIdle,        // between gestures
++    kIgnored,     // not ours: began elsewhere or a gate said no
++    kUndecided,   // ours, axis not picked yet
++    kHorizontal,  // taking every event, reporting to the delegate
++    kVertical,    // a scroll: leave it all alone
++    kAborted,     // taken, but no longer reported
++  };
++
++  // views::NativeWidgetMacEventMonitor::Client:
++  void NativeWidgetMacEventMonitorOnEvent(ui::Event* event,
++                                          bool target_is_this_window,
++                                          bool* event_handled) override;
++
++  void OnMomentumWaitElapsed();
++  void Release(int flick);
++
++  const raw_ptr<views::View> region_;
++  const raw_ptr<Delegate> delegate_;
++  std::unique_ptr<views::NativeWidgetMacEventMonitor> monitor_;
++
++  State state_ = State::kIdle;
++  double sum_dx_ = 0.0;
++  double sum_dy_ = 0.0;
++  // The fingers' last horizontal step: the flick's direction when the
++  // momentum's first event carries no distance of its own.
++  double last_dx_ = 0.0;
++  // Fingers up on a horizontal gesture, the release not judged yet.
++  bool awaiting_momentum_ = false;
++  // Swallowing the horizontal gesture's momentum until it ends.
++  bool eating_momentum_ = false;
++  base::OneShotTimer momentum_wait_;
++
++  base::WeakPtrFactory<SpaceSwipeMonitorMac> weak_factory_{this};
++};
++
++#endif  // CHROME_BROWSER_UI_VIEWS_FRAME_SPACE_SWIPE_MONITOR_MAC_H_
+Index: src/chrome/browser/ui/views/frame/space_swipe_monitor_mac.mm
+===================================================================
+--- /dev/null
++++ src/chrome/browser/ui/views/frame/space_swipe_monitor_mac.mm
+@@ -0,0 +1,233 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/views/frame/space_swipe_monitor_mac.h"
++
++#import <Cocoa/Cocoa.h>
++
++#include <cmath>
++
++#include "base/functional/bind.h"
++#include "chrome/browser/ui/helium/arc_space_motion.h"
++#include "ui/events/event.h"
++#include "ui/events/keycodes/keyboard_codes.h"
++#include "ui/gfx/geometry/point_conversions.h"
++#include "ui/views/cocoa/native_widget_mac_ns_window_host.h"
++#include "ui/views/view.h"
++#include "ui/views/widget/widget.h"
++
++SpaceSwipeMonitorMac::SpaceSwipeMonitorMac(views::Widget* widget,
++                                           views::View* region,
++                                           Delegate* delegate)
++    : region_(region), delegate_(delegate) {
++  if (views::NativeWidgetMacNSWindowHost* const host =
++          views::NativeWidgetMacNSWindowHost::GetFromNativeWindow(
++              widget->GetNativeWindow())) {
++    monitor_ = host->AddEventMonitor(this);
++  }
++}
++
++SpaceSwipeMonitorMac::~SpaceSwipeMonitorMac() = default;
++
++// static
++void SpaceSwipeMonitorMac::PerformEndDiscHaptic() {
++  // ⚠ Ours: Arc's binary names an NSHapticFeedbackPerformer and "page detent"
++  // haptics, but which pattern it plays was not measured; "level change" is
++  // the one macOS gives for stepping over a discrete threshold. Now, not at
++  // the next draw: the fill is drawn by the GPU process, not AppKit's pass.
++  [NSHapticFeedbackManager.defaultPerformer
++      performFeedbackPattern:NSHapticFeedbackPatternLevelChange
++             performanceTime:NSHapticFeedbackPerformanceTimeNow];
++}
++
++void SpaceSwipeMonitorMac::Abort() {
++  momentum_wait_.Stop();
++  awaiting_momentum_ = false;
++  if (state_ == State::kUndecided || state_ == State::kHorizontal) {
++    state_ = State::kAborted;
++  }
++}
++
++void SpaceSwipeMonitorMac::NativeWidgetMacEventMonitorOnEvent(
++    ui::Event* event,
++    bool target_is_this_window,
++    bool* event_handled) {
++  if (*event_handled) {
++    return;
++  }
++  // ⛔ Esc cancels a gesture in progress before it does anything else (Esc =
++  // cancel and restore, user 2026-09-17; reviewer 4b diff r0): the list goes
++  // back, and the key goes no further. In progress = the fingers on it, or
++  // lifted with the release not judged yet (r1); and only an Esc meant for
++  // this window -- another window's sheet keeps its own (r1).
++  if (event->type() == ui::EventType::kKeyPressed &&
++      event->AsKeyEvent()->key_code() == ui::VKEY_ESCAPE &&
++      target_is_this_window &&
++      (state_ == State::kHorizontal || awaiting_momentum_)) {
++    *event_handled = true;
++    if (awaiting_momentum_) {
++      // Its momentum is still eaten (eating_momentum_ stays set).
++      momentum_wait_.Stop();
++      awaiting_momentum_ = false;
++    } else {
++      state_ = State::kAborted;
++    }
++    delegate_->OnSpaceSwipeCancel();
++    return;
++  }
++  // 4b-r2: and once released, the page a filled end disc is turning to its
++  // sheet is the gesture's still: Esc turns it back (reviewer 4b-r2 diff r0
++  // -- the sheet would otherwise come up regardless).
++  if (event->type() == ui::EventType::kKeyPressed &&
++      event->AsKeyEvent()->key_code() == ui::VKEY_ESCAPE &&
++      target_is_this_window && delegate_->OnSpaceSwipeEscapeAfterRelease()) {
++    *event_handled = true;
++    return;
++  }
++  if (event->type() != ui::EventType::kScroll) {
++    return;
++  }
++  if (!target_is_this_window) {
++    // The gesture's events went to another window: whatever this one had
++    // claimed is over -- its Ended will never come here, and a drag left
++    // hanging would swallow the next gesture (reviewer 4b diff r0).
++    if (state_ == State::kHorizontal) {
++      state_ = State::kIdle;
++      delegate_->OnSpaceSwipeCancel();
++    } else if (state_ == State::kUndecided) {
++      state_ = State::kIdle;
++    }
++    return;
++  }
++  NSEvent* const ns = event->native_event().Get();
++  // A mouse wheel (no precise deltas, no phases) never starts a swipe.
++  if (!ns || !ns.hasPreciseScrollingDeltas) {
++    return;
++  }
++  const NSEventPhase phase = ns.phase;
++  const NSEventPhase momentum = ns.momentumPhase;
++  const double dx = ns.scrollingDeltaX;
++  const double dy = ns.scrollingDeltaY;
++
++  // ---- momentum: after the fingers lifted ----
++  if (phase == NSEventPhaseNone && momentum != NSEventPhaseNone) {
++    if (awaiting_momentum_ && momentum == NSEventPhaseBegan) {
++      // macOS carried the gesture on: a flick, the way it goes (Arc g41: a
++      // flick completes toward itself from any position).
++      const double way = dx != 0.0 ? dx : last_dx_;
++      Release(way > 0 ? +1 : way < 0 ? -1 : 0);
++    }
++    if (eating_momentum_) {
++      *event_handled = true;
++      if (momentum == NSEventPhaseEnded || momentum == NSEventPhaseCancelled) {
++        eating_momentum_ = false;
++      }
++    }
++    return;
++  }
++  if (phase == NSEventPhaseNone) {
++    return;
++  }
++
++  // ---- a new gesture ----
++  if (phase == NSEventPhaseMayBegin || phase == NSEventPhaseBegan) {
++    if (awaiting_momentum_) {
++      // New fingers before the momentum showed: the old release was slow.
++      Release(0);
++    }
++    eating_momentum_ = false;
++    // A new gesture starts over -- except the Began that follows this
++    // gesture's own may-begin. One still horizontal here never ended: over.
++    if (phase == NSEventPhaseMayBegin || state_ != State::kUndecided) {
++      if (state_ == State::kHorizontal) {
++        state_ = State::kIdle;
++        delegate_->OnSpaceSwipeCancel();
++      }
++      sum_dx_ = sum_dy_ = last_dx_ = 0.0;
++      gfx::Point point = gfx::ToFlooredPoint(event->AsLocatedEvent()->location_f());
++      views::View::ConvertPointFromWidget(region_, &point);
++      state_ = delegate_->CanStartSpaceSwipe(point) ? State::kUndecided
++                                                     : State::kIgnored;
++    }
++    if (phase == NSEventPhaseMayBegin) {
++      return;
++    }
++  }
++
++  switch (state_) {
++    case State::kIdle:
++    case State::kIgnored:
++    case State::kVertical:
++      break;
++    case State::kAborted:
++      *event_handled = true;
++      if (phase == NSEventPhaseEnded || phase == NSEventPhaseCancelled) {
++        eating_momentum_ = true;
++        state_ = State::kIdle;
++      }
++      break;
++    case State::kUndecided: {
++      sum_dx_ += dx;
++      sum_dy_ += dy;
++      if (phase == NSEventPhaseEnded || phase == NSEventPhaseCancelled) {
++        state_ = State::kIdle;
++        break;
++      }
++      if (std::max(std::abs(sum_dx_), std::abs(sum_dy_)) <
++          helium::kSpaceSwipeAxisLock) {
++        break;  // still passes: the list may scroll a point or two
++      }
++      if (std::abs(sum_dx_) <= std::abs(sum_dy_)) {
++        state_ = State::kVertical;
++        break;
++      }
++      state_ = State::kHorizontal;
++      *event_handled = true;
++      if (dx != 0.0) {
++        last_dx_ = dx;
++      }
++      delegate_->OnSpaceSwipeBegin();
++      if (state_ != State::kHorizontal) {
++        break;  // the delegate could not take it (Abort)
++      }
++      // No dead zone (Arc g39): the travel so far counts.
++      delegate_->OnSpaceSwipeUpdate(sum_dx_);
++      break;
++    }
++    case State::kHorizontal:
++      *event_handled = true;
++      if (phase == NSEventPhaseCancelled) {
++        state_ = State::kIdle;
++        delegate_->OnSpaceSwipeCancel();
++        break;
++      }
++      sum_dx_ += dx;
++      if (dx != 0.0) {
++        last_dx_ = dx;
++      }
++      delegate_->OnSpaceSwipeUpdate(sum_dx_);
++      if (phase == NSEventPhaseEnded) {
++        state_ = State::kIdle;
++        awaiting_momentum_ = true;
++        eating_momentum_ = true;
++        momentum_wait_.Start(
++            FROM_HERE, helium::kSpaceSwipeMomentumWait,
++            base::BindOnce(&SpaceSwipeMonitorMac::OnMomentumWaitElapsed,
++                           weak_factory_.GetWeakPtr()));
++      }
++      break;
++  }
++}
++
++void SpaceSwipeMonitorMac::OnMomentumWaitElapsed() {
++  if (awaiting_momentum_) {
++    Release(0);
++  }
++}
++
++void SpaceSwipeMonitorMac::Release(int flick) {
++  momentum_wait_.Stop();
++  awaiting_momentum_ = false;
++  delegate_->OnSpaceSwipeEnd(flick);
++}
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -10,10 +10,12 @@
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "base/task/sequenced_task_runner.h"
+ #include "chrome/browser/ui/helium/arc_space_form.h"
++#include "chrome/browser/ui/helium/arc_space_manage.h"
+ #include "chrome/browser/ui/helium/arc_space_icon_picker.h"
+ #include "chrome/browser/ui/views/frame/helium_space_icon_picker_view.h"
+ #include "chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.h"
+ #include "chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h"
+ 
+ #include <algorithm>
+ #include <optional>
+@@ -26,6 +28,7 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "base/time/time.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+@@ -82,12 +85,14 @@
+ #include "ui/base/interaction/element_tracker.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_id.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/gfx/geometry/transform.h"
+ #include "ui/gfx/geometry/rect_conversions.h"
+ #include "ui/display/screen.h"
+ #include "ui/events/event.h"
+ #include "ui/gfx/geometry/point.h"
++#include "ui/views/animation/animation_delegate_views.h"
+ #include "ui/views/background.h"
+ #include "ui/views/controls/button/label_button.h"
+ #include "ui/views/controls/focus_ring.h"
+@@ -103,6 +108,26 @@
+ #include "ui/views/view.h"
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
++#include "build/build_config.h"
++#include "cc/paint/paint_flags.h"
++#include "third_party/skia/include/core/SkMatrix.h"
++#include "third_party/skia/include/core/SkPathBuilder.h"
++#include "third_party/skia/include/core/SkPathMeasure.h"
++#include "ui/gfx/animation/animation_delegate.h"
++#include "ui/gfx/animation/linear_animation.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/font_list.h"
++#include "ui/gfx/image/image_skia.h"
++#include "ui/gfx/paint_vector_icon.h"
++#include "ui/gfx/shadow_value.h"
++#include "ui/gfx/skia_paint_util.h"
++#include "ui/views/controls/menu/menu_controller.h"
++
++#include <cmath>
++
++#if BUILDFLAG(IS_MAC)
++#include "chrome/browser/ui/views/frame/space_swipe_monitor_mac.h"
++#endif
+ 
+ namespace {
+ constexpr int kResizeAreaWidth = 5;
+@@ -153,6 +178,616 @@
+ 
+ }  // namespace
+ 
++// ---- M6 轮4 4b: the two-finger swipe's input and its two ends' discs ----
++
++#if BUILDFLAG(IS_MAC)
++// The window-level NSEvent monitor (tasks/4/brief.md §3.1), wired to the
++// region: it sees the sidebar's gestures before AppKit's hit test does.
++class VerticalTabStripRegionView::SwipeInput
++    : public SpaceSwipeMonitorMac::Delegate {
++ public:
++  explicit SwipeInput(VerticalTabStripRegionView* region)
++      : region_(region), monitor_(region->GetWidget(), region, this) {}
++  SwipeInput(const SwipeInput&) = delete;
++  SwipeInput& operator=(const SwipeInput&) = delete;
++
++  void Abort() { monitor_.Abort(); }
++
++ private:
++  // SpaceSwipeMonitorMac::Delegate:
++  bool CanStartSpaceSwipe(const gfx::Point& point) override {
++    return region_->CanStartSpaceSwipe(point);
++  }
++  void OnSpaceSwipeBegin() override { region_->OnSpaceSwipeBegin(); }
++  void OnSpaceSwipeUpdate(double finger_dx) override {
++    region_->OnSpaceSwipeUpdate(finger_dx);
++  }
++  void OnSpaceSwipeEnd(int flick) override { region_->OnSpaceSwipeEnd(flick); }
++  void OnSpaceSwipeCancel() override { region_->OnSpaceSwipeCancel(); }
++  bool OnSpaceSwipeEscapeAfterRelease() override {
++    return region_->CancelSheetSlide();
++  }
++
++  const raw_ptr<VerticalTabStripRegionView> region_;
++  SpaceSwipeMonitorMac monitor_;
++};
++#else
++class VerticalTabStripRegionView::SwipeInput {
++ public:
++  void Abort() {}
++};
++#endif
++
++// ---- M6 轮4 4b-r5: the card at each end of the strip (user 2026-10-01:
++// 「用1个元素桥接两个画面」, decisions 「M6 轮4」⑮; numbers in
++// arc_space_motion.h) ----
++
++namespace {
++
++// The rounded rect a card's outline runs round, as one path from 12
++// o'clock: anticlockwise (Create's, the fingers going left) or clockwise.
++SkPath CardOutlinePath(const gfx::RectF& card, float radius, bool clockwise) {
++  const float l = card.x(), t = card.y(), r = card.right(), b = card.bottom();
++  const float cx = card.CenterPoint().x();
++  constexpr float kQuarter = 0.70710678f;  // a conic's weight for 90°
++  SkPathBuilder path;
++  path.moveTo(cx, t);
++  path.lineTo(l + radius, t);
++  path.conicTo(l, t, l, t + radius, kQuarter);
++  path.lineTo(l, b - radius);
++  path.conicTo(l, b, l + radius, b, kQuarter);
++  path.lineTo(r - radius, b);
++  path.conicTo(r, b, r, b - radius, kQuarter);
++  path.lineTo(r, t + radius);
++  path.conicTo(r, t, r - radius, t, kQuarter);
++  path.close();
++  SkPath out = path.detach();
++  if (clockwise) {
++    // The mirror about the card's centre line runs the other way round.
++    SkMatrix mirror;
++    mirror.setScale(-1.0f, 1.0f, cx, card.CenterPoint().y());
++    out = out.makeTransform(mirror);
++  }
++  return out;
++}
++
++// A space's icon -- an emoji, a vector glyph, or (none) the bar's 8pt dot --
++// centred at |centre|, as its row in Manage Spaces draws it.
++void PaintSpaceIcon(gfx::Canvas* canvas,
++                    const ui::ColorProvider* colors,
++                    const std::string& icon,
++                    const gfx::PointF& centre) {
++  const float glyph = static_cast<float>(helium::kSpaceManageGlyphSize);
++  const SkColor ink =
++      colors->GetColor(ui::kColorLabelForegroundSecondary);
++  if (icon.empty()) {
++    cc::PaintFlags dot;
++    dot.setStyle(cc::PaintFlags::kFill_Style);
++    dot.setAntiAlias(true);
++    dot.setColor(ink);
++    canvas->DrawCircle(centre, helium::kSpaceManageDotSize / 2.0f, dot);
++    return;
++  }
++  if (helium_workspace::IsVectorIconRef(icon)) {
++    if (const gfx::VectorIcon* vector = FindSpaceVectorIcon(
++            helium_workspace::VectorIconRefName(icon))) {
++      const gfx::ImageSkia image = gfx::CreateVectorIcon(
++          *vector, helium::kSpaceManageGlyphSize, ink);
++      canvas->DrawImageInt(image,
++                           static_cast<int>(std::round(centre.x() - glyph / 2)),
++                           static_cast<int>(std::round(centre.y() - glyph / 2)));
++    }
++    return;
++  }
++  const gfx::FontList font = gfx::FontList().DeriveWithSizeDelta(
++      helium::kSpaceManageGlyphSize - gfx::FontList().GetFontSize());
++  const float slot = glyph + 2.0f * helium::kSpaceManageEmojiSlop;
++  canvas->DrawStringRectWithFlags(
++      base::UTF8ToUTF16(icon), font, ink,
++      gfx::ToEnclosingRect(gfx::RectF(centre.x() - slot / 2,
++                                      centre.y() - slot / 2, slot, slot)),
++      gfx::Canvas::TEXT_ALIGN_CENTER | gfx::Canvas::NO_ELLIPSIS);
++}
++
++// Manage's card, materialised: a white card the illustration's size times
++// |scale|, and its shadow -- what its icon rides in on.
++void PaintSpaceCardBody(gfx::Canvas* canvas,
++                        const gfx::PointF& centre,
++                        float scale,
++                        float degrees) {
++  const float w = static_cast<float>(helium::kSpaceFormCardWidth) * scale;
++  const float h = static_cast<float>(helium::kSpaceFormCardHeight) * scale;
++  const float radius = static_cast<float>(helium::kSpaceFormCardRadius) * scale;
++  canvas->Save();
++  gfx::Transform t;
++  t.Translate(centre.x(), centre.y());
++  t.Rotate(degrees);
++  t.Translate(-centre.x(), -centre.y());
++  canvas->Transform(t);
++  const gfx::RectF card(centre.x() - w / 2, centre.y() - h / 2, w, h);
++  cc::PaintFlags shadow;
++  shadow.setStyle(cc::PaintFlags::kFill_Style);
++  shadow.setAntiAlias(true);
++  shadow.setColor(SkColorSetA(SK_ColorBLACK, 0x22));
++  gfx::RectF shadow_rect = card;
++  shadow_rect.Offset(0, 1.5f * scale);
++  canvas->DrawRoundRect(shadow_rect, radius, shadow);
++  cc::PaintFlags fill;
++  fill.setStyle(cc::PaintFlags::kFill_Style);
++  fill.setAntiAlias(true);
++  fill.setColor(SK_ColorWHITE);
++  canvas->DrawRoundRect(card, radius, fill);
++  canvas->Restore();
++}
++
++// The end card as it stands |ms| into its fill (0 short of it), |drawn| of
++// its outline drawn: the strip's card, and the flight's -- which carries a
++// fill the release cut short on from where it was, the same card, rather
++// than starting out filled (reviewer 4b-r5 r0). |base_scale| is its size
++// before the fill's swell; |degrees| tilts it and |card_opacity| fades it,
++// all but Manage's icon.
++void PaintEndCard(gfx::Canvas* canvas,
++                  const ui::ColorProvider* colors,
++                  bool create,
++                  const std::string& icon,
++                  const gfx::PointF& centre,
++                  double base_scale,
++                  double degrees,
++                  double ms,
++                  double drawn,
++                  double card_opacity) {
++  const SkColor ink = helium::GetSidebarRowTitleColor(
++      colors->GetColor(kColorToolbar), /*active=*/false);
++  const float scale = static_cast<float>(
++      base_scale * (1.0 + helium::SwipeEndFillSwell(ms)));
++  const float made = static_cast<float>(helium::SwipeEndMaterialize(ms));
++  const float opacity =
++      std::clamp(static_cast<float>(card_opacity), 0.0f, 1.0f);
++
++  // The card itself, as it materialises.
++  if (made > 0.0f && opacity > 0.0f) {
++    canvas->SaveLayerAlpha(
++        static_cast<uint8_t>(std::lround(made * opacity * 255)));
++    if (create) {
++      HeliumSpaceCreateFormView::PaintIllustrationCard(
++          canvas, centre, scale, static_cast<float>(degrees));
++    } else {
++      PaintSpaceCardBody(canvas, centre, scale, static_cast<float>(degrees));
++    }
++    canvas->Restore();
++  }
++  // Its outline -- a faint track all round, the drawn part darker -- and
++  // the "+", going as it materialises.
++  if (made < 1.0f && opacity > 0.0f) {
++    canvas->Save();
++    gfx::Transform tilt;
++    tilt.Translate(centre.x(), centre.y());
++    tilt.Rotate(degrees);
++    tilt.Translate(-centre.x(), -centre.y());
++    canvas->Transform(tilt);
++    const float w = static_cast<float>(helium::kSpaceFormCardWidth) * scale;
++    const float h = static_cast<float>(helium::kSpaceFormCardHeight) * scale;
++    const gfx::RectF card(centre.x() - w / 2, centre.y() - h / 2, w, h);
++    const SkPath outline = CardOutlinePath(
++        card, static_cast<float>(helium::kSpaceFormCardRadius) * scale,
++        /*clockwise=*/!create);
++    const float keep = (1.0f - made) * opacity;
++    cc::PaintFlags track;
++    track.setAntiAlias(true);
++    track.setStyle(cc::PaintFlags::kStroke_Style);
++    track.setStrokeWidth(1.3f);
++    track.setColor(SkColorSetA(
++        ink, static_cast<U8CPU>(std::lround(SkColorGetA(ink) * 0.16f * keep))));
++    canvas->DrawPath(outline, track);
++    if (drawn > 0.0) {
++      SkPathMeasure measure(outline, /*forceClosed=*/false);
++      SkPathBuilder part;
++      if (measure.getSegment(
++              0.0f, static_cast<float>(drawn) * measure.getLength(), &part,
++              /*startWithMoveTo=*/true)) {
++        cc::PaintFlags line;
++        line.setAntiAlias(true);
++        line.setStyle(cc::PaintFlags::kStroke_Style);
++        line.setStrokeWidth(
++            static_cast<float>(helium::kSpaceSwipeCardOutlineWidth));
++        line.setStrokeCap(cc::PaintFlags::kRound_Cap);
++        line.setColor(SkColorSetA(
++            ink, static_cast<U8CPU>(std::lround(SkColorGetA(ink) * keep))));
++        canvas->DrawPath(part.detach(), line);
++      }
++    }
++    if (create) {
++      constexpr float kArm = 5.0f;
++      cc::PaintFlags glyph;
++      glyph.setAntiAlias(true);
++      glyph.setStyle(cc::PaintFlags::kStroke_Style);
++      glyph.setStrokeWidth(1.8f);
++      glyph.setStrokeCap(cc::PaintFlags::kRound_Cap);
++      glyph.setColor(SkColorSetA(
++          ink, static_cast<U8CPU>(std::lround(SkColorGetA(ink) * keep))));
++      canvas->DrawLine(gfx::PointF(centre.x() - kArm, centre.y()),
++                       gfx::PointF(centre.x() + kArm, centre.y()), glyph);
++      canvas->DrawLine(gfx::PointF(centre.x(), centre.y() - kArm),
++                       gfx::PointF(centre.x(), centre.y() + kArm), glyph);
++    }
++    canvas->Restore();
++  }
++  // Manage's: the space's own icon, through all of it.
++  if (!create) {
++    PaintSpaceIcon(canvas, colors, icon, centre);
++  }
++}
++
++}  // namespace
++
++// The card at each end: past the last space one of the Create form's
++// illustration cards with a "+"; before the first the current space's own,
++// its icon inside. Its outline draws as the fingers go; filled in, it
++// materialises. Drawn in a strip along its own edge of the sidebar, which
++// cuts it off while the lists have not yet made room for all of it, and
++// moved by repainting that strip -- no layout, no bounds change per frame.
++class VerticalTabStripRegionView::SwipeEndCard
++    : public views::View,
++      public gfx::AnimationDelegate {
++  METADATA_HEADER(SwipeEndCard, views::View)
++
++ public:
++  // kLast: at the right edge, Create a Space. kFirst: at the left edge,
++  // Manage Spaces.
++  enum class End { kLast, kFirst };
++
++  // Room for the card as far in as the rubber band can ever bring it, its
++  // swell and its shadow.
++  static constexpr int kWidth = 144;
++  static constexpr int kHeight = 48;
++  static_assert(kWidth >= helium::kSpaceSwipeEndTravelLimit + 5.0);
++  static_assert(kHeight >= helium::kSpaceSwipeCardHeight *
++                                   (1.0 + helium::kSpaceSwipeEndSwell) +
++                               6.0);
++
++  explicit SwipeEndCard(End end)
++      : end_(end),
++        fill_(helium::kSpaceSwipeEndFill,
++              gfx::LinearAnimation::kDefaultFrameRate,
++              this) {
++    SetPaintToLayer();
++    layer()->SetFillsBoundsOpaquely(false);
++    SetCanProcessEventsWithinSubtree(false);
++    SetVisible(false);
++  }
++  SwipeEndCard(const SwipeEndCard&) = delete;
++  SwipeEndCard& operator=(const SwipeEndCard&) = delete;
++  ~SwipeEndCard() override = default;
++
++  // kFirst: the current space's icon ("" -- the dot).
++  void SetIcon(const std::string& icon) {
++    if (icon_ != icon) {
++      icon_ = icon;
++      SchedulePaint();
++    }
++  }
++  const std::string& icon() const { return icon_; }
++
++  // |past|: points of 0.5 × finger beyond this card's end of the strip.
++  // |fingers_on|: the two fingers are still on the trackpad -- the only
++  // time a tap can be felt (4b-r4).
++  void SetPast(double past, bool fingers_on) {
++    past_ = past;
++    const bool solid = helium::SwipeEndSolid(past);
++    if (solid != solid_) {
++      solid_ = solid;
++      if (solid) {
++        fill_.Start();
++#if BUILDFLAG(IS_MAC)
++        // 4b-r4: with the fill, one tap of the trackpad under the fingers.
++        if (fingers_on) {
++          SpaceSwipeMonitorMac::PerformEndDiscHaptic();
++        }
++#endif
++      } else {
++        fill_.Stop();
++      }
++    }
++    if (!held_away_) {
++      SetVisible(past > 0.0);
++    }
++    SchedulePaint();
++  }
++
++  bool solid() const { return solid_; }
++  // How far into its fill (arc_space_motion.h) the card is, in ms: 0 short
++  // of it, the fill's length once it is done.
++  double FillMs() const {
++    if (!solid_) {
++      return 0.0;
++    }
++    return (fill_.is_animating() ? fill_.GetCurrentValue() : 1.0) *
++           helium::kSpaceSwipeEndFill.InMillisecondsF();
++  }
++  // Where the card's centre is, in this view's coordinates.
++  gfx::PointF Centre() const {
++    const float inset =
++        static_cast<float>(helium::SwipeEndCardCenterInset(past_));
++    return gfx::PointF(end_ == End::kLast ? width() - inset : inset,
++                       height() / 2.0f);
++  }
++
++  // Through a page turn the flight draws the card; this one stands aside,
++  // and comes back if the turn is undone (its lists spring it home).
++  void SetHeldAway(bool away) {
++    held_away_ = away;
++    SetVisible(!away && past_ > 0.0);
++  }
++
++ private:
++  // gfx::AnimationDelegate:
++  void AnimationProgressed(const gfx::Animation* animation) override {
++    SchedulePaint();
++  }
++  void AnimationEnded(const gfx::Animation* animation) override {
++    SchedulePaint();
++  }
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override {
++    const ui::ColorProvider* const colors = GetColorProvider();
++    if (!colors) {
++      return;
++    }
++    PaintEndCard(canvas, colors, end_ == End::kLast, icon_, Centre(),
++                 helium::kSpaceSwipeCardScale, /*degrees=*/0.0, FillMs(),
++                 solid_ ? 1.0 : helium::SwipeEndOutline(past_),
++                 /*card_opacity=*/1.0);
++  }
++
++  const End end_;
++  std::string icon_;
++  double past_ = 0.0;
++  bool solid_ = false;
++  bool held_away_ = false;
++  gfx::LinearAnimation fill_;
++};
++
++BEGIN_METADATA(VerticalTabStripRegionView, SwipeEndCard)
++END_METADATA
++
++// The card in flight through a page turn (arc_space_motion.h
++// SwipeCardFlightAt): over the whole sidebar, above the sheet's picture,
++// from where the release left it to where it lands -- the Create form's
++// front card, or the icon slot of the current space's row in Manage Spaces.
++// Create's also draws the form's two back cards (the picture leaves the
++// illustration out): riding in with the picture, fanning open under the
++// card as it lands (SwipeCardStackFan).
++class VerticalTabStripRegionView::SwipeCardFlight : public views::View {
++  METADATA_HEADER(SwipeCardFlight, views::View)
++
++ public:
++  struct Path {
++    bool create = true;
++    gfx::PointF from;
++    gfx::PointF to;
++    std::string icon;
++    // How far into its fill the card was when the release handed it over
++    // (SwipeEndCard::FillMs): the flight carries the fill on from there.
++    double fill_ms = 0.0;
++    // How far the sheet's picture travels (the sidebar's width): Create's
++    // back cards ride in with it.
++    float sheet_width = 0.0f;
++  };
++
++  SwipeCardFlight() {
++    SetPaintToLayer();
++    layer()->SetFillsBoundsOpaquely(false);
++    SetCanProcessEventsWithinSubtree(false);
++    SetVisible(false);
++  }
++  SwipeCardFlight(const SwipeCardFlight&) = delete;
++  SwipeCardFlight& operator=(const SwipeCardFlight&) = delete;
++  ~SwipeCardFlight() override = default;
++
++  void Start(const Path& path) {
++    path_ = path;
++    started_ = base::TimeTicks::Now();
++    progress_ = 0.0;
++    SetVisible(true);
++    SchedulePaint();
++  }
++  void SetProgress(double progress) {
++    progress_ = progress;
++    SchedulePaint();
++  }
++  void Stop() { SetVisible(false); }
++
++ private:
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override {
++    const ui::ColorProvider* const colors = GetColorProvider();
++    if (!colors) {
++      return;
++    }
++    const helium::SwipeCardFlight at = helium::SwipeCardFlightAt(
++        progress_, path_.from.x(), path_.from.y(), path_.to.x(), path_.to.y(),
++        helium::kSpaceSwipeCardScale,
++        path_.create ? 1.0 : helium::kSpaceSwipeCardLandScale,
++        path_.create ? -1 : 1, /*lands_as_icon=*/!path_.create);
++    if (path_.create) {
++      // The picture comes in from the right: (1 - progress) of its width
++      // short of where it rests.
++      const gfx::PointF stack(
++          path_.to.x() +
++              (1.0f - static_cast<float>(progress_)) * path_.sheet_width,
++          path_.to.y());
++      const float fan = static_cast<float>(
++          helium::kSpaceFormCardFan * helium::SwipeCardStackFan(progress_));
++      HeliumSpaceCreateFormView::PaintIllustrationCard(canvas, stack, 1.0f,
++                                                       -fan);
++      HeliumSpaceCreateFormView::PaintIllustrationCard(canvas, stack, 1.0f,
++                                                       fan);
++    }
++    PaintEndCard(
++        canvas, colors, path_.create, path_.icon,
++        gfx::PointF(static_cast<float>(at.x), static_cast<float>(at.y)),
++        at.scale, at.degrees,
++        path_.fill_ms + (base::TimeTicks::Now() - started_).InMillisecondsF(),
++        /*drawn=*/1.0, at.card_opacity);
++  }
++
++  Path path_;
++  base::TimeTicks started_;
++  double progress_ = 0.0;
++};
++
++BEGIN_METADATA(VerticalTabStripRegionView, SwipeCardFlight)
++END_METADATA
++
++// 4b-r2: the page turn's clock and what it holds. The spring is
++// arc_space_motion.h's SheetSlideAt; this only keeps time -- compositor
++// driven, every vsync, like the carousel's -- and remembers what the turn
++// moves so that EndSheetSlide can put it all back.
++class VerticalTabStripRegionView::SheetSlide
++    : public views::AnimationDelegateViews {
++ public:
++  struct Moved {
++    raw_ptr<views::View> view;
++    bool could_process_events = true;
++  };
++
++  explicit SheetSlide(VerticalTabStripRegionView* region)
++      : views::AnimationDelegateViews(region),
++        region_(region),
++        clock_(base::Seconds(kClockSeconds),
++               gfx::LinearAnimation::kDefaultFrameRate,
++               this) {}
++  SheetSlide(const SheetSlide&) = delete;
++  SheetSlide& operator=(const SheetSlide&) = delete;
++  ~SheetSlide() override = default;
++
++  bool active() const { return active_; }
++  // Turned back with Esc (Reverse): on its way to the page, not the sheet.
++  bool reversing() const { return active_ && target_ == 0.0; }
++  SidebarSheetKind kind() const { return kind_; }
++  int width() const { return width_; }
++  HeliumViewSnapshotLayer* picture() const { return picture_.get(); }
++  const std::vector<Moved>& page() const { return page_; }
++  bool was_masked() const { return was_masked_; }
++
++  void Start(SidebarSheetKind kind,
++             std::unique_ptr<HeliumViewSnapshotLayer> picture,
++             std::vector<Moved> page,
++             int width,
++             bool was_masked) {
++    kind_ = kind;
++    picture_ = std::move(picture);
++    page_ = std::move(page);
++    width_ = width;
++    was_masked_ = was_masked;
++    active_ = true;
++    origin_ = {0.0, 0.0};
++    target_ = 1.0;
++    origin_seconds_ = 0.0;
++    snapped_ = false;
++    // The picture was taken in this frame's time, not the user's.
++    cap_first_step_ = true;
++    clock_.Start();
++  }
++
++  // Esc on the way (4b-r2, reviewer diff r0; ⛔ Esc = cancel and restore):
++  // from wherever the turn is, at the speed it has, the same spring aimed
++  // back at the page. False when no turn is running.
++  bool Reverse() {
++    if (!active_) {
++      return false;
++    }
++    if (target_ != 0.0) {
++      const double now = Now();
++      origin_ = StateAt(now);
++      origin_seconds_ = now;
++      target_ = 0.0;
++      snapped_ = false;
++      cap_first_step_ = false;
++    }
++    return true;
++  }
++
++  // Idle again: the clock stopped, the picture gone (its layer leaves the
++  // region's with it); what was moved is the caller's to put back -- read
++  // page() / was_masked() first.
++  void Reset() {
++    active_ = false;
++    if (clock_.is_animating()) {
++      clock_.Stop();
++    }
++    picture_.reset();
++    page_.clear();
++  }
++
++ private:
++  // The clock's ceiling; the turn ends when its spring settles (≈0.31s).
++  static constexpr double kClockSeconds = 10.0;
++
++  double Now() const { return clock_.GetCurrentValue() * kClockSeconds; }
++  // The turn's spring: helium::SheetSlideAt until an Esc re-aims it.
++  helium::SpringState StateAt(double now) const {
++    return helium::StepCriticalSpring(origin_, target_,
++                                      helium::kSpaceSlideOmega,
++                                      std::max(0.0, now - origin_seconds_));
++  }
++
++  // views::AnimationDelegateViews:
++  void AnimationProgressed(const gfx::Animation* animation) override {
++    if (!active_) {
++      return;
++    }
++    const double now = Now();
++    if (cap_first_step_) {
++      cap_first_step_ = false;
++      origin_seconds_ = helium::CapFirstStepOrigin(origin_seconds_, now);
++    }
++    const helium::SpringState state = StateAt(now);
++    if (helium::SpringSettled(state, target_, width_)) {
++      // "Settled" still leaves up to a quarter point: shown there, the
++      // picture sits half a pixel off and the real sheet taking its place
++      // ticks by that much (4b-r2 tvs-r0: the whole form 1px left at the
++      // swap). One frame exactly at rest first, then the swap.
++      if (!snapped_) {
++        snapped_ = true;
++        region_->ApplySheetSlide(target_);
++        return;
++      }
++      if (target_ == 1.0) {
++        region_->EndSheetSlide(/*show=*/true);
++      } else {
++        region_->EndSheetSlide(/*show=*/false, /*spring_lists_back=*/true);
++      }
++      return;
++    }
++    region_->ApplySheetSlide(state.x);
++  }
++  void AnimationEnded(const gfx::Animation* animation) override {
++    // The ceiling, reached only by a spring that never settled.
++    if (active_) {
++      region_->EndSheetSlide(/*show=*/target_ == 1.0);
++    }
++  }
++
++  const raw_ptr<VerticalTabStripRegionView> region_;
++  gfx::LinearAnimation clock_;
++  bool active_ = false;
++  SidebarSheetKind kind_ = SidebarSheetKind::kNone;
++  std::unique_ptr<HeliumViewSnapshotLayer> picture_;
++  std::vector<Moved> page_;
++  int width_ = 0;
++  bool was_masked_ = false;
++  // The spring: from |origin_| at |origin_seconds_| on the clock toward
++  // |target_| (1 the sheet, 0 back to the page).
++  helium::SpringState origin_;
++  double target_ = 1.0;
++  double origin_seconds_ = 0.0;
++  bool cap_first_step_ = false;
++  // The settled spring's one exact frame has been shown (AnimationProgressed).
++  bool snapped_ = false;
++};
++
+ DEFINE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(VerticalTabStripRegionView,
+                                        kAnimationCompletedEvent);
+ 
+@@ -295,6 +930,7 @@
+           &VerticalTabStripRegionView::OnSpaceSwitchActivatedForToday,
+           base::Unretained(this))));
+   carousel_ = std::make_unique<SpaceCarousel>(this, this);
++  sheet_slide_ = std::make_unique<SheetSlide>(this);
+   space_bar_->SetProperty(
+       views::kMarginsKey,
+       gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
+@@ -690,9 +1326,16 @@
+   if (GetFocusManager()) {
+     GetFocusManager()->AddFocusChangeListener(&focus_listener_);
+   }
++#if BUILDFLAG(IS_MAC)
++  // M6 轮4 4b: the two-finger swipe, heard at the window.
++  swipe_input_ = std::make_unique<SwipeInput>(this);
++#endif
+ }
+ 
+ void VerticalTabStripRegionView::RemovedFromWidget() {
++  swipe_input_.reset();
++  // 4b-r2: a page turn under way puts everything back, opens nothing.
++  EndSheetSlide(/*show=*/false);
+   // M6 轮4: the pictures live in the strip's layer; land before it goes.
+   if (carousel_) {
+     carousel_->Stop();
+@@ -926,10 +1569,26 @@
+   }
+ }
+ 
++void VerticalTabStripRegionView::ReorderChildLayers(ui::Layer* parent_layer) {
++  BaseTabStripRegionView::ReorderChildLayers(parent_layer);
++  // A re-stack puts every view's layer under the ones that are no view's --
++  // the page turn's picture among them -- and a child added mid-turn (the
++  // bar rebuilding for a change made in another window) re-stacks. The card
++  // in flight stays over the picture (reviewer 4b-r5 r0).
++  if (card_flight_ && card_flight_->GetVisible() && card_flight_->layer() &&
++      card_flight_->layer()->parent() == parent_layer) {
++    parent_layer->StackAtTop(card_flight_->layer());
++  }
++}
++
+ void VerticalTabStripRegionView::OnBoundsChanged(
+     const gfx::Rect& previous_bounds) {
+   BaseTabStripRegionView::OnBoundsChanged(previous_bounds);
+-  // M6 轮4: the carousel's pictures were taken at the old width.
++  // M6 轮4: the carousel's pictures were taken at the old width -- and a
++  // page turn's sheet picture (4b-r2): the real sheet goes up at once.
++  if (previous_bounds.width() != width()) {
++    EndSheetSlide(/*show=*/true);
++  }
+   if (carousel_ && previous_bounds.width() != width()) {
+     carousel_->Stop();
+   }
+@@ -986,6 +1645,10 @@
+ }
+ 
+ void VerticalTabStripRegionView::OnCurrentSpaceWillChange(int direction) {
++  // 4b-r2: a switch while a page turn is bringing a sheet in finds the
++  // sheet up -- the release had committed to it (4b-r1's sheet was simply
++  // there by then).
++  EndSheetSlide(/*show=*/true);
+   if (!carousel_) {
+     return;
+   }
+@@ -1104,16 +1767,441 @@
+   }
+ }
+ 
++void VerticalTabStripRegionView::OnCarouselEnds(double past_last,
++                                                double before_first) {
++  UpdateSwipeEndCard(/*last=*/true, past_last);
++  UpdateSwipeEndCard(/*last=*/false, before_first);
++}
++
++void VerticalTabStripRegionView::OnCarouselDragLost() {
++  if (swipe_input_) {
++    swipe_input_->Abort();
++  }
++}
++
++// ---- M6 轮4 4b: the two-finger swipe (tasks/4/brief.md §1 4b, §3) ----
++
++bool VerticalTabStripRegionView::CanStartSpaceSwipe(const gfx::Point& point) {
++  // 4b-r2: nor while a page turn is still bringing a sheet in -- it is as
++  // good as up.
++  if (!carousel_ || !GetVisible() || sheet_ || IsSheetSliding() ||
++      !GetLocalBounds().Contains(point)) {
++    return false;
++  }
++  // ⛔ The top row is the window's drag area and the traffic lights' (brief
++  // 4b-1; Arc not measured there). Everything below it is the sidebar's --
++  // the address row, the favorites, the lists, the blank, the bar (Arc g43
++  // / g44 s1).
++  if (arc_top_container_ && arc_top_container_->GetVisible() &&
++      point.y() < arc_top_container_->bounds().bottom()) {
++    return false;
++  }
++  // Gates (brief 4b-10): judged when the gesture begins; a gesture that
++  // does not pass is left alone whole, momentum included.
++  if (state_controller_->GetCollapseState() !=
++          tabs::VerticalTabStripCollapseState::kExpanded ||
++      (resize_area_ && resize_area_->is_resizing()) ||
++      views::MenuController::GetActiveInstance()) {
++    return false;
++  }
++  if (browser_view()) {
++    if (const HeliumSidebarMenuView* const menu =
++            browser_view()->helium_sidebar_menu();
++        menu && menu->GetVisible()) {
++      return false;
++    }
++  }
++  if (const WorkspaceSidebarView* const sidebar = WorkspaceDragSidebar();
++      sidebar && sidebar->IsBusyForSpaceSwipe()) {
++    return false;
++  }
++  if (const UnpinnedTabContainerView* const today = TodayDropContainer();
++      today && today->IsDragging()) {
++    return false;
++  }
++  return true;
++}
++
++void VerticalTabStripRegionView::OnSpaceSwipeBegin() {
++  if ((!carousel_ || !carousel_->BeginDrag()) && swipe_input_) {
++    swipe_input_->Abort();
++  }
++}
++
++void VerticalTabStripRegionView::OnSpaceSwipeUpdate(double finger_dx) {
++  if (carousel_) {
++    carousel_->UpdateDrag(finger_dx);
++  }
++}
++
++void VerticalTabStripRegionView::OnSpaceSwipeEnd(int flick) {
++  if (!carousel_) {
++    return;
++  }
++  switch (carousel_->EndDrag(flick)) {
++    case SpaceCarousel::DragEnd::kOpenCreate:
++      // 4b-r2: the page turns on to the left and the form follows it in from
++      // the right (Arc g42 seg4 just put the form up and sent the ⊕ back
++      // out -- the user's 「原路返回」).
++      StartSheetSlide(SidebarSheetKind::kCreateForm);
++      break;
++    case SpaceCarousel::DragEnd::kOpenManage:
++      // Its mirror (4b-r1): to the right, Manage in from the left.
++      StartSheetSlide(SidebarSheetKind::kManage);
++      break;
++    case SpaceCarousel::DragEnd::kSettle:
++      break;
++  }
++}
++
++void VerticalTabStripRegionView::OnSpaceSwipeCancel() {
++  if (carousel_) {
++    carousel_->CancelDrag();
++  }
++}
++
++void VerticalTabStripRegionView::UpdateSwipeEndCard(bool last, double past) {
++  raw_ptr<SwipeEndCard>& card = last ? swipe_plus_ : swipe_manage_;
++  if (!card) {
++    if (past <= 0.0) {
++      return;
++    }
++    card = AddChildView(std::make_unique<SwipeEndCard>(
++        last ? SwipeEndCard::End::kLast : SwipeEndCard::End::kFirst));
++    card->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  }
++  // Along its edge, centred on the sidebar's height (Arc's ⊕: on the
++  // window's, 541.75 of 1084pt).
++  const gfx::Rect bounds(last ? width() - SwipeEndCard::kWidth : 0,
++                         (height() - SwipeEndCard::kHeight) / 2,
++                         SwipeEndCard::kWidth, SwipeEndCard::kHeight);
++  if (card->bounds() != bounds) {
++    card->SetBoundsRect(bounds);
++  }
++  // Manage's carries the current space's icon (4b-r5).
++  if (!last) {
++    card->SetIcon(CurrentSpaceIcon());
++  }
++  card->SetPast(past, carousel_ && carousel_->IsDragging());
++}
++
++std::string VerticalTabStripRegionView::CurrentSpaceIcon() {
++  helium_workspace::WorkspaceTabController* const controller =
++      CarouselController();
++  if (!controller || !browser_view()) {
++    return std::string();
++  }
++  const helium_workspace::WorkspaceService* const service =
++      helium_workspace::WorkspaceServiceFactory::GetForProfile(
++          browser_view()->GetProfile());
++  const helium_workspace::WorkspaceSpace* const space =
++      service ? service->FindSpaceById(controller->current_space_id())
++              : nullptr;
++  return space ? space->icon : std::string();
++}
++
++// ---- M6 轮4 4b-r2: the page turn (arc_space_motion.h SheetSlideAt; the
++// card's flight through it since 4b-r5, SwipeCardFlightAt) ----
++
++bool VerticalTabStripRegionView::IsSheetSliding() const {
++  return sheet_slide_ && sheet_slide_->active();
++}
++
++std::unique_ptr<HeliumViewSnapshotLayer>
++VerticalTabStripRegionView::BuildSheetPicture(
++    SidebarSheetKind kind,
++    std::optional<gfx::PointF>* landing) {
++  if (!browser_view() || !layer() || width() <= 0) {
++    return nullptr;
++  }
++  // Where ShowSidebarSheet puts the sheet: in the address row's place (it
++  // hides the row; the top row's gap stays above) down to the bar, less the
++  // gap the bar keeps above whatever stands over it -- the flex layout
++  // collapses the sheet's zero margin and the bar's kBottomContainerGap
++  // into the larger. (4b's stand-in reached the bar itself: 2pt long.)
++  const int top = arc_address_row_ && arc_address_row_->GetVisible()
++                      ? arc_address_row_->y()
++                      : (arc_top_container_
++                             ? arc_top_container_->bounds().bottom() +
++                                   kArcTopContainerGap
++                             : 0);
++  const int bottom = space_bar_ && space_bar_->GetVisible()
++                         ? space_bar_->y() - kBottomContainerGap
++                         : height();
++  if (bottom <= top) {
++    return nullptr;
++  }
++  // A copy of the sheet, in the widget for one paint and gone again in this
++  // same task: no frame shows it, and it takes no focus and arms no Escape
++  // (SetForPicture).
++  std::unique_ptr<views::View> sheet;
++  HeliumSpaceManageView* manage_copy = nullptr;
++  if (kind == SidebarSheetKind::kCreateForm) {
++    auto form = std::make_unique<HeliumSpaceCreateFormView>(
++        base::DoNothing(), base::DoNothing(), base::DoNothing());
++    form->SetForPicture();
++    // 4b-r5: the illustration is the flight's -- its front card the one in
++    // flight, its back two fanning open under it.
++    if (landing) {
++      form->SetIllustrationHidden();
++    }
++    sheet = std::move(form);
++  } else {
++    auto manage = std::make_unique<HeliumSpaceManageView>(
++        browser_view()->browser(), base::DoNothing(), base::DoNothing(),
++        base::DoNothing(), base::DoNothing());
++    manage->SetForPicture();
++    manage_copy = manage.get();
++    sheet = std::move(manage);
++  }
++  sheet->SetProperty(views::kViewIgnoredByLayoutKey, true);
++  views::View* const copy = AddChildView(std::move(sheet));
++  copy->SetBounds(0, top, width(), bottom - top);
++  copy->DeprecatedLayoutImmediately();
++  // 4b-r5: where the card in flight lands, in this view's coordinates --
++  // the form's front card, or the current space's icon slot in Manage
++  // (left empty in the picture; none when its row is out of sight).
++  if (landing) {
++    if (kind == SidebarSheetKind::kCreateForm) {
++      gfx::PointF at =
++          HeliumSpaceCreateFormView::IllustrationCentre(copy->size());
++      at.Offset(copy->x(), copy->y());
++      *landing = at;
++    } else if (helium_workspace::WorkspaceTabController* const controller =
++                   CarouselController();
++               controller && manage_copy) {
++      const std::string current = controller->current_space_id();
++      if (std::optional<gfx::PointF> at = manage_copy->IconCentreFor(current)) {
++        manage_copy->HideIconForPicture(current);
++        at->Offset(copy->x(), copy->y());
++        *landing = at;
++      }
++    }
++  }
++  std::unique_ptr<HeliumViewSnapshotLayer> picture =
++      HeliumViewSnapshotLayer::Capture(copy, copy->GetLocalBounds(),
++                                       layer()->device_scale_factor());
++  RemoveChildViewT(copy);
++  if (!picture) {
++    return nullptr;
++  }
++  picture->layer()->SetBounds(gfx::Rect(0, top, width(), bottom - top));
++  layer()->Add(picture->layer());
++  return picture;
++}
++
++void VerticalTabStripRegionView::StartSheetSlide(SidebarSheetKind kind) {
++  const auto show_now = [this, kind] {
++    if (kind == SidebarSheetKind::kCreateForm) {
++      ShowSpaceCreateForm();
++    } else {
++      ShowSpaceManageSheet();
++    }
++  };
++  if (!sheet_slide_ || IsSheetSliding() || sheet_ || !GetWidget() ||
++      !layer() || width() <= 0) {
++    show_now();
++    return;
++  }
++  // 4b-r5: the card the release was on flies into the sheet.
++  SwipeEndCard* const card = kind == SidebarSheetKind::kCreateForm
++                                 ? swipe_plus_.get()
++                                 : swipe_manage_.get();
++  const bool flies = card && card->GetVisible() && card->solid();
++  std::optional<gfx::PointF> landing;
++  std::unique_ptr<HeliumViewSnapshotLayer> picture =
++      BuildSheetPicture(kind, flies ? &landing : nullptr);
++  if (!picture) {
++    // No picture to slide: the sheet is simply there (4b-r1's way).
++    show_now();
++    return;
++  }
++  // The old page: everything that stands where the sheet will -- the
++  // address row, the strip (favorites and lists, the lists still where the
++  // rubber band has them), the row shadows riding them, and the undo bar /
++  // media capsules / the media hover panel when they are up (reviewer
++  // 4b-r2 diff r0: the panel is its own child of this view). All have
++  // layers; nothing re-lays out while it goes, and none of it takes a click
++  // on its way out.
++  std::vector<SheetSlide::Moved> page;
++  const auto take = [&page](views::View* view) {
++    if (view && view->GetVisible() && view->layer()) {
++      page.push_back({view, view->GetCanProcessEventsWithinSubtree()});
++      view->SetCanProcessEventsWithinSubtree(false);
++    }
++  };
++  for (views::View* view :
++       {static_cast<views::View*>(arc_address_row_.get()),
++        static_cast<views::View*>(tab_strip_view()),
++        static_cast<views::View*>(row_shadow_host_.get()),
++        static_cast<views::View*>(undo_bar_.get()),
++        static_cast<views::View*>(media_strip_.get()),
++        static_cast<views::View*>(media_strip_shadow_.get()),
++        static_cast<views::View*>(media_strip_panel_.get()),
++        static_cast<views::View*>(media_strip_panel_shadow_.get())}) {
++    take(view);
++  }
++  if (media_overlay_stack_ && media_overlay_stack_->GetVisible()) {
++    for (views::View* child : media_overlay_stack_->children()) {
++      take(child);
++    }
++  }
++  // The bar takes the sheet's shape with the release (⚠ at once for now --
++  // its icons making way is 4c, Arc g45 ω≈26).
++  if (space_bar_) {
++    space_bar_->SetFormMode(kind == SidebarSheetKind::kCreateForm
++                                ? WorkspaceSpaceBarView::FormMode::kCreate
++                                : WorkspaceSpaceBarView::FormMode::kManage);
++  }
++  // The picture comes in from beyond one edge and the page goes out over
++  // the other: the sidebar clips both while they move.
++  const bool was_masked = layer()->GetMasksToBounds();
++  layer()->SetMasksToBounds(true);
++  if (flies) {
++    if (!card_flight_) {
++      card_flight_ = AddChildView(std::make_unique<SwipeCardFlight>());
++      card_flight_->SetProperty(views::kViewIgnoredByLayoutKey, true);
++    }
++    card_flight_->SetBoundsRect(GetLocalBounds());
++    gfx::PointF from = card->Centre();
++    from.Offset(card->x(), card->y());
++    // A Manage row out of the list's sight: nowhere to land -- the card
++    // leaves with the page instead.
++    const float way =
++        kind == SidebarSheetKind::kCreateForm ? -1.0f : 1.0f;
++    const gfx::PointF to = landing.value_or(
++        gfx::PointF(from.x() + way * width(), from.y()));
++    card_flight_->Start({kind == SidebarSheetKind::kCreateForm, from, to,
++                         card->icon(), card->FillMs(),
++                         static_cast<float>(width())});
++    // Over the picture and the page alike (and kept there through any
++    // re-stack: ReorderChildLayers).
++    if (card_flight_->layer()->parent() == layer()) {
++      layer()->StackAtTop(card_flight_->layer());
++    }
++    card->SetHeldAway(true);
++  }
++  sheet_slide_->Start(kind, std::move(picture), std::move(page), width(),
++                      was_masked);
++  ApplySheetSlide(0.0);
++}
++
++void VerticalTabStripRegionView::ApplySheetSlide(double progress) {
++  if (!IsSheetSliding() || !sheet_slide_->picture()) {
++    return;
++  }
++  // Create: the page goes on to the left and the form follows it in from
++  // the right -- the way the fingers went. Manage: the mirror.
++  const float way =
++      sheet_slide_->kind() == SidebarSheetKind::kCreateForm ? -1.0f : 1.0f;
++  const float w = static_cast<float>(sheet_slide_->width());
++  const float p = static_cast<float>(progress);
++  const gfx::Transform page = gfx::Transform::MakeTranslation(way * p * w, 0.0f);
++  for (const SheetSlide::Moved& moved : sheet_slide_->page()) {
++    if (moved.view->layer()) {
++      moved.view->layer()->SetTransform(page);
++    }
++  }
++  sheet_slide_->picture()->layer()->SetTransform(
++      gfx::Transform::MakeTranslation(-way * (1.0f - p) * w, 0.0f));
++  // 4b-r5: the card flies on the same progress, landing as the sheet does.
++  if (card_flight_ && card_flight_->GetVisible()) {
++    card_flight_->SetProgress(progress);
++  }
++}
++
++bool VerticalTabStripRegionView::CancelSheetSlide() {
++  if (!IsSheetSliding() || !sheet_slide_->Reverse()) {
++    return false;
++  }
++  // The bar goes back with the cancel, as it changed with the release.
++  if (space_bar_ && !sheet_) {
++    space_bar_->SetFormMode(WorkspaceSpaceBarView::FormMode::kNone);
++  }
++  return true;
++}
++
++void VerticalTabStripRegionView::EndSheetSlide(bool show,
++                                               bool spring_lists_back) {
++  if (!IsSheetSliding()) {
++    return;
++  }
++  // Turned back with Esc: no sheet, whatever cuts the turn short.
++  if (sheet_slide_->reversing()) {
++    show = false;
++  }
++  const SidebarSheetKind kind = sheet_slide_->kind();
++  const std::vector<SheetSlide::Moved> page = sheet_slide_->page();
++  const bool was_masked = sheet_slide_->was_masked();
++  // Idle first: what follows (ShowSidebarSheet) comes back through here.
++  sheet_slide_->Reset();
++  if (show) {
++    // The real sheet where the picture stood -- ShowSidebarSheet lands the
++    // carousel (the lists back at rest, the cards away) and hides the old
++    // page, all before the next frame; the card in flight has just landed
++    // where the sheet's own takes over.
++    if (kind == SidebarSheetKind::kCreateForm) {
++      ShowSpaceCreateForm();
++    } else {
++      ShowSpaceManageSheet();
++    }
++  } else if (!sheet_) {
++    // Turned back all the way: the lists the release left on the rubber band
++    // go home like any release short of the disc, the disc riding out on
++    // their edge. Dropped (the sidebar going, another sheet coming): at once.
++    if (carousel_) {
++      if (spring_lists_back) {
++        carousel_->ReleaseHold();
++      } else {
++        carousel_->Stop();
++      }
++    }
++    if (space_bar_) {
++      space_bar_->SetFormMode(WorkspaceSpaceBarView::FormMode::kNone);
++    }
++  }
++  // Everything the turn moved, back where it lives.
++  for (const SheetSlide::Moved& moved : page) {
++    if (moved.view->layer()) {
++      moved.view->layer()->SetTransform(gfx::Transform());
++    }
++    moved.view->SetCanProcessEventsWithinSubtree(moved.could_process_events);
++  }
++  // The card: landed (the sheet's own is there now), or -- turned back --
++  // home on its lists' edge, which spring it out from where the flight
++  // brought it back to.
++  if (card_flight_) {
++    card_flight_->Stop();
++  }
++  for (SwipeEndCard* const card : {swipe_plus_.get(), swipe_manage_.get()}) {
++    if (card) {
++      card->SetHeldAway(false);
++    }
++  }
++  if (layer()) {
++    layer()->SetMasksToBounds(was_masked);
++  }
++  // Back on the page: whatever was held off during the turn (a media capsule
++  // that arrived meanwhile) comes up now. With the sheet up there is none.
++  if (!sheet_) {
++    UpdateMediaStripVisibility();
++  }
++}
++
+ void VerticalTabStripRegionView::ShowUndoBarForAction(
+     const std::u16string& label,
+     base::OnceClosure on_undo) {
+-  if (undo_bar_ && !sheet_) {
++  // 4b-r2: nor while a page turn brings a sheet in (it would stand, unmoved,
++  // under the incoming sheet; reviewer 4b-r2 diff r1).
++  if (undo_bar_ && !sheet_ && !IsSheetSliding()) {
+     undo_bar_->ShowForAction(label, std::move(on_undo));
+   }
+ }
+ 
+ void VerticalTabStripRegionView::ShowUndoBarForWatermark(SessionID watermark) {
+-  if (undo_bar_ && !sheet_) {
++  // 4b-r2: nor while a page turn brings a sheet in (it would stand, unmoved,
++  // under the incoming sheet; reviewer 4b-r2 diff r1).
++  if (undo_bar_ && !sheet_ && !IsSheetSliding()) {
+     undo_bar_->ShowForWatermark(watermark);
+   }
+ }
+@@ -1121,7 +2209,9 @@
+ void VerticalTabStripRegionView::ShowUndoBarForTurnIntoSpace(
+     const std::u16string& folder_title,
+     base::OnceClosure on_undo) {
+-  if (undo_bar_ && !sheet_) {
++  // 4b-r2: nor while a page turn brings a sheet in (it would stand, unmoved,
++  // under the incoming sheet; reviewer 4b-r2 diff r1).
++  if (undo_bar_ && !sheet_ && !IsSheetSliding()) {
+     undo_bar_->ShowForAction(
+         l10n_util::GetStringFUTF16(IDS_HELIUM_WS_TURNED_INTO_SPACE_BODY,
+                                    folder_title),
+@@ -1132,7 +2222,9 @@
+ void VerticalTabStripRegionView::ShowMovedToSpaceBar(
+     const std::u16string& space_name,
+     base::OnceClosure on_go) {
+-  if (undo_bar_ && !sheet_) {
++  // 4b-r2: nor while a page turn brings a sheet in (it would stand, unmoved,
++  // under the incoming sheet; reviewer 4b-r2 diff r1).
++  if (undo_bar_ && !sheet_ && !IsSheetSliding()) {
+     undo_bar_->ShowForOffer(
+         l10n_util::GetStringFUTF16(IDS_HELIUM_WS_ENTRY_MOVED_BODY, space_name),
+         l10n_util::GetStringUTF16(IDS_HELIUM_WS_ENTRY_MOVED_GO),
+@@ -1143,7 +2235,9 @@
+ void VerticalTabStripRegionView::ShowUndoBarForFolderDelete(
+     const std::u16string& folder_title,
+     base::OnceClosure on_undo) {
+-  if (undo_bar_ && !sheet_) {
++  // 4b-r2: nor while a page turn brings a sheet in (it would stand, unmoved,
++  // under the incoming sheet; reviewer 4b-r2 diff r1).
++  if (undo_bar_ && !sheet_ && !IsSheetSliding()) {
+     undo_bar_->ShowForAction(
+         l10n_util::GetStringFUTF16(IDS_HELIUM_WS_FOLDER_DELETED_BODY,
+                                    folder_title),
+@@ -1207,6 +2301,9 @@
+ void VerticalTabStripRegionView::ShowSidebarSheet(
+     std::unique_ptr<views::View> sheet,
+     SidebarSheetKind kind) {
++  // 4b-r2: another sheet asked for while a page turn brings one in -- the
++  // turn gives way (its own landing comes through here once it is idle).
++  EndSheetSlide(/*show=*/false);
+   // M6 轮4: the lists are about to be hidden; land whatever was moving.
+   if (carousel_) {
+     carousel_->Stop();
+@@ -1467,6 +2564,9 @@
+     ids.push_back(rows[i]->item_id);
+   }
+   if (ids != overlay_capsule_ids_) {
++    // 4b-r2: a page turn may be carrying these capsules off; it lands
++    // first, its sheet up, so it holds nothing that is about to go.
++    EndSheetSlide(/*show=*/true);
+     // Rebuild on membership change only, same rule as everything else here:
+     // metadata churn updates in place and a pressed button is never deleted
+     // under the pointer.
+@@ -1617,9 +2717,13 @@
+   const int strip_width =
+       width() - 2 * GetLayoutConstant(
+                         LayoutConstant::kVerticalTabStripHorizontalPadding);
++  // 4b-r2: nothing new comes up while a page turn is under way -- a capsule
++  // that arrived mid-turn would stand, unmoved and clickable, under the
++  // incoming sheet (reviewer 4b-r2 diff r1); the turn's landing sets it right.
+   const bool shown =
+-      !sheet_ && helium::ShouldShowSidebarMediaStrip(
+-                     media_strip_controller_->ready_row_count(), strip_width);
++      !sheet_ && !IsSheetSliding() &&
++      helium::ShouldShowSidebarMediaStrip(
++          media_strip_controller_->ready_row_count(), strip_width);
+   media_strip_->SetShown(shown, at_once);
+   // The floating half: capsules for sessions beyond the first -- one shown
+   // flag, one trigger frame, one 200ms fade for all of it (M3.3h). The
+@@ -2122,6 +3226,8 @@
+ }
+ 
+ void VerticalTabStripRegionView::OnTabStripViewWillClear() {
++  // 4b-r2: the strip a page turn is moving is going away.
++  EndSheetSlide(/*show=*/false);
+   new_tab_row_pressed_subscription_ = {};
+   on_animation_update_subscription_.reset();
+   expand_on_hover_enabled_changed_subscription_.reset();
+@@ -2180,7 +3286,11 @@
+     manage_view_->AbortDrag();
+   }
+   // M6 轮4: and the space carousel lands (pitfalls 2b-r1 #4: a fold is no
+-  // RemovedFromWidget, so whatever relies on that has to be named here).
++  // RemovedFromWidget, so whatever relies on that has to be named here) --
++  // a page turn first, its sheet up (it folds with the sidebar, 2b-r1).
++  if (collapsed) {
++    EndSheetSlide(/*show=*/true);
++  }
+   if (collapsed && carousel_) {
+     carousel_->Stop();
+   }
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -33,6 +33,7 @@
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/events/event_handler.h"
+ #include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/point_f.h"
+ #include "ui/views/accessible_pane_view.h"
+ #include "ui/views/controls/resize_area_delegate.h"
+ #include "ui/views/focus/focus_manager.h"
+@@ -159,6 +160,10 @@
+   // (HeliumAddressBarMode::kHidden -- Arc's default shape). Empty otherwise.
+   // BrowserView::UpdateArcAddressBarPlacement() owns what goes in it.
+   views::View* arc_address_row() { return arc_address_row_; }
++  // M6 轮4 4b-r2: lands a page turn now, as if its spring had settled (its
++  // sheet up -- or, turned back with Esc, the page back); nothing when none
++  // runs. For whatever must not start on a page that is leaving (Cmd+L).
++  void LandSheetSlide() { EndSheetSlide(/*show=*/true); }
+ 
+   bool IsPositionInWindowCaption(const gfx::Point& point) override;
+ 
+@@ -215,6 +220,8 @@
+   void OnMouseMoved(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
+   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
++  // M6 轮4 4b-r5: keeps the card in flight over the page turn's picture.
++  void ReorderChildLayers(ui::Layer* parent_layer) override;
+ 
+   void OnTabGroupFocusChanged(
+       std::optional<tab_groups::TabGroupId> new_focused_group_id,
+@@ -391,6 +398,23 @@
+   raw_ptr<views::View> row_shadow_host_ = nullptr;
+   // M6 轮4: the space switch's motion (decisions 「M6 轮4」④).
+   std::unique_ptr<SpaceCarousel> carousel_;
++  // M6 轮4 4b: the two-finger swipe's input (macOS only) and its two ends'
++  // cards (discs before 4b-r5), riding the lists' edge: past the last space
++  // one of the Create form's illustration cards (Create a Space), before
++  // the first the current space's own (Manage Spaces).
++  class SwipeInput;
++  class SwipeEndCard;
++  std::unique_ptr<SwipeInput> swipe_input_;
++  raw_ptr<SwipeEndCard> swipe_plus_ = nullptr;
++  raw_ptr<SwipeEndCard> swipe_manage_ = nullptr;
++  // 4b-r5: that card in flight through the page turn, from the strip's end
++  // to where it lands in the sheet (made on the first turn; hidden between).
++  class SwipeCardFlight;
++  raw_ptr<SwipeCardFlight> card_flight_ = nullptr;
++  // 4b-r2: the page turn after a release on a filled end card (made in the
++  // constructor, alive as long as this view; idle between turns).
++  class SheetSlide;
++  std::unique_ptr<SheetSlide> sheet_slide_;
+   // 3a-r1: the press metric of the strip's own "+ New Tab" row (the bottom
+   // container wires its copy itself).
+   base::CallbackListSubscription new_tab_row_pressed_subscription_;
+@@ -467,6 +491,55 @@
+   void OnCarouselFrame(float live_dx) override;
+   void OnCarouselBlend(const std::map<std::string, float>& greys) override;
+   void OnCarouselEnded() override;
++  void OnCarouselEnds(double past_last, double before_first) override;
++  void OnCarouselDragLost() override;
++
++  // ---- M6 轮4 4b: the two-finger swipe (tasks/4/brief.md §3) ----
++  // The input (a window-level NSEvent monitor on macOS) asks and reports
++  // through these; the carousel does the moving.
++  // Whether a gesture that begins at |point| (this view's coordinates) is
++  // the sidebar's: below the top row, the sidebar expanded, nothing modal
++  // (a sheet, a drag, a resize, a menu, an inline rename).
++  bool CanStartSpaceSwipe(const gfx::Point& point);
++  void OnSpaceSwipeBegin();
++  void OnSpaceSwipeUpdate(double finger_dx);
++  void OnSpaceSwipeEnd(int flick);
++  void OnSpaceSwipeCancel();
++  // An end's card -- |last|: Create's past the last space, else Manage's
++  // before the first -- for |past| points of 0.5 × finger beyond that end
++  // (both follow the carousel, also on its way back).
++  void UpdateSwipeEndCard(bool last, double past);
++  // The current space's icon ("" for none): what Manage's card carries.
++  std::string CurrentSpaceIcon();
++  // ---- 4b-r2: the page turn (arc_space_motion.h SheetSlideAt)
++  // A release on |kind|'s filled card: the old page -- the address row, the
++  // strip, the row shadows and whatever else stands below the top row --
++  // slides off the way the fingers went, a picture of the sheet slides in
++  // behind it, and (4b-r5) the card flies to where it lands in the sheet;
++  // when the spring settles the real sheet takes the picture's place
++  // (EndSheetSlide).
++  void StartSheetSlide(SidebarSheetKind kind);
++  // Every frame of it: |progress| 0..1 of the way.
++  void ApplySheetSlide(double progress);
++  // Lands it. |show|: the real sheet goes up (the release committed --
++  // also when something cuts the turn short: a switch, a resize, a fold);
++  // false when the sidebar is going away or another sheet is coming, and
++  // whenever the turn was turned back (Esc) -- then |spring_lists_back|: the
++  // turn came home, the lists spring back off the rubber band (else they
++  // land at once).
++  void EndSheetSlide(bool show, bool spring_lists_back = false);
++  // Esc after the release (the swipe monitor asks): turns a running turn
++  // back. False when none runs.
++  bool CancelSheetSlide();
++  // The sheet of |kind| laid out where ShowSidebarSheet will put it, as a
++  // picture added to this view's layer at those bounds; nullptr when it
++  // cannot be taken. |landing| (4b-r5, a card will fly in): set to where
++  // the card lands, in this view's coordinates, its place in the picture
++  // left empty -- unset when there is no such place in sight.
++  std::unique_ptr<HeliumViewSnapshotLayer> BuildSheetPicture(
++      SidebarSheetKind kind,
++      std::optional<gfx::PointF>* landing = nullptr);
++  bool IsSheetSliding() const;
+   void SetMediaStripExpanded(bool expanded);
+   void OnMediaStripPointerLeft();
+   void SyncMediaCapsules();
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.cc
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+@@ -6,8 +6,11 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <limits>
++#include <set>
+ #include <utility>
+ 
++#include "base/auto_reset.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ #include "ui/compositor/layer.h"
+@@ -40,6 +43,8 @@
+ 
+ void SpaceCarousel::OnSwitchWillStart(int direction) {
+   pending_ = false;
++  // Only the switch a release makes carries its gesture on (its ends).
++  gesture_ = committing_;
+   helium_workspace::WorkspaceTabController* const controller =
+       delegate_->CarouselController();
+   TabStripView* const strip = delegate_->CarouselStrip();
+@@ -56,6 +61,14 @@
+     // under it): land and start over from rest.
+     Stop();
+   }
++  if (dragging_) {
++    // 4b: a switch made elsewhere while the fingers are on (a key, the bar,
++    // another window's Move to) wins -- from where the list is. The rest of
++    // the gesture goes nowhere.
++    dragging_ = false;
++    delegate_->OnCarouselDragLost();
++    HoldHere();
++  }
+   // Where the user left the list, for when the space comes back (and for
+   // its picture while it slides out).
+   SaveScroll(from);
+@@ -103,6 +116,15 @@
+   const int from_slot = live_slot_;
+   const int to_slot = wrapping ? from_slot + pending_direction_
+                                : from_slot + (to_index - from_index);
++  wrapping_ = wrapping;
++  if (wrapping) {
++    first_slot_ = std::numeric_limits<int>::min() / 4;
++    last_slot_ = std::numeric_limits<int>::max() / 4;
++  } else {
++    first_slot_ = from_slot - from_index;
++    last_slot_ = first_slot_ +
++                 static_cast<int>(delegate_->CarouselSpaceOrder().size()) - 1;
++  }
+ 
+   // The slots the motion will show: everything between here and there, and
+   // one more the way a moving spring may run on before it turns.
+@@ -147,8 +169,8 @@
+   // or wherever a cross-fade that is still running has got to -- to the new
+   // current in colour and everything else grey.
+   std::map<std::string, float> start;
+-  if (was_active) {
+-    start = BlendAt(now.x);
++  if (was_active && !shown_greys_.empty()) {
++    start = shown_greys_;
+   } else {
+     start[from] = 0.0f;
+   }
+@@ -180,12 +202,22 @@
+ 
+ void SpaceCarousel::Stop() {
+   pending_ = false;
++  gesture_ = false;
++  const bool was_dragging = std::exchange(dragging_, false);
+   if (clock_.is_animating()) {
+     clock_.Stop();
+   }
+   slots_.clear();
+   picture_bottom_ = 0;
+   x_ = target_ = live_slot_;
++  if (was_dragging) {
++    delegate_->OnCarouselDragLost();
++  }
++  if (ends_shown_) {
++    ends_shown_ = false;
++    delegate_->OnCarouselEnds(0.0, 0.0);
++  }
++  shown_greys_.clear();
+   if (!active_) {
+     return;
+   }
+@@ -343,7 +375,10 @@
+     return;
+   }
+   const double width = width_;
+-  const float live_dx = static_cast<float>((live_slot_ - x_) * width);
++  // Past either end the lists give only the rubber band's travel.
++  const double shown =
++      helium::SwipeShownX(x_, first_slot_, last_slot_, width);
++  const float live_dx = static_cast<float>((live_slot_ - shown) * width);
+   strip->SetListOffset(live_dx);
+   // A picture of a longer list than the committed one reaches below the
+   // strip's bottom edge; it slides out whole (every Arc list is as long as
+@@ -352,12 +387,234 @@
+   delegate_->OnCarouselFrame(live_dx);
+   for (auto& [slot, picture] : slots_) {
+     const gfx::Transform transform = gfx::Transform::MakeTranslation(
+-        static_cast<float>((slot - x_) * width), 0.0f);
++        static_cast<float>((slot - shown) * width), 0.0f);
+     for (auto& layer : picture.layers) {
+       layer->layer()->SetTransform(transform);
+     }
+   }
+-  delegate_->OnCarouselBlend(BlendAt(x_));
++  // 4b: how far x is past either end is that end's disc's to show -- in a
++  // gesture's motion only (gesture_).
++  const double past_last =
++      gesture_ ? helium::SwipePastLast(x_, last_slot_, width) : 0.0;
++  const double before_first =
++      gesture_ ? helium::SwipeBeforeFirst(x_, first_slot_, width) : 0.0;
++  if (past_last > 0.0 || before_first > 0.0 || ends_shown_) {
++    ends_shown_ = past_last > 0.0 || before_first > 0.0;
++    delegate_->OnCarouselEnds(past_last, before_first);
++  }
++  shown_greys_ = dragging_ ? DragBlend() : BlendAt(x_);
++  delegate_->OnCarouselBlend(shown_greys_);
++}
++
++bool SpaceCarousel::BeginDrag() {
++  helium_workspace::WorkspaceTabController* const controller =
++      delegate_->CarouselController();
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (pending_ || !controller || !strip || !strip->GetWidget() ||
++      !strip->GetVisible() || !strip->layer() || strip->width() <= 0) {
++    return false;
++  }
++  if (active_ && (wrapping_ || controller->current_space_id() != live_space_ ||
++                  strip->width() != width_)) {
++    // A wrap-around Next / Previous has no bar neighbours to drag toward,
++    // and a motion that no longer shows this list is stale: land first.
++    Stop();
++  }
++  const std::vector<std::string> order = delegate_->CarouselSpaceOrder();
++  if (active_) {
++    // Grabbed mid-slide (Arc g41 at 93%, g44 at 99%): from where the list
++    // is, at rest.
++    if (clock_.is_animating()) {
++      x_ = StateAt(ClockSeconds()).x;
++      clock_.Stop();
++    }
++  } else {
++    const std::string live = controller->current_space_id();
++    const int index = BarIndexOf(live);
++    if (index < 0) {
++      return false;
++    }
++    live_space_ = live;
++    live_slot_ = index;
++    x_ = target_ = live_slot_;
++    width_ = strip->width();
++    picture_bottom_ = 0;
++    wrapping_ = false;
++    blend_start_.clear();
++    blend_end_.clear();
++    shown_greys_ = {{live_space_, 0.0f}};
++    active_ = true;
++  }
++  const int live_index = BarIndexOf(live_space_);
++  if (live_index < 0) {
++    Stop();
++    return false;
++  }
++  first_slot_ = live_slot_ - live_index;
++  last_slot_ = first_slot_ + static_cast<int>(order.size()) - 1;
++  // The live list's scroll position, put back after each neighbour's picture.
++  SaveScroll(live_space_);
++  dragging_ = true;
++  gesture_ = true;
++  drag_start_x_ = x_;
++  cap_first_step_ = false;
++  EnsureDragPictures();
++  Apply();
++  return true;
++}
++
++void SpaceCarousel::UpdateDrag(double finger_dx) {
++  if (!dragging_) {
++    return;
++  }
++  x_ = helium::SwipeDragX(drag_start_x_, finger_dx, width_);
++  EnsureDragPictures();
++  Apply();
++}
++
++SpaceCarousel::DragEnd SpaceCarousel::EndDrag(int flick) {
++  if (!dragging_) {
++    return DragEnd::kSettle;
++  }
++  dragging_ = false;
++  // An end's disc, filled: its sheet opens (Arc g42 for the ⊕; the first
++  // space's end is its mirror, 4b-r1). The lists stay where the rubber band
++  // has them -- the region turns the page on from there, and the sheet's
++  // arrival lands this (4b-r2; 4b / 4b-r1 sprang them back behind a sheet
++  // that was simply there). Short of that a release at an end -- flicked or
++  // not -- lands on the end's own space below.
++  if (helium::SwipeEndSolid(
++          helium::SwipePastLast(x_, last_slot_, width_))) {
++    return DragEnd::kOpenCreate;
++  }
++  if (helium::SwipeEndSolid(
++          helium::SwipeBeforeFirst(x_, first_slot_, width_))) {
++    return DragEnd::kOpenManage;
++  }
++  // |flick| > 0 is the content going right: toward lower slots.
++  const int target = helium::SwipeReleaseTarget(
++      helium::SwipeShownX(x_, first_slot_, last_slot_, width_), live_slot_,
++      -flick, first_slot_, last_slot_);
++  helium_workspace::WorkspaceTabController* const controller =
++      delegate_->CarouselController();
++  const std::string space =
++      target == live_slot_ ? std::string()
++                           : SpaceForSlot(target, live_slot_, live_space_,
++                                          /*wrapping=*/false);
++  if (space.empty() || !controller) {
++    SettleBack();
++    return DragEnd::kSettle;
++  }
++  // The real switch, now: the controller's hooks aim the spring from here.
++  const std::string was_live = live_space_;
++  HoldHere();
++  {
++    const base::AutoReset<bool> committing(&committing_, true);
++    controller->SwitchToSpace(space);
++  }
++  if (live_space_ == was_live) {
++    // It did not happen (the space went away under the fingers): back.
++    SettleBack();
++  }
++  return DragEnd::kSettle;
++}
++
++void SpaceCarousel::CancelDrag() {
++  if (dragging_) {
++    SettleBack();
++  }
++}
++
++void SpaceCarousel::ReleaseHold() {
++  if (active_ && !dragging_ && !pending_ && !clock_.is_animating()) {
++    SettleBack();
++  }
++}
++
++std::map<std::string, float> SpaceCarousel::DragBlend() const {
++  // Within the bar (the ends do not grey the last or the first space).
++  const double shown = std::clamp(x_, static_cast<double>(first_slot_),
++                                  static_cast<double>(last_slot_));
++  std::map<std::string, float> greys;
++  greys[live_space_] =
++      static_cast<float>(std::min(1.0, std::abs(shown - live_slot_)));
++  for (const int slot : {static_cast<int>(std::floor(shown)),
++                         static_cast<int>(std::ceil(shown))}) {
++    const auto it = slots_.find(slot);
++    if (slot == live_slot_ || it == slots_.end()) {
++      continue;
++    }
++    greys[it->second.space_id] =
++        static_cast<float>(std::min(1.0, std::abs(shown - slot)));
++  }
++  return greys;
++}
++
++void SpaceCarousel::EnsureDragPictures() {
++  helium_workspace::WorkspaceTabController* const controller =
++      delegate_->CarouselController();
++  if (!controller) {
++    return;
++  }
++  const double shown =
++      helium::SwipeShownX(x_, first_slot_, last_slot_, width_);
++  std::set<int> wanted;
++  for (const int slot : {static_cast<int>(std::floor(shown)),
++                         static_cast<int>(std::ceil(shown))}) {
++    if (slot != live_slot_ && !slots_.contains(slot) && slot >= first_slot_ &&
++        slot <= last_slot_) {
++      wanted.insert(slot);
++    }
++  }
++  bool taken = false;
++  for (const int slot : wanted) {
++    std::string space =
++        SpaceForSlot(slot, live_slot_, live_space_, /*wrapping=*/false);
++    if (space.empty()) {
++      continue;
++    }
++    // Nothing is committed while the fingers are on, so the neighbour has no
++    // active row either: no white card (Arc g39, the arriving list).
++    Slot picture;
++    picture.space_id = std::move(space);
++    picture.layers = CaptureSpace(picture.space_id);
++    slots_[slot] = std::move(picture);
++    taken = true;
++  }
++  if (taken) {
++    controller->SetViewSpaceOverride(std::string());
++    delegate_->CarouselResyncViews();
++    RestoreLiveViews(live_space_);
++  }
++}
++
++void SpaceCarousel::HoldHere() {
++  origin_ = {x_, 0.0};
++  target_ = x_;
++  origin_seconds_ = 0.0;
++  if (clock_.is_animating()) {
++    clock_.Stop();
++  }
++  clock_.Start();
++}
++
++void SpaceCarousel::SettleBack() {
++  dragging_ = false;
++  blend_start_ = shown_greys_;
++  blend_end_.clear();
++  for (const auto& [space, grey] : blend_start_) {
++    blend_end_[space] = space == live_space_ ? 0.0f : 1.0f;
++  }
++  blend_origin_x_ = x_;
++  origin_ = {x_, 0.0};
++  target_ = live_slot_;
++  origin_seconds_ = 0.0;
++  if (clock_.is_animating()) {
++    clock_.Stop();
++  }
++  clock_.Start();
++  cap_first_step_ = true;
++  Apply();
+ }
+ 
+ std::map<std::string, float> SpaceCarousel::BlendAt(double x) const {
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.h
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.h
+@@ -62,6 +62,14 @@
+     virtual void OnCarouselBlend(const std::map<std::string, float>& greys) = 0;
+     // At rest again: the live list's offset is 0, every picture is gone.
+     virtual void OnCarouselEnded() = 0;
++    // M6 轮4 4b: the swipe's two ends, every frame one of them shows and once
++    // more with (0, 0) when both have gone -- points of 0.5 × finger past the
++    // last space (the ⊕) and before the first (Manage's disc, 4b-r1).
++    virtual void OnCarouselEnds(double past_last, double before_first) = 0;
++    // 4b: something other than the fingers took a drag over (a switch made
++    // elsewhere, a sheet, the sidebar folding): the rest of that gesture must
++    // not reach the carousel.
++    virtual void OnCarouselDragLost() = 0;
+ 
+    protected:
+     virtual ~Delegate() = default;
+@@ -83,6 +91,38 @@
+   // Lands at once: the live list at rest, every picture gone. Safe idle.
+   void Stop();
+ 
++  // ---- M6 轮4 4b: the two-finger swipe (tasks/4/brief.md §3.2) ----
++  // The fingers took the list. A slide that is running stops where it is
++  // -- grabbed (Arc g41 / g44) -- and from rest the drag starts on the
++  // committed space. False when there is no list to take.
++  bool BeginDrag();
++  // The fingers' horizontal travel since BeginDrag, in points, summed as
++  // scrollingDeltaX reports it (> 0: the content right, toward the
++  // previous space).
++  void UpdateDrag(double finger_dx);
++  enum class DragEnd {
++    kSettle,      // springs back, or on to the space it was switched to
++    kOpenCreate,  // released on a filled ⊕ past the last space
++    kOpenManage,  // released on Manage's filled disc before the first
++  };
++  // The fingers lifted. |flick|: the way macOS carried the gesture on, in
++  // the same terms (+1 the content right, −1 left), 0 for a slow release.
++  // A release that leaves the committed space switches right away, so the
++  // address row and the page change on the finish's first frame (Arc g40);
++  // either way the spring starts from rest -- the release's own speed is not
++  // carried (Arc g40 / g41). The two ends' sheets are the region's to open:
++  // for those the lists hold still where the rubber band has them, until
++  // Stop() (4b-r2: the region turns the page on from there).
++  DragEnd EndDrag(int flick);
++  // The system took the gesture away: back to the committed space.
++  void CancelDrag();
++  // 4b-r2: the lists a release on a filled end disc left holding (EndDrag's
++  // kOpenCreate / kOpenManage) go back to the committed space after all --
++  // the page turn to the sheet was turned back with Esc. As a release short
++  // of the disc: the same spring, the disc riding out on their edge.
++  void ReleaseHold();
++  bool IsDragging() const { return dragging_; }
++
+  private:
+   struct Slot {
+     Slot();
+@@ -122,6 +162,17 @@
+   void Apply();
+   // The involved icons' greys at |x|.
+   std::map<std::string, float> BlendAt(double x) const;
++  // 4b: while the fingers are on, the committed space and whichever it is
++  // heading for, each as grey as it is far from where the lists stand.
++  std::map<std::string, float> DragBlend() const;
++  // 4b: pictures for the slots a drag has the lists show.
++  void EnsureDragPictures();
++  // 4b: the spring at rest where the carousel is now (x_, no speed), so a
++  // switch that follows aims from there.
++  void HoldHere();
++  // 4b: springs from rest back to the committed space, the bar back to its
++  // resting look on the way.
++  void SettleBack();
+ 
+   const raw_ptr<Delegate> delegate_;
+   // A clock and nothing more: the spring is evaluated off its elapsed time
+@@ -146,7 +197,32 @@
+   // Set by a (re)aim: its first frame steps the spring by at most
+   // helium::kSpaceSpringMaxFirstStep.
+   bool cap_first_step_ = false;
++  // Where the carousel is. A drag, and the spring that follows it, may take
++  // it past either end: the lists show helium::SwipeShownX of it, the end's
++  // disc (the ⊕, Manage's) rides their edge.
+   double x_ = 0.0;
++  // The slots of the bar's first and last spaces in this motion's numbering
++  // (a wrap-around Next / Previous has no ends: wide open).
++  int first_slot_ = 0;
++  int last_slot_ = 0;
++  bool wrapping_ = false;
++  // 4b: the fingers are on the list; it stood at |drag_start_x_| when they
++  // took it.
++  bool dragging_ = false;
++  double drag_start_x_ = 0.0;
++  // Whether the last frame showed either end (one more report clears it).
++  bool ends_shown_ = false;
++  // 4b-r4 (reviewer diff r0): this motion is a two-finger gesture's -- the
++  // drag, the spring after it, the hold for a page turn, the switch its own
++  // release makes. Only then is x past an end an end's to show: a switch
++  // started anywhere else (a key, the bar) may find x outside the bounds it
++  // has just set -- a second Next before a wrap-around has come home -- and
++  // must not bring up a disc, its wash or its tap.
++  bool gesture_ = false;
++  // EndDrag is making the switch its release asked for.
++  bool committing_ = false;
++  // The greys the bar shows now: where the next motion's cross-fade starts.
++  std::map<std::string, float> shown_greys_;
+   // The sidebar width the pictures were taken at.
+   int width_ = 0;
+   // The lowest bottom edge of any picture, in the strip's coordinates: a
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -95,6 +95,8 @@
+ #include "ui/views/layout/box_layout.h"
+ #include "ui/views/style/typography.h"
+ #include "ui/views/widget/widget.h"
++#include "ui/views/controls/textfield/textfield.h"
++#include "ui/views/focus/focus_manager.h"
+ #include "ui/views/view_utils.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ 
+@@ -940,6 +942,17 @@
+   ScheduleHoverResync();
+ }
+ 
++bool WorkspaceSidebarView::IsBusyForSpaceSwipe() const {
++  if (drag_) {
++    return true;
++  }
++  const views::FocusManager* const focus_manager = GetFocusManager();
++  const views::View* const focused =
++      focus_manager ? focus_manager->GetFocusedView() : nullptr;
++  return focused && Contains(focused) &&
++         views::IsViewClass<views::Textfield>(focused);
++}
++
+ void WorkspaceSidebarView::ResyncToShownSpace() {
+   // ⛔ Both blends' size guards compare entry counts, which two spaces can
+   // share; drop the snapshots outright rather than lerp unrelated rows.
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -131,6 +131,11 @@
+   // photographs it and points them back within one task. Nothing is
+   // painted in between.
+   void ResyncToShownSpace();
++  // M6 轮4 4b: whether a two-finger swipe must leave the sidebar alone -- a
++  // row is being dragged, or one of the rows' names is being edited in
++  // place (the address row's field is not ours: the new tab page focuses it,
++  // and swiping still works there).
++  bool IsBusyForSpaceSwipe() const;
+ 
+   // TabStripModelObserver:
+   void OnTabStripModelChanged(
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.cc
++++ src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.cc
+@@ -226,6 +226,14 @@
+   subtitle_->SetLineHeight(helium::kSpaceFormSubtitleLineHeight);
+   subtitle_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+   subtitle_->SetAutoColorReadabilityEnabled(false);
++  // M6 轮4 4b-r2: the page turn photographs a copy of this form, and the
++  // photograph lends the copy a layer that is not opaque -- label.cc's
++  // subpixel DCHECK aborted on the title (2026-09-30, pos-r0). Same as the
++  // Cancel label; macOS draws text greyscale anyway.
++  for (views::Label* label : {title_.get(), subtitle_.get()}) {
++    label->SetSkipSubpixelRenderingOpacityCheck(true);
++    label->SetSubpixelRenderingEnabled(false);
++  }
+ 
+   icon_button_ = AddChildView(std::make_unique<IconButton>(
+       base::BindRepeating(&HeliumSpaceCreateFormView::OnIconPressed,
+@@ -296,6 +304,53 @@
+   cancel_->SetBoundsRect(l.cancel);
+ }
+ 
++// static
++void HeliumSpaceCreateFormView::PaintIllustrationCard(
++    gfx::Canvas* canvas,
++    const gfx::PointF& centre,
++    float scale,
++    float degrees) {
++  const float card_w = static_cast<float>(helium::kSpaceFormCardWidth) * scale;
++  const float card_h = static_cast<float>(helium::kSpaceFormCardHeight) * scale;
++  const float radius = static_cast<float>(helium::kSpaceFormCardRadius) * scale;
++  canvas->Save();
++  gfx::Transform t;
++  t.Translate(centre.x(), centre.y());
++  t.Rotate(degrees);
++  t.Translate(-centre.x(), -centre.y());
++  canvas->Transform(t);
++  const gfx::RectF card(centre.x() - card_w / 2, centre.y() - card_h / 2,
++                        card_w, card_h);
++  cc::PaintFlags shadow;
++  shadow.setStyle(cc::PaintFlags::kFill_Style);
++  shadow.setAntiAlias(true);
++  shadow.setColor(SkColorSetA(SK_ColorBLACK, 0x22));
++  gfx::RectF shadow_rect = card;
++  shadow_rect.Offset(0, 1.5f * scale);
++  canvas->DrawRoundRect(shadow_rect, radius, shadow);
++  cc::PaintFlags fill;
++  fill.setStyle(cc::PaintFlags::kFill_Style);
++  fill.setAntiAlias(true);
++  fill.setColor(SK_ColorWHITE);
++  canvas->DrawRoundRect(card, radius, fill);
++  cc::PaintFlags inner;
++  inner.setStyle(cc::PaintFlags::kFill_Style);
++  inner.setAntiAlias(true);
++  inner.setColor(SkColorSetRGB(0x9A, 0x9E, 0xA6));
++  gfx::RectF screen = card;
++  screen.Inset(gfx::InsetsF::TLBR(card_h * 0.22f, card_w * 0.18f,
++                                  card_h * 0.30f, card_w * 0.18f));
++  canvas->DrawRoundRect(screen, 2.0f * scale, inner);
++  canvas->Restore();
++}
++
++// static
++gfx::PointF HeliumSpaceCreateFormView::IllustrationCentre(
++    const gfx::Size& size) {
++  return gfx::RectF(helium::ComputeSpaceFormLayout(size).illustration)
++      .CenterPoint();
++}
++
+ void HeliumSpaceCreateFormView::OnPaint(gfx::Canvas* canvas) {
+   views::View::OnPaint(canvas);
+   const ui::ColorProvider* colors = GetColorProvider();
+@@ -306,44 +361,14 @@
+   const SkColor sidebar = colors->GetColor(kColorToolbar);
+ 
+   // The illustration: three white cards fanned out (Arc's stacked-cards
+-  // picture, 65×42, approximated -- decisions 「M6 轮2」§4).
+-  {
+-    const gfx::RectF box(l.illustration);
+-    const float card_w = box.width() * 0.48f;
+-    const float card_h = box.height() * 0.92f;
+-    const gfx::PointF centre = box.CenterPoint();
+-    const float angles[] = {-14.0f, 14.0f, 0.0f};
+-    for (float angle : angles) {
+-      canvas->Save();
+-      gfx::Transform t;
+-      t.Translate(centre.x(), centre.y());
+-      t.Rotate(angle);
+-      t.Translate(-centre.x(), -centre.y());
+-      canvas->Transform(t);
+-      const gfx::RectF card(centre.x() - card_w / 2, box.y() + (box.height() - card_h) / 2,
+-                            card_w, card_h);
+-      cc::PaintFlags shadow;
+-      shadow.setStyle(cc::PaintFlags::kFill_Style);
+-      shadow.setAntiAlias(true);
+-      shadow.setColor(SkColorSetA(SK_ColorBLACK, 0x22));
+-      gfx::RectF shadow_rect = card;
+-      shadow_rect.Offset(0, 1.5f);
+-      canvas->DrawRoundRect(shadow_rect, 4.0f, shadow);
+-      cc::PaintFlags fill;
+-      fill.setStyle(cc::PaintFlags::kFill_Style);
+-      fill.setAntiAlias(true);
+-      fill.setColor(SK_ColorWHITE);
+-      canvas->DrawRoundRect(card, 4.0f, fill);
+-      cc::PaintFlags inner;
+-      inner.setStyle(cc::PaintFlags::kFill_Style);
+-      inner.setAntiAlias(true);
+-      inner.setColor(SkColorSetRGB(0x9A, 0x9E, 0xA6));
+-      gfx::RectF screen = card;
+-      screen.Inset(gfx::InsetsF::TLBR(card_h * 0.22f, card_w * 0.18f,
+-                                      card_h * 0.30f, card_w * 0.18f));
+-      canvas->DrawRoundRect(screen, 2.0f, inner);
+-      canvas->Restore();
+-    }
++  // picture, 65×42, approximated -- decisions 「M6 轮2」§4). 4b-r5: the
++  // page turn's picture leaves it to the card in flight.
++  if (!illustration_hidden_) {
++    const gfx::PointF centre = IllustrationCentre(size());
++    const float fan = static_cast<float>(helium::kSpaceFormCardFan);
++    PaintIllustrationCard(canvas, centre, 1.0f, -fan);
++    PaintIllustrationCard(canvas, centre, 1.0f, fan);
++    PaintIllustrationCard(canvas, centre, 1.0f, 0.0f);
+   }
+ 
+   // The input row: a white, inset field (user 2026-09-05 #2 "白色的输入框
+@@ -404,6 +429,9 @@
+ 
+ void HeliumSpaceCreateFormView::AddedToWidget() {
+   views::View::AddedToWidget();
++  if (for_picture_) {
++    return;
++  }
+   // Escape cancels wherever the focus is (the field handles its own).
+   AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
+   // The caret is in the name field from the first frame (user 2026-09-05).
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.h
++++ src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.h
+@@ -10,9 +10,15 @@
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/size.h"
+ #include "ui/views/controls/textfield/textfield_controller.h"
+ #include "ui/views/view.h"
+ 
++namespace gfx {
++class Canvas;
++}  // namespace gfx
++
+ namespace views {
+ class Button;
+ class Label;
+@@ -58,6 +64,27 @@
+   // Puts the caret in the name field.
+   void FocusNameField();
+ 
++  // M6 轮4 4b-r2: this copy is only photographed -- the page turn's picture
++  // of the form, added to the widget for one paint and taken off again in
++  // the same task. It takes no focus and arms no Escape.
++  void SetForPicture() { for_picture_ = true; }
++  // M6 轮4 4b-r5: that picture leaves the illustration out -- the card the
++  // gesture pulled out of the strip's end lands in the front card's place
++  // while the two back cards fan open under it, all drawn by the flight.
++  void SetIllustrationHidden() { illustration_hidden_ = true; }
++
++  // M6 轮4 4b-r5: one of the illustration's cards (arc_space_form.h), its
++  // centre at |centre|, |scale| of its size, turned |degrees| about that
++  // centre -- the form's own three and the one the strip's end pulls out
++  // are drawn by this, so the card that lands is the card that stays.
++  static void PaintIllustrationCard(gfx::Canvas* canvas,
++                                    const gfx::PointF& centre,
++                                    float scale,
++                                    float degrees);
++  // Where the illustration's centre -- its front card's -- is in a form of
++  // |size|, in the form's own coordinates.
++  static gfx::PointF IllustrationCentre(const gfx::Size& size);
++
+   // views::View:
+   void Layout(PassKey) override;
+   void OnPaint(gfx::Canvas* canvas) override;
+@@ -84,6 +111,8 @@
+   const base::RepeatingClosure on_cancel_;
+   const PickIconCallback on_pick_icon_;
+   std::string icon_;
++  bool for_picture_ = false;
++  bool illustration_hidden_ = false;
+ 
+   raw_ptr<views::Label> title_ = nullptr;
+   raw_ptr<views::Label> subtitle_ = nullptr;
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
++++ src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
+@@ -44,6 +44,8 @@
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/font_list.h"
+ #include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/point_conversions.h"
++#include "ui/gfx/geometry/rect_f.h"
+ #include "ui/gfx/geometry/transform.h"
+ #include "ui/gfx/vector_icon_types.h"
+ #include "ui/views/accessibility/view_accessibility.h"
+@@ -186,8 +188,9 @@
+         icon_image_->SetImage(ui::ImageModel());
+         icon_label_->SetText(base::UTF8ToUTF16(icon_));
+       }
+-      icon_image_->SetVisible(helium_workspace::IsVectorIconRef(icon_));
+-      icon_label_->SetVisible(!icon_.empty() &&
++      icon_image_->SetVisible(!icon_hidden_ &&
++                              helium_workspace::IsVectorIconRef(icon_));
++      icon_label_->SetVisible(!icon_hidden_ && !icon_.empty() &&
+                               !helium_workspace::IsVectorIconRef(icon_));
+       SchedulePaint();
+     }
+@@ -219,6 +222,19 @@
+   // The sheet ended the gesture from outside (Escape, a settle): what is
+   // left of the press is not a drag any more.
+   void Disarm() { armed_ = false; }
++
++  // M6 轮4 4b-r5: in the page turn's picture the row's icon slot is left
++  // empty -- the card pulled out of the strip's start brings it home.
++  void SetIconHidden() {
++    icon_hidden_ = true;
++    icon_label_->SetVisible(false);
++    icon_image_->SetVisible(false);
++    SchedulePaint();
++  }
++  // The icon slot, in this row's coordinates.
++  gfx::RectF IconSlot() const {
++    return gfx::RectF(helium::ComputeSpaceManageRowLayout(width()).icon);
++  }
+   // After a drag the rows have moved under a pointer that sent no exits.
+   // Only ever clears (M3.11-r1): lighting is the synthesized move's job.
+   void ClearStaleHover() {
+@@ -279,7 +295,7 @@
+       fill.setColor(HoverFillFor(this, colors));
+       canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), CornerRadius(), fill);
+     }
+-    if (icon_.empty()) {
++    if (icon_.empty() && !icon_hidden_) {
+       // No icon: the bar's 8pt dot, centred in the slot.
+       const helium::SpaceManageRowLayout l =
+           helium::ComputeSpaceManageRowLayout(width());
+@@ -412,6 +428,7 @@
+   bool menu_open_ = false;
+   bool ghost_ = false;
+   bool away_ = false;
++  bool icon_hidden_ = false;
+   // Between a press on the row and its release.
+   bool armed_ = false;
+   // Where the button went down, in this row's coordinates.
+@@ -681,6 +698,32 @@
+ 
+ HeliumSpaceManageView::~HeliumSpaceManageView() = default;
+ 
++void HeliumSpaceManageView::HideIconForPicture(const std::string& space_id) {
++  for (Row* row : rows_) {
++    if (row->space_id() == space_id) {
++      row->SetIconHidden();
++    }
++  }
++}
++
++std::optional<gfx::PointF> HeliumSpaceManageView::IconCentreFor(
++    const std::string& space_id) {
++  for (Row* row : rows_) {
++    if (row->space_id() != space_id || !row->GetVisible()) {
++      continue;
++    }
++    const gfx::PointF centre =
++        views::View::ConvertRectToTarget(row, this, row->IconSlot())
++            .CenterPoint();
++    // Scrolled out of the list's sight: nowhere to land.
++    if (scroll_ && !scroll_->bounds().Contains(gfx::ToRoundedPoint(centre))) {
++      return std::nullopt;
++    }
++    return centre;
++  }
++  return std::nullopt;
++}
++
+ void HeliumSpaceManageView::OnIconPicked(const std::string& space_id,
+                                          const std::string& icon) {
+   if (service_) {
+@@ -759,6 +802,9 @@
+     }
+   }
+   Rebuild();
++  if (for_picture_) {
++    return;
++  }
+   // Escape cancels (the sheet, or the drag) wherever the focus is.
+   AddAccelerator(ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
+   RequestFocus();
+Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h
++++ src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h
+@@ -18,6 +18,7 @@
+ #include "chrome/browser/ui/views/tabs/common/workspace_space_menu_model.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/gfx/animation/slide_animation.h"
++#include "ui/gfx/geometry/point_f.h"
+ #include "ui/gfx/geometry/rect.h"
+ #include "ui/gfx/geometry/vector2d_f.h"
+ #include "ui/views/animation/animation_delegate_views.h"
+@@ -103,6 +104,17 @@
+   // removes nothing, so no RemovedFromWidget comes -- reviewer 2026-09-17).
+   void AbortDrag() { FinishRowDrag(); }
+ 
++  // M6 轮4 4b-r2 (as 4b had it): this copy is only photographed -- the page
++  // turn's picture of the sheet, added to the widget for one paint and taken
++  // off again in the same task. It takes no focus and arms no Escape.
++  void SetForPicture() { for_picture_ = true; }
++  // M6 轮4 4b-r5: in that picture |space_id|'s row leaves its icon out --
++  // the card the gesture pulled out of the strip's start lands in its slot.
++  void HideIconForPicture(const std::string& space_id);
++  // Where |space_id|'s icon slot is centred, in this view's coordinates;
++  // nullopt when there is no such row or it is scrolled out of sight.
++  std::optional<gfx::PointF> IconCentreFor(const std::string& space_id);
++
+   // The picker's answer for |space_id|: written to the service (the row
+   // re-syncs from there) and the focus comes back here -- the picker
+   // clears it on its way out and a pick runs no closed callback, so
+@@ -246,6 +258,7 @@
+   // deferred Sync() is a no-op re-sync.
+   bool suppress_rebuild_ = false;
+   bool rebuild_pending_ = false;
++  bool for_picture_ = false;
+ 
+   std::unique_ptr<WorkspaceSpaceMenuModel> menu_model_;
+   std::unique_ptr<views::MenuRunner> menu_runner_;
