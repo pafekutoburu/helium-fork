@@ -20,7 +20,12 @@ Today section, real folders). Not affiliated with the upstream project.
   ——月度同步时按名定位，序号每轮都会漂。
 - `patches/series`：末段的 helium-fork 行。
 - `resources/favicons/favicon_ntp_{16,32}.png`、`AGENTS.md`、本文件、`fork_sync.sh`。
-- helium-macos 侧：gitlink、`.gitmodules`（URL→我们的 fork）、`flags.macos.gn`（PCH 关闭 4 行）。
+- helium-macos 侧：gitlink、`.gitmodules`（URL→我们的 fork）、`flags.macos.gn`（PCH 关闭 4 行）、
+  `patches/helium/macos/helium-immersive-fullscreen.patch` 里的 6 个 hunk（2026-10-04 起，152→154 同步时改）。
+  这个平台补丁排在我们的补丁段之后，会碰到我们改过的 Zen 判断、BrowserView 成员区和 mac 源列表，
+  所以其中 5 个 hunk 改成按我们的代码打；第 6 个是全屏过渡结束、解除暂停时，对隐藏侧栏补一次按光标判断。
+  上游再改这个补丁时 merge 会在这里冲突：取上游新版，再照 `tasks/evidence/sync154/port-log.md`
+  的「macOS 块 #448」重做这 6 处。
 
 ## 红线
 

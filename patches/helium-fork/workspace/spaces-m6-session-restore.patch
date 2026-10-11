@@ -2,7 +2,7 @@ Index: src/chrome/browser/prefs/session_startup_pref.cc
 ===================================================================
 --- src.orig/chrome/browser/prefs/session_startup_pref.cc
 +++ src/chrome/browser/prefs/session_startup_pref.cc
-@@ -75,12 +75,13 @@
+@@ -71,12 +71,13 @@ SessionStartupPref::Type SessionStartupP
      return SessionStartupPref::LAST;
    }
  #endif
@@ -26,7 +26,7 @@ Index: src/chrome/browser/sessions/exit_type_service.h
 ===================================================================
 --- src.orig/chrome/browser/sessions/exit_type_service.h
 +++ src/chrome/browser/sessions/exit_type_service.h
-@@ -93,6 +93,14 @@
+@@ -93,6 +93,14 @@ class ExitTypeService : public KeyedServ
  
    std::unique_ptr<CrashedLock> CreateCrashedLock();
  
@@ -45,7 +45,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
 ===================================================================
 --- src.orig/chrome/browser/sessions/session_restore.cc
 +++ src/chrome/browser/sessions/session_restore.cc
-@@ -50,6 +50,7 @@
+@@ -51,6 +51,7 @@
  #include "chrome/browser/search/search.h"
  #include "chrome/browser/sessions/app_session_service.h"
  #include "chrome/browser/sessions/app_session_service_factory.h"
@@ -53,15 +53,15 @@ Index: src/chrome/browser/sessions/session_restore.cc
  #include "chrome/browser/sessions/session_restore_delegate.h"
  #include "chrome/browser/sessions/session_service.h"
  #include "chrome/browser/sessions/session_service_factory.h"
-@@ -74,6 +75,7 @@
+@@ -75,6 +76,7 @@
  #include "chrome/browser/ui/startup/startup_types.h"
  #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_tab_state.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/tabs/tab_strip_model_selection_state.h"
  #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
- #include "chrome/browser/ui/ui_features.h"
-@@ -940,6 +942,7 @@
+@@ -950,6 +952,7 @@ class SessionRestoreImpl : public Browse
      if (last_normal_browser && !startup_tabs_.empty()) {
        browser_to_activate = OpenStartupUrls(last_normal_browser, startup_tabs_);
      }
@@ -69,10 +69,12 @@ Index: src/chrome/browser/sessions/session_restore.cc
  
  #if BUILDFLAG(IS_CHROMEOS)
      ash::BootTimesRecorder::Get()->AddLoginTimeMarker(
-@@ -1014,17 +1017,125 @@
-     std::map<split_tabs::SplitTabId, std::vector<tabs::TabInterface*>>
-         tabs_by_split_id;
+@@ -1044,20 +1047,112 @@ class SessionRestoreImpl : public Browse
+                  did_show_browser);
+     };
  
+-    if (restoring_into_empty_browser &&
+-        !window.tabs[selected_tab_index]->navigations.empty()) {
 +    // helium-fork 2a-r7 (user 2026-09-07 #2: after every restart the Ctrl+Tab
 +    // HUD held a second card -- always the first Today row, whatever site it
 +    // was). TabStripModel::InsertTabAtImpl makes the first tab to enter an
@@ -88,19 +90,21 @@ Index: src/chrome/browser/sessions/session_restore.cc
 +    //   * with startup tabs, the blank New Tab page the startup pass will
 +    //     reuse -- the window's own, or one minted here when it has none;
 +    //   * with no startup tabs ("continue where you left off"), the session's
-+    //     own selected tab, which ShowBrowser is about to load regardless.
++    //     own selected tab, which ShowBrowser is about to load regardless --
++    //     what Chromium 154 now does by itself for every restore into an empty
++    //     strip (kept below as the default case).
 +    // Everything else goes in behind it and stays asleep (⛔ 2a-r5 ①: 重启＝
 +    // Today 行全在、全睡着、点了才加载).
 +    //
-+    // Only TYPE_NORMAL windows get this: a restored popup or app window has
-+    // no sidebar, no Ctrl+Tab HUD (browser_window_features.cc only builds
-+    // those inside its TYPE_NORMAL block) and no business being handed a
-+    // chrome://newtab -- it keeps today's behaviour exactly.
++    // Only TYPE_NORMAL windows get the blank landing: a restored popup or app
++    // window has no sidebar, no Ctrl+Tab HUD (browser_window_features.cc only
++    // builds those inside its TYPE_NORMAL block) and no business being handed
++    // a chrome://newtab -- it keeps upstream's behaviour exactly.
 +
 +    // "With startup tabs" means precisely the case AppendURLsToBrowser reuses
 +    // a blank New Tab page for: its first normal startup tab is one. With
 +    // "open these pages" instead, there is nothing to reuse and nothing to
-+    // mint -- that configuration keeps today's behaviour.
++    // mint -- that configuration keeps upstream's behaviour.
 +    bool startup_is_blank_ntp = false;
 +    for (const StartupTab& startup_tab : startup_tabs_) {
 +      if (startup_tab.type == StartupTab::Type::kFromLastAndUrlsStartupPref) {
@@ -110,11 +114,26 @@ Index: src/chrome/browser/sessions/session_restore.cc
 +          helium_workspace::IsBlankNewTabState(startup_tab.url, 1);
 +      break;
 +    }
-+    const bool strip_was_empty = browser->tab_strip_model()->empty();
-+    const bool land_on_blank = strip_was_empty && startup_is_blank_ntp &&
-+                               browser != browser_ && browser->is_type_normal();
-+    const bool land_on_selected =
-+        strip_was_empty && startup_tabs_.empty() && browser->is_type_normal();
++    const bool land_on_blank =
++        restoring_into_empty_browser && startup_is_blank_ntp &&
++        browser != browser_ &&
++        browser->GetType() == BrowserWindowInterface::TYPE_NORMAL;
++
++    // helium-fork 2a-r5 (user 2026-09-06 #4): with startup tabs to open on
++    // top (the New Tab page / the user's pages), no restored tab is
++    // selected: the selected one would be created *visible* (AddRestoredTab's
++    // initially_hidden = !select) and a visible page loads
++    // (NavigationController::SetActive) -- a page the user did not ask
++    // for. All of them go in hidden and asleep; the startup tab becomes
++    // the active one (OpenStartupUrls) and only then is the window shown
++    // (ShowDeferredBrowsers). With no startup tabs ("continue where you
++    // left off") that page is the one that should load: unchanged.
++    const bool hold_selection = restoring_into_empty_browser &&
++                                !startup_tabs_.empty() && browser != browser_;
++    if (hold_selection) {
++      deferred_show_browsers_.push_back(browser);
++      did_show_browser = true;
++    }
 +
 +    // The session tab that has to be restored first, or -1 for "restore in
 +    // session order". A tab with no navigations at all is skipped by
@@ -135,8 +154,12 @@ Index: src/chrome/browser/sessions/session_restore.cc
 +          break;
 +        }
 +      }
-+    } else if (land_on_selected &&
++    } else if (restoring_into_empty_browser && !hold_selection &&
 +               !window.tabs[selected_tab_index]->navigations.empty()) {
+       // An empty tab strip activates and loads its first insertion. Insert the
+       // selected tab first; later insertions shift it to its saved position.
+-      restore_tab_at_index(selected_tab_index, next_insertion_index,
+-                           /*select=*/true);
 +      first_tab = selected_tab_index;
 +    }
 +
@@ -149,106 +172,30 @@ Index: src/chrome/browser/sessions/session_restore.cc
 +      chrome::AddTabAt(browser, GURL(), /*index=*/0, /*foreground=*/true);
 +    }
 +
-+    // The order the tabs are handed to RestoreTab in. Each still goes to its
-+    // own index, so the strip ends up in session order either way.
-+    std::vector<int> restore_order;
-+    restore_order.reserve(window.tabs.size());
 +    if (first_tab >= 0) {
-+      restore_order.push_back(first_tab);
-+    }
-+    for (int i = 0; i < static_cast<int>(window.tabs.size()); ++i) {
-+      if (i != first_tab) {
-+        restore_order.push_back(i);
-+      }
-+    }
-+
-+    // The session indices already put into the strip, so that each tab can be
-+    // given the index its own session position maps to (see the loop).
-+    std::vector<int> inserted;
-+    inserted.reserve(window.tabs.size());
-+
-     // Anchor both clocks to the current instant so the last active time (a
-     // base::Time) can be mapped onto the TimeTicks timeline WebContents wants.
-     const base::Time now = base::Time::Now();
-     const base::TimeTicks now_ticks = base::TimeTicks::Now();
--    for (int i = 0; i < static_cast<int>(window.tabs.size()); ++i) {
-+    for (int i : restore_order) {
-       const sessions::SessionTab& tab = *(window.tabs[i]);
- 
-       // Loads are scheduled for each restored tab unless the tab is going to
-       // be selected as ShowBrowser() will load the selected tab.
-       bool is_selected_tab =
-           (initial_tab_count == 0) && (i == selected_tab_index);
-+      // helium-fork 2a-r5 (user 2026-09-06 #4): with startup tabs to open on
-+      // top (the New Tab page / the user's pages), no restored tab is
-+      // selected: the selected one is created *visible* (AddRestoredTab's
-+      // initially_hidden = !select) and a visible page loads
-+      // (NavigationController::SetActive) -- a page the user did not ask
-+      // for. All of them go in hidden and asleep; the startup tab becomes
-+      // the active one (OpenStartupUrls) and only then is the window shown
-+      // (ShowDeferredBrowsers). With no startup tabs ("continue where you
-+      // left off") that page is the one that should load: unchanged.
-+      if (is_selected_tab && !startup_tabs_.empty() && browser != browser_) {
-+        is_selected_tab = false;
-+        deferred_show_browsers_.push_back(browser);
-+        did_show_browser = true;
-+      }
- 
-       // Convert the last active time because WebContents needs a TimeTicks.
-       const base::TimeTicks last_active_time_ticks =
-@@ -1033,11 +1144,29 @@
-       // If the browser already has tabs, we want to restore the new ones after
-       // the existing ones. E.g. this happens in Win8 Metro where we merge
-       // windows or when launching a hosted app from the app launcher.
--      int tab_index = i + initial_tab_count;
-+      //
-+      // helium-fork 2a-r7: a tab's index is how many of the tabs *before it in
-+      // the session* are already in the strip -- not its session index. With
-+      // no reordering and no skipped tab the two are the same number, which is
-+      // what upstream's `i + initial_tab_count` computes; they part company
-+      // when a tab is restored out of order (above), and when one is dropped
-+      // for having no navigations at all (RestoreTab returns early; upstream
-+      // relies on the insertion index being clamped to the end, which stops
-+      // being the end once a minted blank page is sitting there).
-+      int placed_before = 0;
-+      for (int done : inserted) {
-+        if (done < i) {
-+          ++placed_before;
-+        }
-+      }
-+      int tab_index = placed_before + initial_tab_count;
-       RestoreTab(tab, browser, is_active_browser, restored_tabs, new_group_ids,
-                  &tabs_by_split_id, tab_index, is_selected_tab,
-                  last_active_time_ticks, tab.last_active_time,
-                  did_show_browser);
-+      if (!tab.navigations.empty()) {
-+        inserted.push_back(i);  // RestoreTab's only early return
-+      }
++      restore_tab_at_index(
++          first_tab, next_insertion_index,
++          /*select=*/first_tab == selected_tab_index && !hold_selection);
      }
- 
-       for (const auto& pair : tabs_by_split_id) {
-@@ -1048,6 +1177,13 @@
-           tab_index_list.push_back(
-               browser->GetTabStripModel()->GetIndexOfTab(tab));
-         }
-+        // helium-fork 2a-r7: these are pushed in *restore* order, which is no
-+        // longer ascending (see restore_order above), and RestoreSplit CHECKs
-+        // that what it is handed is sorted. Sorting is the identity whenever
-+        // the order was not changed, the two tabs keep their own indices
-+        // either way, and RestoreSplit's own comment says its pivot
-+        // (indices[0]) does not matter. This list has no other consumer.
-+        std::ranges::sort(tab_index_list);
- 
-         // The number of supported split tabs is 2. Do not attempt to restore
-         // more than this to future proof it.
-@@ -1142,6 +1278,16 @@
+     for (int source_index = 0;
+          source_index < static_cast<int>(window.tabs.size()); ++source_index) {
+       if (window.tabs[source_index]->navigations.empty()) {
+         continue;
+       }
+-      if (!restoring_into_empty_browser ||
+-          source_index != selected_tab_index) {
++      if (source_index != first_tab) {
+         restore_tab_at_index(source_index, next_insertion_index,
+                              /*select=*/false);
+       }
+@@ -1169,6 +1264,16 @@ class SessionRestoreImpl : public Browse
                               web_contents));
    }
  
 +  // helium-fork 2a-r5: the windows RestoreTab held back, shown now that the
 +  // startup tabs are in (see there).
 +  void ShowDeferredBrowsers() {
-+    for (Browser* browser : deferred_show_browsers_) {
++    for (BrowserWindowInterface* browser : deferred_show_browsers_) {
 +      browser->GetWindow()->Show();
 +      BrowserInitState::From(browser)->set_is_session_restore(false);
 +    }
@@ -256,9 +203,9 @@ Index: src/chrome/browser/sessions/session_restore.cc
 +  }
 +
    void RestoreSplitTabVisualData(
-       Browser* browser,
+       BrowserWindowInterface* browser,
        const std::vector<std::unique_ptr<sessions::SessionSplitTab>>&
-@@ -1295,6 +1441,31 @@
+@@ -1364,6 +1469,31 @@ class SessionRestoreImpl : public Browse
          continue;
        }
  #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
@@ -273,7 +220,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
 +      // shows, so 2a-r1's version of this never matched and a blank tab
 +      // piled up per launch.
 +      if (is_first_tab && helium_workspace::IsBlankNewTabState(url, 1)) {
-+        TabStripModel* const model = browser->tab_strip_model();
++        TabStripModel* const model = browser->GetTabStripModel();
 +        int blank_ntp = -1;
 +        for (int i = 0; i < model->count() && blank_ntp < 0; ++i) {
 +          if (helium_workspace::IsBlankNewTabContents(
@@ -290,12 +237,12 @@ Index: src/chrome/browser/sessions/session_restore.cc
        int add_types = AddTabTypes::ADD_FORCE_INDEX;
        if (is_first_tab) {
          add_types |= AddTabTypes::ADD_ACTIVE;
-@@ -1413,6 +1584,8 @@
+@@ -1486,6 +1616,8 @@ class SessionRestoreImpl : public Browse
  
    // Set of URLs to open in addition to those restored from the session.
    StartupTabs startup_tabs_;
 +  // helium-fork 2a-r5: windows whose Show() waits for the startup tabs.
-+  std::vector<raw_ptr<Browser>> deferred_show_browsers_;
++  std::vector<raw_ptr<BrowserWindowInterface>> deferred_show_browsers_;
  
    // When synchronous we run a nested run loop. To avoid creating windows
    // from the nested run loop (which can make exiting the nested message
@@ -303,11 +250,8 @@ Index: src/chrome/browser/sessions/session_restore_delegate.cc
 ===================================================================
 --- src.orig/chrome/browser/sessions/session_restore_delegate.cc
 +++ src/chrome/browser/sessions/session_restore_delegate.cc
-@@ -12,11 +12,14 @@
- #include "base/compiler_specific.h"
- #include "base/metrics/field_trial.h"
- #include "base/strings/string_util.h"
--#include "chrome/browser/performance_manager/public/background_tab_loading_policy.h"
+@@ -15,8 +15,12 @@
+ #include "chrome/browser/performance_manager/public/background_tab_loading_policy.h"
  #include "chrome/browser/sessions/session_restore_stats_collector.h"
  #include "chrome/common/url_constants.h"
 +#include "components/favicon/content/content_favicon_driver.h"
@@ -319,24 +263,19 @@ Index: src/chrome/browser/sessions/session_restore_delegate.cc
  #include "content/public/browser/web_contents.h"
  
  namespace {
-@@ -93,12 +96,45 @@
+@@ -107,6 +111,48 @@ void SessionRestoreDelegate::RestoreTabs
            SessionRestoreStatsCollector::UmaStatsReportingDelegate>())
        ->TrackTabs(tabs);
  
--  std::vector<content::WebContents*> web_contents_vector;
--  web_contents_vector.reserve(tabs.size());
--  for (const auto& tab : tabs) {
--    CHECK(tab.contents());
--    web_contents_vector.push_back(tab.contents());
-+  // helium-fork 2a-r5 (user 2026-09-06 #4): restored tabs stay asleep. The
-+  // background policy (ScheduleLoadForRestoredTabs) would load them one after
-+  // another behind the user's back; here a restored tab is a sidebar row with
-+  // a title, an icon and a space, and its page loads when the row is clicked
-+  // (activation calls LoadIfNecessary). The selected tab is loaded by
-+  // SessionRestoreImpl::ShowBrowser regardless. The archive countdown keeps
-+  // running from the restored last-active time (workspace_archive_policy.h).
-+  // Arc's sidebar items are data the same way, the page arriving on click
-+  // (not measured this round: Arc had no window open).
++  // helium-fork 2a-r5 (user 2026-09-06 #4): restored tabs stay asleep -- a
++  // restored tab is a sidebar row with a title, an icon and a space, and its
++  // page loads when the row is clicked (activation calls LoadIfNecessary).
++  // Until Chromium 154 that meant dropping ScheduleLoadForRestoredTabs here;
++  // 154 hands the policy only the visible tabs (the selected one, which
++  // SessionRestoreImpl::ShowBrowser loads regardless, and its split partner),
++  // so upstream's scheduling below already leaves the rest asleep. The
++  // archive countdown keeps running from the restored last-active time
++  // (workspace_archive_policy.h).
 +
 +  // helium-fork 2a-r6 (user 2026-09-06 #2b): ask for each restored tab's
 +  // stored favicon. A row's icon comes from its NavigationEntry
@@ -368,15 +307,16 @@ Index: src/chrome/browser/sessions/session_restore_delegate.cc
 +      continue;
 +    }
 +    driver->FetchFavicon(entry->GetURL(), /*is_same_document=*/false);
-   }
--  performance_manager::policies::ScheduleLoadForRestoredTabs(
--      std::move(web_contents_vector));
- }
++  }
++
+   if (tabs_to_load.empty()) {
+     performance_manager::policies::FinishSchedulingRestoredTabs();
+   } else {
 Index: src/chrome/browser/sessions/session_service.cc
 ===================================================================
 --- src.orig/chrome/browser/sessions/session_service.cc
 +++ src/chrome/browser/sessions/session_service.cc
-@@ -586,8 +586,11 @@
+@@ -590,8 +590,11 @@ bool SessionService::RestoreIfNecessary(
          *base::CommandLine::ForCurrentProcess(), profile());
      sessions::TabRestoreService* tab_restore_service =
          TabRestoreServiceFactory::GetForProfileIfExisting(profile());
@@ -394,9 +334,9 @@ Index: src/chrome/browser/ui/browser_ui_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_ui_prefs.cc
 +++ src/chrome/browser/ui/browser_ui_prefs.cc
-@@ -144,6 +144,8 @@
+@@ -152,6 +152,8 @@ void RegisterBrowserUserPrefs(user_prefs
  
-   registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, true);
+   registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
  
 +  registry->RegisterIntegerPref(prefs::kHeliumCrashAutoRestoreCount, 0);
 +
@@ -843,15 +783,15 @@ Index: src/chrome/browser/ui/startup/infobar_utils.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/startup/infobar_utils.cc
 +++ src/chrome/browser/ui/startup/infobar_utils.cc
-@@ -22,6 +22,7 @@
+@@ -29,6 +29,7 @@
  #include "chrome/browser/ui/startup/helium_crash_dialog_controller.h"
  #include "chrome/browser/ui/startup/obsolete_system_infobar_delegate.h"
  #include "chrome/browser/ui/startup/oscryptasync_availability_infobar_delegate.h"
 +#include "chrome/browser/ui/helium_workspace/crash_auto_restore.h"
  #include "chrome/browser/ui/startup/startup_browser_creator.h"
  #include "chrome/browser/ui/startup/startup_types.h"
- #include "chrome/browser/ui/ui_features.h"
-@@ -147,9 +148,17 @@
+ #include "chrome/browser/ui/tabs/tab_strip_model.h"
+@@ -215,9 +216,17 @@ void AddInfoBarsIfNecessary(BrowserWindo
    }
  
    // Web apps should not display the session restore bubble (crbug.com/40800614)
@@ -874,7 +814,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 +++ src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
-@@ -60,6 +60,8 @@
+@@ -64,6 +64,8 @@
  #include "chrome/common/pref_names.h"
  #include "chrome/common/webui_url_constants.h"
  #include "components/custom_handlers/protocol_handler_registry.h"
@@ -882,8 +822,8 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 +#include "chrome/browser/ui/helium_workspace/crash_auto_restore.h"
  #include "components/helium_services/pref_names.h"
  #include "components/prefs/pref_service.h"
- #include "components/signin/public/base/signin_switches.h"
-@@ -480,6 +482,15 @@
+ #include "components/sessions/core/serialized_navigation_entry.h"
+@@ -519,6 +521,15 @@ void StartupBrowserCreatorImpl::Determin
    const bool is_incognito_or_guest = profile_->IsOffTheRecord();
    bool is_post_crash_launch = HasPendingUncleanExit(profile_);
  
@@ -899,7 +839,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
    // Defer adding info bars until the browser window is ready. The observer
    // will delete itself once the infobars are added.
    // It is safe to store Profile* in the callback as callback will be destroyed
-@@ -540,6 +551,9 @@
+@@ -579,6 +590,9 @@ void StartupBrowserCreatorImpl::Determin
    if (is_post_crash_launch) {
      behavior_options |= IS_POST_CRASH_LAUNCH;
    }
@@ -909,8 +849,8 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
    if (command_line_->HasSwitch(switches::kOpenInNewWindow)) {
      behavior_options |= HAS_NEW_WINDOW_SWITCH;
    }
-@@ -572,6 +586,18 @@
-   Browser* browser = RestoreOrCreateBrowser(
+@@ -617,6 +631,18 @@ void StartupBrowserCreatorImpl::Determin
+   BrowserWindowInterface* browser = RestoreOrCreateBrowser(
        tabs, behavior, restore_options, process_startup, is_post_crash_launch);
  
 +  // helium-fork T027: the restore just took the place of the user pressing
@@ -928,9 +868,9 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
    tab_groups::MaybeShowSharedTabGroupVersionOutOfDateModal(browser);
    tab_groups::MaybeShowSharedTabGroupVersionUpToDateToast(browser);
  
-@@ -745,10 +771,12 @@
+@@ -790,10 +816,12 @@ BrowserWindowInterface* StartupBrowserCr
      bool is_post_crash_launch) {
-   Browser* browser = nullptr;
+   BrowserWindowInterface* browser = nullptr;
    if (behavior == BrowserOpenBehavior::SYNCHRONOUS_RESTORE) {
 -    // It's worth noting that this codepath is not hit by crash restore
 -    // because we want to avoid a crash restore loop, so we don't
@@ -945,7 +885,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
      if (ShouldRestoreApps(StartupBrowserCreator::WasRestarted(), profile_)) {
        restore_options |= SessionRestore::RESTORE_APPS;
      }
-@@ -811,12 +839,27 @@
+@@ -856,12 +884,27 @@ StartupBrowserCreatorImpl::DetermineBrow
      return BrowserOpenBehavior::NEW;
    }
  
@@ -983,7 +923,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.h
 ===================================================================
 --- src.orig/chrome/browser/ui/startup/startup_browser_creator_impl.h
 +++ src/chrome/browser/ui/startup/startup_browser_creator_impl.h
-@@ -155,7 +155,10 @@
+@@ -155,7 +155,10 @@ class StartupBrowserCreatorImpl {
      IS_POST_CRASH_LAUNCH = (1 << 1),
      HAS_NEW_WINDOW_SWITCH = (1 << 2),
      HAS_CMD_LINE_TABS = (1 << 3),
@@ -999,9 +939,9 @@ Index: src/chrome/common/pref_names.h
 ===================================================================
 --- src.orig/chrome/common/pref_names.h
 +++ src/chrome/common/pref_names.h
-@@ -677,6 +677,14 @@
- inline constexpr char kHeliumMinimalLocationBar[] =
-     "helium.browser.minimal_location_bar";
+@@ -685,6 +685,14 @@ inline constexpr char kHeliumMinimalLoca
+ inline constexpr char kHeliumShowProgressBar[] =
+     "helium.browser.show_progress_bar";
  
 +// An integer pref: how many launches in a row have restored the previous
 +// session after a crash without the run in between proving itself healthy.
@@ -1018,7 +958,7 @@ Index: src/components/sessions/content/session_tab_helper.cc
 ===================================================================
 --- src.orig/components/sessions/content/session_tab_helper.cc
 +++ src/components/sessions/content/session_tab_helper.cc
-@@ -100,6 +100,32 @@
+@@ -100,6 +100,32 @@ void SessionTabHelper::NavigationEntries
    delegate->TabNavigationPathEntriesDeleted(window_id(), session_id());
  }
  
@@ -1055,7 +995,7 @@ Index: src/components/sessions/content/session_tab_helper.h
 ===================================================================
 --- src.orig/components/sessions/content/session_tab_helper.h
 +++ src/components/sessions/content/session_tab_helper.h
-@@ -67,6 +67,7 @@
+@@ -67,6 +67,7 @@ class SESSIONS_EXPORT SessionTabHelper
    void NavigationListPruned(
        const content::PrunedDetails& pruned_details) override;
    void NavigationEntriesDeleted() override;
@@ -1067,7 +1007,7 @@ Index: src/components/sessions/core/command_storage_backend.cc
 ===================================================================
 --- src.orig/components/sessions/core/command_storage_backend.cc
 +++ src/components/sessions/core/command_storage_backend.cc
-@@ -801,6 +801,28 @@
+@@ -801,6 +801,28 @@ CommandStorageBackend::FindLastSessionFi
    return std::nullopt;
  }
  
@@ -1100,7 +1040,7 @@ Index: src/components/sessions/core/command_storage_backend.h
 ===================================================================
 --- src.orig/components/sessions/core/command_storage_backend.h
 +++ src/components/sessions/core/command_storage_backend.h
-@@ -120,6 +120,22 @@
+@@ -120,6 +120,22 @@ class SESSIONS_EXPORT CommandStorageBack
    // Parses out the timestamp from a path pointing to a session file.
    static bool TimestampFromPath(const base::FilePath& path, base::Time& result);
  
@@ -1123,3 +1063,23 @@ Index: src/components/sessions/core/command_storage_backend.h
    // Returns the commands from the last session file.
    ReadCommandsResult ReadLastSessionCommands();
  
+Index: src/chrome/browser/ui/tabs/tab_data.cc
+===================================================================
+--- src.orig/chrome/browser/ui/tabs/tab_data.cc
++++ src/chrome/browser/ui/tabs/tab_data.cc
+@@ -57,9 +57,12 @@ TabData TabData::FromTabInterface(tabs::
+   tab_data.alert_state = tab_alert_controller->GetAlertToShow();
+   tab_data.pinned = tab_interface->IsPinned();
+   tab_data.blocked = tab_interface->IsBlocked();
+-  tab_data.should_dim_favicon =
+-      tab_data.should_show_discard_status ||
+-      IsRestoredTabPendingLoad(tab_interface->GetContents());
++  // helium-fork 2a-r5 / 2a-r6: a restored tab that has not loaded yet is a
++  // sleeping sidebar row -- after a restart every Today row but the one in
++  // front is one, and the user asked for each to wear its own icon
++  // (2026-09-06 #2b). Only a tab the memory saver discarded is dimmed, as
++  // before Helium 0.18 dimmed pending restores as well.
++  tab_data.should_dim_favicon = tab_data.should_show_discard_status;
+ 
+   ThumbnailTabHelper* const thumbnail_tab_helper =
+       ThumbnailTabHelper::From(tab_interface);

@@ -20,7 +20,7 @@ EXPECTED_FORK=81               # 我们的补丁数（series 末段）
 HERE="$(cd "$(dirname "$0")" && pwd)"            # helium-chromium
 PLAT="$(cd "$HERE/.." && pwd)"                   # helium-macos
 SRC="$PLAT/build/src"
-Q() { (cd "$SRC" && quilt --quiltrc - "$@"); }    # alias 不进脚本，显式 --quiltrc -
+Q() { (cd "$SRC" && QUILT_PATCHES="$PLAT/patches" QUILT_SERIES=series.merged QUILT_PATCH_OPTS="--unified --reject-format=unified" quilt --quiltrc - "$@"); }  # alias 不进脚本，显式 --quiltrc -；环境照 devutils/set_quilt_vars.sh（新树没有 .pc 时 quilt 只认这两个变量，2026-10-04）
 say() { printf '\n═══ %s ═══\n' "$*"; }
 
 stage0() {  # 预检 + 备份 ref（⚠ profile 备份和浏览器重启不在这里——见 stage2 提示）
@@ -80,7 +80,7 @@ GUIDE
   say "he merge 生成 series.merged"
   (cd "$PLAT" && zsh -c 'source dev.sh >/dev/null 2>&1 && he merge') || exit 1
   N=$(grep -c . "$PLAT/patches/series.merged"); F=$(grep -c '^helium-fork/' "$PLAT/patches/series.merged")
-  echo "series.merged: 总 $N / fork $F（期望 fork=$EXPECTED_FORK）"
+  echo "series.merged: 总 ${N} / fork ${F}（期望 fork=${EXPECTED_FORK}）"
   [ "$F" = "$EXPECTED_FORK" ] || { echo "⛔ fork 计数不对"; exit 1; }
   echo "→ 下一步: ./fork_sync.sh stage3"
 }
@@ -91,16 +91,22 @@ stage3() {  # 受控重推（⛔ 不用 he setup 的 push -a --refresh）+ 缺�
 import re, sys
 from pathlib import Path
 plat = Path(sys.argv[1]); pd = plat/'patches'; tree = plat/'build/src'
-series = [l.strip() for l in (pd/'series.merged').read_text().splitlines() if l.strip().startswith('helium-fork/')]
-seen, created = {}, {}
-for pn in series:
+# 2026-10-04（152→154）：创建段要认整条 series.merged 里排在前面的任何补丁——上游 Helium 补丁也会创建文件
+# （layout/core、custom-keyboard-shortcuts、frame-radius-helper …），只看我们自己的创建段会把它们全报成缺创建。
+series = [l.strip() for l in (pd/'series.merged').read_text().splitlines() if l.strip() and not l.strip().startswith('#')]
+sec = re.compile(r'^--- (\S+)[^\n]*\n\+\+\+ (\S+)[^\n]*\n(@@ [^\n]*)', re.M)
+created_at, seen = {}, {}   # 文件 → (series 位置, 补丁)：第一个创建它的 / 第一个碰它的 helium-fork 补丁
+for i, pn in enumerate(series):
     txt = (pd/pn).read_text(errors='replace')
-    for m in re.finditer(r'^Index: src/(\S+)\n=+\n--- [^\n]*\n\+\+\+ [^\n]*\n(@@ [^\n]*)', txt, re.M):
-        f, h = m.group(1), m.group(2)
-        seen.setdefault(f, pn)
-        if re.match(r'@@ -0,0 ', h): created.setdefault(f, pn)
-bad = [(f,p) for f,p in seen.items() if f not in created and not (tree/f).exists()]
-print(f"涉及 {len(seen)} 文件，创建段 {len(created)}，缺创建且树上没有: {len(bad)}")
+    for m in sec.finditer(txt):
+        old, new, h = m.groups()
+        if new == '/dev/null': continue                      # 删除段
+        f = re.sub(r'^(?:b|src)/', '', new)
+        if old == '/dev/null' or h.startswith('@@ -0,0 '): created_at.setdefault(f, (i, pn))
+        if pn.startswith('helium-fork/'): seen.setdefault(f, (i, pn))
+bad = [(f, p) for f, (i, p) in seen.items() if not (tree/f).exists() and not (f in created_at and created_at[f][0] <= i)]
+up = sum(1 for f, (i, p) in seen.items() if f in created_at and not created_at[f][1].startswith('helium-fork/'))
+print(f"涉及 {len(seen)} 文件，其中 {up} 个由上游补丁创建，缺创建且树上没有: {len(bad)}")
 for f,p in bad: print(f"  ⛔ {f}  ← 首个属主 {p}（修法见 pitfalls 同步轮第 1 条）")
 sys.exit(1 if bad else 0)
 PY

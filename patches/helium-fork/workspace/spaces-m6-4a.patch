@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -5898,6 +5898,8 @@
+@@ -4352,6 +4352,8 @@ test("helium_workspace_unittests") {
      "helium/arc_space_form_unittest.cc",
      "helium/arc_space_manage.h",
      "helium/arc_space_manage_unittest.cc",
@@ -351,7 +351,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-@@ -555,6 +555,9 @@
+@@ -555,6 +555,9 @@ void WorkspaceTabController::SwitchToSpa
    // -- one wasted pass and a frame of the old space wearing the new card.
    SetCurrentSpace(space_id, direction);
    ActivateSpaceTab(space_id);
@@ -361,7 +361,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    CloseAbandonedBlankTab(previous);
    // 3a-r1: the views snapped their lists in OnCurrentSpaceChanged(), before
    // ActivateSpaceTab had a chance to mint the space's blank page; they snap
-@@ -868,6 +871,7 @@
+@@ -868,6 +871,7 @@ void WorkspaceTabController::FollowMoved
        controller->last_active_by_space_[space_id] = active->GetHandle();
        if (controller != this) {
          controller->SetCurrentSpace(space_id);
@@ -369,7 +369,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
        }
      }
    }
-@@ -950,7 +954,6 @@
+@@ -950,7 +954,6 @@ void WorkspaceTabController::SetCurrentS
    for (Observer& observer : observers_) {
      observer.OnCurrentSpaceWillChange(direction);
    }
@@ -377,7 +377,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    current_space_id_ = space_id;
    browser_window_->GetProfile()->GetPrefs()->SetString(
        prefs::kWorkspaceCurrentSpaceId, space_id);
-@@ -959,6 +962,14 @@
+@@ -959,6 +962,14 @@ void WorkspaceTabController::SetCurrentS
    }
  }
  
@@ -392,7 +392,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
  void WorkspaceTabController::ActivateSpaceTab(const std::string& space_id) {
    TabStripModel* const model = browser_window_->GetTabStripModel();
    if (!model || model->empty()) {
-@@ -1331,6 +1342,7 @@
+@@ -1331,6 +1342,7 @@ void WorkspaceTabController::HandleActiv
    if (service_->FindSpaceById(space)) {
      SetCurrentSpace(space);  // the tab is already active: state only
      last_active_by_space_[space] = handle;
@@ -400,7 +400,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    }
  }
  
-@@ -1972,6 +1984,7 @@
+@@ -1972,6 +1984,7 @@ void WorkspaceTabController::AdoptTabsIn
      }
    }
    SetCurrentSpace(landing, /*direction=*/0);  // a landing, not a switch
@@ -412,7 +412,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
-@@ -85,6 +85,18 @@
+@@ -85,6 +85,18 @@ class WorkspaceTabController : public Ta
      // container's add animation *inside* the carousel (user 2026-09-18
      // recording: the blank page's row growing in from the top).
      virtual void OnSpaceSwitchSettled() {}
@@ -431,7 +431,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    };
  
    WorkspaceTabController(BrowserWindowInterface* browser_window,
-@@ -218,6 +230,24 @@
+@@ -218,6 +230,24 @@ class WorkspaceTabController : public Ta
    // The space this window is looking at. Always names an existing space.
    const std::string& current_space_id() const { return current_space_id_; }
  
@@ -456,7 +456,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    // Makes |space_id| current: the views re-filter, then the space's
    // last-active tab is activated -- or its first tab in strip order, or a
    // fresh new tab page tagged to it (Arc shows an empty content area for a
-@@ -295,12 +325,6 @@
+@@ -295,12 +325,6 @@ class WorkspaceTabController : public Ta
    // the window switches to the restored space.
    void UndoLastDeleteSpace();
  
@@ -469,7 +469,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    void AddObserver(Observer* observer);
    void RemoveObserver(Observer* observer);
  
-@@ -412,11 +436,16 @@
+@@ -412,11 +436,16 @@ class WorkspaceTabController : public Ta
    // |entry_persist_pending_|.
    void PersistWindowEntryBindings();
    // The state half of a switch: the id, the pref, the observers. No tab is
@@ -488,7 +488,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    // SwitchToSpace with an explicit slide direction (Next/Prev wrapping
    // around the ends still slide their own way).
    void SwitchToSpaceInternal(const std::string& space_id, int direction);
-@@ -567,10 +596,11 @@
+@@ -567,10 +596,11 @@ class WorkspaceTabController : public Ta
    std::string turn_undo_origin_space_id_;
    std::vector<std::string> turn_undo_children_;
    std::vector<tabs::TabHandle> turn_undo_tabs_;
@@ -515,7 +515,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
  #include "base/task/sequenced_task_runner.h"
  #include "chrome/browser/ui/helium/arc_space_form.h"
-@@ -96,6 +99,7 @@
+@@ -99,6 +102,7 @@
  #include "ui/views/layout/flex_layout.h"
  #include "ui/views/layout/flex_layout_types.h"
  #include "ui/views/layout/layout_types.h"
@@ -523,7 +523,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "ui/views/view.h"
  #include "ui/views/view_class_properties.h"
  #include "ui/views/view_utils.h"
-@@ -286,7 +290,11 @@
+@@ -289,7 +293,11 @@ VerticalTabStripRegionView::VerticalTabS
            base::Unretained(this)),
        base::BindRepeating(
            &VerticalTabStripRegionView::OnSpaceSwitchSettledForToday,
@@ -535,7 +535,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    space_bar_->SetProperty(
        views::kMarginsKey,
        gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
-@@ -685,6 +693,10 @@
+@@ -693,6 +701,10 @@ void VerticalTabStripRegionView::AddedTo
  }
  
  void VerticalTabStripRegionView::RemovedFromWidget() {
@@ -546,7 +546,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (GetFocusManager()) {
      GetFocusManager()->RemoveFocusChangeListener(&focus_listener_);
    }
-@@ -917,6 +929,10 @@
+@@ -925,6 +937,10 @@ void VerticalTabStripRegionView::Layout(
  void VerticalTabStripRegionView::OnBoundsChanged(
      const gfx::Rect& previous_bounds) {
    BaseTabStripRegionView::OnBoundsChanged(previous_bounds);
@@ -557,7 +557,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // The strip's width gate (helium::kMediaStripMinWidth) rides the sidebar's
    // drag-resize and collapse, both of which land here.
    UpdateMediaStripVisibility();
-@@ -950,31 +966,8 @@
+@@ -958,31 +974,8 @@ void VerticalTabStripRegionView::OnCurre
        today && !today->IsDragging()) {
      today->SnapLayoutToTarget();
    }
@@ -591,7 +591,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  }
  
  void VerticalTabStripRegionView::OnSpaceSwitchSettledForToday() {
-@@ -993,56 +986,109 @@
+@@ -1001,56 +994,109 @@ void VerticalTabStripRegionView::OnSpace
  }
  
  void VerticalTabStripRegionView::OnCurrentSpaceWillChange(int direction) {
@@ -736,7 +736,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    for (HeliumCardShadowView* shadow :
         {pinned_row_shadow_.get(), active_row_shadow_.get()}) {
      if (shadow && shadow->layer()) {
-@@ -1106,8 +1152,7 @@
+@@ -1114,8 +1160,7 @@ void VerticalTabStripRegionView::ShowUnd
  }
  
  bool VerticalTabStripRegionView::IsListSliding() const {
@@ -746,7 +746,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  }
  
  void VerticalTabStripRegionView::ShowSpaceCreateForm() {
-@@ -1162,6 +1207,10 @@
+@@ -1170,6 +1215,10 @@ void VerticalTabStripRegionView::ShowSpa
  void VerticalTabStripRegionView::ShowSidebarSheet(
      std::unique_ptr<views::View> sheet,
      SidebarSheetKind kind) {
@@ -757,7 +757,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    CloseSidebarSheet();
    // Right after the address row, before the tab strip: the flex layout
    // runs children in order, and the sheet takes all the height the hidden
-@@ -2130,6 +2179,11 @@
+@@ -2135,6 +2184,11 @@ void VerticalTabStripRegionView::OnColla
    if (collapsed && manage_view_) {
      manage_view_->AbortDrag();
    }
@@ -792,7 +792,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
  #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
  #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
-@@ -69,7 +73,8 @@
+@@ -70,7 +74,8 @@ class VerticalTabStripRegionView final
      : public BaseTabStripRegionView,
        public views::ResizeAreaDelegate,
        public OmniboxTabHelper::Observer,
@@ -802,7 +802,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    METADATA_HEADER(VerticalTabStripRegionView, BaseTabStripRegionView)
  
   public:
-@@ -380,12 +385,12 @@
+@@ -383,12 +388,12 @@ class VerticalTabStripRegionView final
    // M6-r4: the two row shadows' host. Its layer masks to the strip's
    // x-range widened by the shadow's own overhang and the region's full
    // height (Layout), so a shadow riding the space carousel is clipped where
@@ -820,7 +820,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    // 3a-r1: the press metric of the strip's own "+ New Tab" row (the bottom
    // container wires its copy itself).
    base::CallbackListSubscription new_tab_row_pressed_subscription_;
-@@ -443,17 +448,25 @@
+@@ -446,17 +451,25 @@ class VerticalTabStripRegionView final
    // M6: the window switched space; the Today list reads the current space
    // from the controller, so it just needs a fresh layout.
    void OnCurrentSpaceChangedForToday();
@@ -857,7 +857,7 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
 +++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -72,6 +72,10 @@
+@@ -81,6 +81,10 @@ source_set("impl") {
      # rather than ":common" because they need the complete WorkspaceService
      # type, which is in //chrome/browser/ui -- a dependency ":common" cannot
      # take without a cycle.
@@ -1428,7 +1428,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h
-@@ -124,7 +124,7 @@
+@@ -135,7 +135,7 @@ class TabCollectionAnimatingLayoutManage
    // at once -- no interpolation, no add/remove fade, no host-size tween.
    // A space switch relayouts the Today container wholesale (the leaving
    // space's rows to zero rects, the arriving space's back) and Arc moves
@@ -1441,7 +1441,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -184,8 +184,7 @@
+@@ -190,8 +190,7 @@ class TabStripView::TargetViewsTracker :
  };
  
  TabStripView::TabStripView(TabCollectionNode* collection_node)
@@ -1451,7 +1451,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
        target_views_tracker_(std::make_unique<TargetViewsTracker>(
            collection_node->orientation())) {
    // Paint to a layer and mask to bounds to prevent tabs from overflowing and
-@@ -247,15 +246,14 @@
+@@ -266,15 +265,14 @@ TabStripView::TabStripView(TabCollection
    // layers sit inside this view's (which masks to bounds, so the arriving
    // list is clipped at the strip's edges); the scrollers' contents already
    // paint to layers (ScrollWithLayers), so text rendering does not change.
@@ -1469,7 +1469,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  
    collection_node->set_add_child_to_node(base::BindRepeating(
        &TabStripView::AddScrollViewContents, base::Unretained(this)));
-@@ -405,18 +403,13 @@
+@@ -438,18 +436,13 @@ void HeliumViewSnapshotLayer::OnPaintLay
    recorder.canvas()->DrawImageInt(image_, 0, 0);
  }
  
@@ -1493,7 +1493,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    }
    const float scale = layer()->device_scale_factor();
    const auto add = [&](views::View* view, const gfx::Rect& visible_in_view,
-@@ -428,7 +421,7 @@
+@@ -461,7 +454,7 @@ void TabStripView::CaptureListSnapshot()
      }
      snapshot->layer()->SetBounds(bounds_in_strip);
      layer()->Add(snapshot->layer());
@@ -1502,7 +1502,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    };
    // The scrollers' contents, through the part of them that is on screen
    // (GetVisibleRect is in contents coordinates); the snapshot sits where
-@@ -446,8 +439,8 @@
+@@ -479,8 +472,8 @@ void TabStripView::CaptureListSnapshot()
      add(tabs_separator_, tabs_separator_->GetLocalBounds(),
          tabs_separator_->bounds());
    }
@@ -1513,7 +1513,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    // the arriving list's height then carried off to a row that was not its
    // own (user 2026-09-18 recording).
    if (today_new_tab_button_ && today_new_tab_button_->GetVisible() &&
-@@ -455,6 +448,7 @@
+@@ -488,6 +481,7 @@ void TabStripView::CaptureListSnapshot()
      add(today_new_tab_button_, today_new_tab_button_->GetLocalBounds(),
          today_new_tab_button_->bounds());
    }
@@ -1521,7 +1521,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  }
  
  bool TabStripView::today_new_tab_row_on_top() const {
-@@ -467,68 +461,33 @@
+@@ -500,68 +494,33 @@ void TabStripView::OnNewTabPositionChang
    InvalidateLayout();
  }
  
@@ -1605,7 +1605,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  }
  
  void TabStripView::AddedToWidget() {
-@@ -540,7 +499,6 @@
+@@ -573,7 +532,6 @@ void TabStripView::AddedToWidget() {
  
  void TabStripView::RemovedFromWidget() {
    widget_observation_.Reset();
@@ -1633,7 +1633,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
  #include "ui/views/view.h"
  #include "ui/views/widget/widget_observer.h"
  
-@@ -85,7 +82,6 @@
+@@ -92,7 +89,6 @@ class HeliumViewSnapshotLayer : public u
  // scrolling to the active tab view when the active tab changes.
  // Layout is managed by `TabStripViewLayout`.
  class TabStripView final : public views::View,
@@ -1641,7 +1641,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
                             public views::WidgetObserver {
    METADATA_HEADER(TabStripView, views::View)
  
-@@ -125,38 +121,34 @@
+@@ -134,38 +130,34 @@ class TabStripView final : public views:
    // the divider when the list outgrows the strip. Follows the pref live.
    bool today_new_tab_row_on_top() const;
  
@@ -1704,10 +1704,10 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
  
    void SetCollapsedState(bool is_collapsed);
    void SetIsAnimatingSize(bool is_animating);
-@@ -234,19 +226,9 @@
- 
+@@ -254,19 +246,9 @@ class TabStripView final : public views:
    friend class TabStripViewLayout;
  
+   PrefChangeRegistrar pref_change_registrar_;
 -  // views::AnimationDelegateViews (the slide):
 -  void AnimationProgressed(const gfx::Animation* animation) override;
 -  void AnimationEnded(const gfx::Animation* animation) override;
@@ -1728,7 +1728,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
-@@ -321,7 +321,10 @@
+@@ -322,7 +322,10 @@ std::string UnpinnedTabContainerView::Cu
    }
    const helium_workspace::WorkspaceTabController* const controller =
        helium_workspace::WorkspaceTabController::From(browser_view->browser());
@@ -1744,7 +1744,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
-@@ -480,8 +480,10 @@
+@@ -480,8 +480,10 @@ void WorkspaceSidebarView::RemovedFromWi
  void WorkspaceSidebarView::RefreshCurrentSpaceId() {
    const helium_workspace::WorkspaceTabController* const controller =
        helium_workspace::WorkspaceTabController::From(GetBrowserWindow());
@@ -1756,7 +1756,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  }
  
  bool WorkspaceSidebarView::IsCurrentSpaceCollapsed() const {
-@@ -933,6 +935,12 @@
+@@ -933,6 +935,12 @@ void WorkspaceSidebarView::OnWorkspaceSp
  }
  
  void WorkspaceSidebarView::OnCurrentSpaceChanged() {
@@ -1769,7 +1769,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    // ⛔ Both blends' size guards compare entry counts, which two spaces can
    // share; drop the snapshots outright rather than lerp unrelated rows.
    if (folder_animation_.is_animating()) {
-@@ -963,8 +971,6 @@
+@@ -963,8 +971,6 @@ void WorkspaceSidebarView::OnCurrentSpac
        container && !container->IsDragging()) {
      container->SnapLayoutToTarget();
    }
@@ -1782,7 +1782,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-@@ -125,6 +125,12 @@
+@@ -125,6 +125,12 @@ class WorkspaceSidebarView : public view
    // between two spaces with the same row count would pass the size guards
    // and lerp unrelated rows), re-filters, and re-lays out.
    void OnCurrentSpaceChanged() override;
@@ -1807,7 +1807,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
  #include <utility>
  
  #include "base/functional/bind.h"
-@@ -190,15 +191,27 @@
+@@ -190,15 +191,27 @@ class WorkspaceSpaceBarView::SpaceButton
      UpdateFilter();
    }
  
@@ -1839,7 +1839,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
      SchedulePaint();
    }
  
-@@ -277,6 +290,7 @@
+@@ -277,6 +290,7 @@ class WorkspaceSpaceBarView::SpaceButton
    bool current_ = false;
    bool dimmed_ = false;
    bool vector_ = false;
@@ -1847,7 +1847,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
    // T053: this icon's own space menu is up.
    bool menu_open_ = false;
    raw_ptr<views::Label> emoji_ = nullptr;
-@@ -352,12 +366,14 @@
+@@ -352,12 +366,14 @@ WorkspaceSpaceBarView::WorkspaceSpaceBar
      base::RepeatingClosure on_menu_pressed,
      base::RepeatingClosure on_current_space_changed,
      base::RepeatingCallback<void(int)> on_current_space_will_change,
@@ -1864,7 +1864,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
    auto menu_button = std::make_unique<MenuButton>(base::BindRepeating(
        [](WorkspaceSpaceBarView* bar) { bar->on_menu_pressed_.Run(); },
        base::Unretained(this)));
-@@ -492,6 +508,27 @@
+@@ -492,6 +508,27 @@ void WorkspaceSpaceBarView::OnSpaceSwitc
    on_space_switch_settled_.Run();
  }
  
@@ -1904,7 +1904,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
  #include <memory>
  #include <string>
  #include <vector>
-@@ -66,7 +67,8 @@
+@@ -66,7 +67,8 @@ class WorkspaceSpaceBarView
        base::RepeatingClosure on_menu_pressed,
        base::RepeatingClosure on_current_space_changed,
        base::RepeatingCallback<void(int)> on_current_space_will_change,
@@ -1914,7 +1914,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
    WorkspaceSpaceBarView(const WorkspaceSpaceBarView&) = delete;
    WorkspaceSpaceBarView& operator=(const WorkspaceSpaceBarView&) = delete;
    ~WorkspaceSpaceBarView() override;
-@@ -86,6 +88,14 @@
+@@ -86,6 +88,14 @@ class WorkspaceSpaceBarView
    enum class FormMode { kNone, kCreate, kManage };
    void SetFormMode(FormMode mode);
  
@@ -1929,7 +1929,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
    // Runs one space-menu command for |space_id| the way the icon's own menu
    // would (M6 轮2 2b: the Manage Spaces sheet's rows hand theirs here once
    // the sheet has closed, so Rename / New Folder / Delete act on the
-@@ -108,6 +118,7 @@
+@@ -108,6 +118,7 @@ class WorkspaceSpaceBarView
    void OnCurrentSpaceChanged() override;
    void OnCurrentSpaceWillChange(int direction) override;
    void OnSpaceSwitchSettled() override;
@@ -1937,7 +1937,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
  
   private:
    class SpaceButton;
-@@ -134,6 +145,7 @@
+@@ -134,6 +145,7 @@ class WorkspaceSpaceBarView
    const base::RepeatingClosure on_current_space_changed_;
    const base::RepeatingCallback<void(int)> on_current_space_will_change_;
    const base::RepeatingClosure on_space_switch_settled_;

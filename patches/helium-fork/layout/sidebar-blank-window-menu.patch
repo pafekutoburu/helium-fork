@@ -2,15 +2,15 @@ Index: src/chrome/browser/ui/views/frame/browser_widget.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_widget.cc
 +++ src/chrome/browser/ui/views/frame/browser_widget.cc
-@@ -32,6 +32,7 @@
- #include "chrome/browser/ui/views/frame/browser_view.h"
+@@ -33,6 +33,7 @@
+ #include "chrome/browser/ui/views/frame/glass_frame_service.h"
  #include "chrome/browser/ui/views/frame/system_menu_model_builder.h"
  #include "chrome/browser/ui/views/frame/top_container_view.h"
 +#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
  #include "chrome/browser/ui/views/helium/native_frame_materials.h"
  #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
-@@ -416,8 +417,32 @@ void BrowserWidget::ShowContextMenuForVi
+@@ -450,8 +451,32 @@ void BrowserWidget::ShowContextMenuForVi
        }
      }
    }

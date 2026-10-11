@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -406,9 +406,11 @@ static_library("ui") {
+@@ -611,9 +611,11 @@ static_library("ui") {
      "helium/arc_band_tint_store.h",
      "helium/arc_caption_opacity.h",
      "helium/arc_card_layout.h",
@@ -11,10 +11,10 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_minimal_field_state.h",
      "helium/arc_omnibox_panel.h",
 +    "helium/arc_sidebar_surface.h",
-     "helium/helium_layout_state_controller.cc",
-     "helium/helium_layout_state_controller.h",
      "helium/helium_tab_switcher_controller.cc",
-@@ -5813,10 +5815,14 @@ test("helium_workspace_unittests") {
+     "helium/helium_tab_switcher_controller.h",
+     "helium_workspace/workspace_entry.cc",
+@@ -4267,10 +4269,14 @@ test("helium_workspace_unittests") {
      "helium/arc_caption_opacity_unittest.cc",
      "helium/arc_card_layout.h",
      "helium/arc_card_layout_unittest.cc",
@@ -29,7 +29,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_omnibox_panel.h",
      "helium/arc_omnibox_panel_unittest.cc",
      "helium_workspace/workspace_blank_tab.h",
-@@ -5847,10 +5853,12 @@ test("helium_workspace_unittests") {
+@@ -4301,10 +4307,12 @@ test("helium_workspace_unittests") {
      "//components/tabs:test_support",
      "//testing/gmock",
      "//testing/gtest",
@@ -663,7 +663,7 @@ Index: src/chrome/browser/ui/layout_constants.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/layout_constants.cc
 +++ src/chrome/browser/ui/layout_constants.cc
-@@ -144,8 +144,14 @@ int GetLayoutConstant(LayoutConstant con
+@@ -148,8 +148,14 @@ int GetLayoutConstant(LayoutConstant con
        return 20;
      case LayoutConstant::kMainBackgroundRegionCornerRadius:
      case LayoutConstant::kToolbarCornerRadius:
@@ -679,7 +679,7 @@ Index: src/chrome/browser/ui/layout_constants.cc
      case LayoutConstant::kVerticalTabHeight:
        // helium-fork: Arc's rows are a little taller than upstream's 30.
        return 34;
-@@ -155,10 +161,15 @@ int GetLayoutConstant(LayoutConstant con
+@@ -159,10 +165,15 @@ int GetLayoutConstant(LayoutConstant con
        return 44;
      case LayoutConstant::kVerticalTabFavoriteCornerRadius:
        return 12;
@@ -700,7 +700,7 @@ Index: src/chrome/browser/ui/layout_constants.h
 ===================================================================
 --- src.orig/chrome/browser/ui/layout_constants.h
 +++ src/chrome/browser/ui/layout_constants.h
-@@ -232,6 +232,14 @@ enum class LayoutConstant {
+@@ -238,6 +238,14 @@ enum class LayoutConstant {
    // helium-fork: the corner radius of a workspace favorite capsule.
    kVerticalTabFavoriteCornerRadius,
  
@@ -719,7 +719,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -608,15 +608,15 @@ bool LocationBarView::IsInitialized() co
+@@ -601,15 +601,15 @@ bool LocationBarView::IsInitialized() co
  }
  
  int LocationBarView::GetBorderRadius() const {
@@ -743,7 +743,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    }
    return ComputeBorderRadius(size());
  }
-@@ -1526,7 +1526,8 @@ void LocationBarView::RefreshArcTitleLab
+@@ -1547,7 +1547,8 @@ void LocationBarView::RefreshArcTitleLab
            ShouldMinimizeArcChrome(),
            (omnibox_view_ && omnibox_view_->HasFocus()) ||
                GetOmniboxController()->edit_model()->user_input_in_progress(),
@@ -753,7 +753,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
        helium::ArcFieldContent::kHostAndTitle;
    if (show == arc_title_label_->GetVisible() && title == arc_last_title_) {
      return;
-@@ -2755,9 +2756,18 @@ void LocationBarView::OnOmniboxHovered(b
+@@ -2706,9 +2707,18 @@ void LocationBarView::OnOmniboxHovered(b
  }
  
  bool LocationBarView::IsArcHoverUrlPreview() const {
@@ -779,7 +779,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -295,6 +295,26 @@ void TabStripView::OnChildMoved(TabColle
+@@ -332,6 +332,26 @@ void TabStripView::OnChildMoved(TabColle
  }
  
  void TabStripView::OnTabChanged(const tabs::TabInterface* active_tab) {
@@ -819,20 +819,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
  #include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
-@@ -87,7 +89,11 @@
- namespace {
- constexpr int kIconDesignWidth = 16;
- constexpr int kTitleMinWidth = 10;
--constexpr int kHorizontalInset = 7;
-+// 9, not 7: Dia's active card carries the favicon at equal margins on all
-+// three sides (18px @2x = 9pt left, top and bottom; measured 2026-08-20 off
-+// the user's screenshots), and the row is 34 tall around a 16pt icon, so the
-+// vertical margins are 9 by arithmetic. 7 read as "icon glued to the edge".
-+constexpr int kHorizontalInset = 9;
- constexpr int kDefaultPadding = 4;
- constexpr int kFocusRingInset = 0.0f;
- 
-@@ -279,6 +285,13 @@ bool TabView::IsHoverAnimationActive() c
+@@ -498,6 +500,13 @@ bool TabView::IsHoverAnimationActive() c
    return hovered_ || (hover_controller_ && hover_controller_->ShouldDraw());
  }
  
@@ -846,32 +833,11 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
  std::optional<SkColor> TabView::GetBackgroundColor() {
    const TabStyle::TabSelectionState selection_state = GetSelectionState();
    const bool hover_animation_active = IsHoverAnimationActive();
-@@ -298,6 +311,20 @@ std::optional<SkColor> TabView::GetBackg
- 
- SkColor TabView::GetCurrentTabBackgroundColor(
-     TabStyle::TabSelectionState selection_state) const {
-+  if (selection_state == TabStyle::TabSelectionState::kActive) {
-+    // helium-fork: the active row is a Dia floating card (2026-08-20) --
-+    // pure white on a light sidebar, a white lift on a dark one. A paint-
-+    // time bypass, deliberately NOT a recolor of the active token: the
-+    // material mixer derives the hover token from it (SetAlpha 0.45), so
-+    // recoloring the token would drag every hover along. Since 152 merged
-+    // the fill and background-color paths into this helper, one branch here
-+    // keeps every consumer of "what color is this row" (the split view's
-+    // merged background included) on the same floating card. Known face:
-+    // PaintTabBackgroundWithImages still paints the token's color under
-+    // custom image themes. The shadow half of the card lives in
-+    // UnpinnedTabContainerView.
-+    return FloatingCardColor();
-+  }
-   const bool frame_active = IsFrameActive();
-   const ui::ColorProvider* color_provider = GetColorProvider();
-   if (ShouldUseNativeFrameMaterials() &&
 Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.h
-@@ -208,6 +208,9 @@ class TabView : public views::View,
+@@ -199,6 +199,9 @@ class TabView : public views::View,
    SkColor GetNativeFrameMaterialTabBackgroundColor(
        TabStyle::TabSelectionState selection_state) const;
    bool ShouldUseNativeFrameMaterials() const;
@@ -1624,3 +1590,86 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  };
  
  #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_WORKSPACE_SIDEBAR_VIEW_H_
+Index: src/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+@@ -19,7 +19,13 @@
+ namespace {
+ constexpr int kIconDesignWidth = 16;
+ constexpr int kTitleMinWidth = 10;
+-constexpr int kHorizontalInset = 7;
++// 9, not 7: Dia's active card carries the favicon at equal margins on all
++// three sides (18px @2x = 9pt left, top and bottom; measured 2026-08-20 off
++// the user's screenshots), and the row is 34 tall around a 16pt icon, so the
++// vertical margins are 9 by arithmetic. 7 read as "icon glued to the edge".
++// (helium-fork; since Chromium 154 the constant lives here, not in
++// tab_view.cc.)
++constexpr int kHorizontalInset = 9;
+ constexpr int kDefaultPadding = 4;
+ }  // namespace
+ 
+@@ -56,7 +62,16 @@ views::ProposedLayout TabViewVerticalLay
+   layouts.host_size = gfx::Size(width, height);
+ 
+   gfx::Rect bounds_remaining = gfx::Rect(layouts.host_size);
+-  bounds_remaining.Inset(TabView().tab_styling()->GetContentsInsets());
++  // helium-fork: the row's sides are kHorizontalInset (9), as through 152,
++  // where one constant set both the side inset and the icon's trailing gap.
++  // Since 154 the side inset comes from the style (kTabHorizontalPadding, 7)
++  // and only the gap stayed ours, which slid every Today row's icon, title
++  // and close button 2pt outward -- off the "+ New Tab" row's columns and off
++  // the card's equal 9pt margins. The vertical inset stays the style's; the
++  // row centres its children either way.
++  gfx::Insets contents_insets = TabView().tab_styling()->GetContentsInsets();
++  contents_insets.set_left_right(kHorizontalInset, kHorizontalInset);
++  bounds_remaining.Inset(contents_insets);
+ 
+   // If the tab is collapsed but animating with a wider width then we shouldn't
+   // center the contents.
+Index: src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
++++ src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
+@@ -10,6 +10,8 @@
+ #include <string>
+ 
+ #include "chrome/browser/themes/theme_properties.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+@@ -21,6 +23,7 @@
+ #include "third_party/skia/include/core/SkPath.h"
+ #include "third_party/skia/include/core/SkRRect.h"
+ #include "ui/base/theme_provider.h"
++#include "ui/color/color_provider.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/gfx/scoped_canvas.h"
+@@ -202,6 +205,24 @@ bool VerticalTabStyleViews::ShouldPaintT
+ 
+ SkColor VerticalTabStyleViews::GetCurrentTabBackgroundColor(
+     TabStyle::TabSelectionState selection_state) const {
++  if (selection_state == TabStyle::TabSelectionState::kActive) {
++    // helium-fork: the active row is a Dia floating card (2026-08-20) --
++    // pure white on a light sidebar, a white lift on a dark one. A paint-
++    // time bypass, deliberately NOT a recolor of the active token: the
++    // material mixer derives the hover token from it (SetAlpha 0.45), so
++    // recoloring the token would drag every hover along. Every consumer of
++    // "what color is this row" goes through here (since Chromium 154 this is
++    // the vertical rows' helper; TabView::GetBackgroundColor() reads it via
++    // CalculateTargetColors()), so one branch keeps them all -- the split
++    // view's merged background included -- on the same floating card. Known
++    // face: custom image themes still paint the token's color. The shadow
++    // half of the card lives in UnpinnedTabContainerView. Same color as
++    // TabView::FloatingCardColor().
++    const ui::ColorProvider* const provider =
++        delegate_->GetView()->GetColorProvider();
++    return helium::GetSidebarFloatingCardColor(
++        provider ? provider->GetColor(kColorToolbar) : SK_ColorWHITE);
++  }
+   if (helium::ShouldUseNativeFrameMaterials(
+           delegate_->GetBrowserWindowInterface()) &&
+       selection_state == TabStyle::TabSelectionState::kInactive) {

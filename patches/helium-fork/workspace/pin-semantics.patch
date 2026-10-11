@@ -2,7 +2,7 @@ Index: src/chrome/app/chrome_command_ids.h
 ===================================================================
 --- src.orig/chrome/app/chrome_command_ids.h
 +++ src/chrome/app/chrome_command_ids.h
-@@ -120,6 +120,7 @@
+@@ -122,6 +122,7 @@
  
  #define IDC_CTRL_S_SHORTCUT             34090
  #define IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN 34091
@@ -27,7 +27,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -1993,6 +1993,9 @@ are declared in tools/grit/grit_args.gni
+@@ -2012,6 +2012,9 @@ are declared in tools/grit/grit_args.gni
        <message name="IDS_SHORTCUT_COMMAND_TOGGLE_ZEN_MODE_TOP_CHROME_PIN" desc="Command name shown on the Settings shortcuts page for pinning or unpinning the top toolbar in zen mode.">
          Pin top toolbar
        </message>
@@ -53,15 +53,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -413,6 +413,8 @@ static_library("ui") {
+@@ -616,6 +616,8 @@ static_library("ui") {
      "helium_workspace/workspace_service.h",
      "helium_workspace/workspace_service_factory.cc",
      "helium_workspace/workspace_service_factory.h",
 +    "helium_workspace/workspace_tab_controller.cc",
 +    "helium_workspace/workspace_tab_controller.h",
-     "idle_bubble.h",
-     "managed_ui.cc",
-     "managed_ui.h",
+     "tab_helpers.cc",
+     "tab_helpers.h",
+   ]
 Index: src/chrome/browser/ui/accelerator_table.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/accelerator_table.cc
@@ -79,7 +79,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -70,6 +70,7 @@
+@@ -71,6 +71,7 @@
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
@@ -87,7 +87,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  #include "chrome/browser/ui/lens/lens_overlay_controller.h"
  #include "chrome/browser/ui/managed_ui.h"
  #include "chrome/browser/ui/navigator/browser_navigator.h"
-@@ -1524,6 +1525,13 @@ void BrowserCommandController::HandleCom
+@@ -1539,6 +1540,13 @@ void BrowserCommandController::HandleCom
        }
        break;
      }
@@ -101,7 +101,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
      // Hosted App commands
      case IDC_COPY_URL:
        CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
-@@ -2071,6 +2079,8 @@ void BrowserCommandController::InitComma
+@@ -2094,6 +2102,8 @@ void BrowserCommandController::InitComma
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_SERVICES_OPEN, true);
    command_updater_->UpdateCommandEnabled(IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN,
                                           false);
@@ -114,7 +114,7 @@ Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
 +++ src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
-@@ -252,6 +252,8 @@ std::optional<BrowserShortcutCommandLabe
+@@ -250,6 +250,8 @@ std::optional<BrowserShortcutCommandLabe
        return Label(IDS_SHORTCUT_COMMAND_SHOW_APP_MENU);
      case IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN:
        return Label(IDS_SHORTCUT_COMMAND_TOGGLE_ZEN_MODE_TOP_CHROME_PIN);
@@ -127,7 +127,7 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +++ src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
-@@ -78,6 +78,8 @@
+@@ -84,6 +84,8 @@
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
@@ -136,7 +136,7 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
-@@ -593,6 +595,16 @@ void BrowserWindowFeatures::Init(Browser
+@@ -659,6 +661,16 @@ void BrowserWindowFeatures::Init(Browser
          GetUserDataFactory().CreateInstance<HeliumTabSwitcherController>(
              *browser, browser, profile->GetPrefs());
  
@@ -150,14 +150,14 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +                  *browser, browser, workspace_service);
 +    }
 +
-     if (tabs::IsVerticalTabsFeatureEnabled()) {
-       Browser* raw_browser = browser->GetBrowserForMigrationOnly();
- 
+     vertical_tab_strip_state_controller_ =
+         GetUserDataFactory()
+             .CreateInstance<tabs::VerticalTabStripStateController>(
 Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_window/public/browser_window_features.h
 +++ src/chrome/browser/ui/browser_window/public/browser_window_features.h
-@@ -168,6 +168,10 @@ class GlicNudgeController;
+@@ -204,6 +204,10 @@ class GlicNudgeController;
  class GlicSplitButtonController;
  }  // namespace glic
  
@@ -168,7 +168,7 @@ Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
  namespace lens {
  class LensOverlayEntryPointController;
  class LensRegionSearchController;
-@@ -669,6 +673,8 @@ class BrowserWindowFeatures {
+@@ -581,6 +585,8 @@ class BrowserWindowFeatures {
    std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
    std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;
    std::unique_ptr<HeliumTabSwitcherController> helium_tab_switcher_controller_;
@@ -194,7 +194,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-@@ -0,0 +1,355 @@
+@@ -0,0 +1,354 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -483,7 +483,6 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +}
 +
 +void WorkspaceTabController::OnTabChangedAt(tabs::TabInterface* tab,
-+                                            int index,
 +                                            TabChangeType change_type) {
 +  if (!tab || change_type != TabChangeType::kAll) {
 +    return;
@@ -554,7 +553,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 ===================================================================
 --- /dev/null
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,104 @@
 +// Copyright 2026 The Helium Authors
 +// You can use, redistribute, and/or modify this source code under
 +// the terms of the GPL-3.0 license that can be found in the LICENSE file.
@@ -635,7 +634,6 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 +      const TabStripModelChange& change,
 +      const TabStripSelectionChange& selection) override;
 +  void OnTabChangedAt(tabs::TabInterface* tab,
-+                      int index,
 +                      TabChangeType change_type) override;
 +  void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
 +
@@ -664,7 +662,7 @@ Index: src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
 +++ src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
-@@ -310,6 +310,7 @@ void BrowserNativeWidgetMac::ValidateUse
+@@ -337,6 +337,7 @@ void BrowserNativeWidgetMac::ValidateUse
      case IDC_RELOAD:
      case IDC_CTRL_S_SHORTCUT:
      case IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN:
@@ -702,7 +700,7 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
      return false;
    }
  
-@@ -201,8 +211,9 @@ void HeliumTabSwitcherController::ShowHu
+@@ -200,8 +210,9 @@ void HeliumTabSwitcherController::ShowHu
      }
      cards.push_back(tabs::TabData::FromTabInterface(tab));
    }
@@ -713,7 +711,7 @@ Index: src/chrome/browser/ui/helium/helium_tab_switcher_controller.cc
      CancelCycling();
      return;
    }
-@@ -355,7 +366,10 @@ void HeliumTabSwitcherController::OnTabS
+@@ -354,7 +365,10 @@ void HeliumTabSwitcherController::OnTabS
    std::erase_if(mru_tabs_,
                  [](const tabs::TabHandle& handle) { return !handle.Get(); });
  

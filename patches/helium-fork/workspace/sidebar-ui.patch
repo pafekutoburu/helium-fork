@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/color/chrome_color_id.h
 ===================================================================
 --- src.orig/chrome/browser/ui/color/chrome_color_id.h
 +++ src/chrome/browser/ui/color/chrome_color_id.h
-@@ -1113,6 +1113,9 @@
+@@ -1139,6 +1139,9 @@
    /* Vertical tabstrip colors. */ \
    E_CPONLY(kColorVerticalTabStripShadow) \
    E_CPONLY(kColorVerticalTabPinnedOutline) \
@@ -42,7 +42,7 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/gfx/geometry/rect.h"
  #include "ui/views/controls/scroll_view.h"
-@@ -69,6 +70,12 @@ PinnedTabContainerView::PinnedTabContain
+@@ -73,6 +74,12 @@ PinnedTabContainerView::PinnedTabContain
                base::Unretained(this)));
      }
    }
@@ -55,15 +55,30 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
  }
  
  PinnedTabContainerView::~PinnedTabContainerView() = default;
-@@ -83,24 +90,14 @@ views::ProposedLayout PinnedTabContainer
+@@ -87,11 +94,17 @@ views::ProposedLayout PinnedTabContainer
  }
  
  gfx::Size PinnedTabContainerView::GetMinimumSize() const {
--  if (!collection_node_ || ShouldHidePinnedTabs() ||
--      collection_node_->GetDirectChildren().empty()) {
--    return gfx::Size();
--  }
--
+-  if (!collection_node_ || collection_node_->GetDirectChildren().empty()) {
++  // helium-fork: in the vertical strip the sidebar decides the floor (below),
++  // with or without native pinned tabs, so only the horizontal strip returns
++  // early for an empty container.
++  const bool horizontal =
++      collection_node_ &&
++      collection_node_->orientation() == TabStripOrientation::kHorizontal;
++  if (horizontal && collection_node_->GetDirectChildren().empty()) {
+     return gfx::Size();
+   }
+ 
+-  if (collection_node_->orientation() == TabStripOrientation::kHorizontal) {
++  if (horizontal) {
+     int min_width = 0;
+     size_t count = 0;
+     for (const auto* child : collection_node_->GetDirectChildren()) {
+@@ -113,19 +126,14 @@ gfx::Size PinnedTabContainerView::GetMin
+     return gfx::Size(min_width, TabStyle::Get()->GetStandardHeight());
+   }
+ 
 -  // The minimum size should be enough to show a row and a half, if needed.
 -  auto collapse_state = GetTabStripCollapseState();
 -  const int num_children = collection_node_->GetDirectChildren().size();
@@ -87,7 +102,7 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
  }
  
  bool PinnedTabContainerView::IsDragging() const {
-@@ -126,7 +123,14 @@ bool PinnedTabContainerView::ShouldAnima
+@@ -155,7 +163,14 @@ bool PinnedTabContainerView::ShouldAnima
  
  bool PinnedTabContainerView::ShouldSnapToTarget(
      const views::View& child_view) const {
@@ -103,7 +118,7 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
  }
  
  std::optional<BrowserRootView::DropIndex>
-@@ -339,106 +343,52 @@ views::ProposedLayout PinnedTabContainer
+@@ -374,105 +389,52 @@ views::ProposedLayout PinnedTabContainer
  views::ProposedLayout PinnedTabContainerView::CalculateVerticalLayout(
      const views::SizeBounds& size_bounds) const {
    views::ProposedLayout layouts;
@@ -198,8 +213,7 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 -    bounds.set_width(child_width);
 -
 -    auto drag_data = GetVisualDataForDraggedView(*child);
--    const bool should_show_child =
--        !(drag_data && drag_data->should_hide) && !ShouldHidePinnedTabs();
+-    const bool should_show_child = !(drag_data && drag_data->should_hide);
 -    if (!should_show_child) {
 -      layouts.child_layouts.emplace_back(child, false, gfx::Rect());
 -      continue;
@@ -261,8 +275,8 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
  
  // The view class that represents the pinned tab region for the
  // tab strip. It manages the layout of all the pinned tabs and serves
-@@ -84,6 +85,22 @@ class PinnedTabContainerView
-   bool ShouldHidePinnedTabs() const;
+@@ -80,6 +81,22 @@ class PinnedTabContainerView
+   void OnCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
  
    raw_ptr<TabCollectionNode> collection_node_;
 +
@@ -288,16 +302,16 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -12,6 +12,8 @@
+@@ -13,6 +13,8 @@
  #include "chrome/browser/ui/browser_element_identifiers.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_service.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
  #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tabs/horizontal_tab_strip_metrics.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
- #include "chrome/browser/ui/tabs/tab_strip_model.h"
-@@ -182,6 +184,10 @@ TabStripView::TabStripView(TabCollection
+@@ -190,6 +192,10 @@ TabStripView::TabStripView(TabCollection
        views::ScrollView::ScrollWithLayers::kEnabled));
    SetScrollViewProperties(pinned_tabs_scroll_view_);
  
@@ -308,7 +322,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    unpinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
        views::ScrollView::ScrollWithLayers::kEnabled));
    SetScrollViewProperties(unpinned_tabs_scroll_view_);
-@@ -315,6 +321,21 @@ void TabStripView::OnTabChanged(const ta
+@@ -352,6 +358,21 @@ void TabStripView::OnTabChanged(const ta
      }
    }
  
@@ -330,7 +344,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    TabCollectionNode* activated_node =
        collection_node_->GetNodeForHandle(active_tab->GetHandle());
    CHECK(activated_node);
-@@ -717,7 +738,10 @@ gfx::Rect TabStripView::GetBoundsInScrol
+@@ -797,7 +818,10 @@ gfx::Rect TabStripView::GetBoundsInScrol
    return bounds;
  }
  
@@ -346,21 +360,21 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.h
-@@ -82,6 +82,9 @@ class TabView : public views::View,
+@@ -97,6 +97,9 @@ class TabView : public views::View,
    SkPath GetPath() const;
  
    const TabCollectionNode* collection_node() const { return collection_node_; }
 +  // helium-fork: the Today section needs a tab's handle to ask the workspace
 +  // service whether the sidebar is already drawing it as an entry.
 +  const tabs::TabInterface* tab_interface() const { return GetTabInterface(); }
-   const TabStyle* tab_style() const { return tab_style_; }
+   TabStyleViews* tab_styling() { return tab_styling_.get(); }
+   const TabStyleViews* tab_styling() const { return tab_styling_.get(); }
    float radial_highlight_opacity() { return radial_highlight_opacity_; }
-   const tabs::TabData& data() const { return tab_data_; }
 Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -12137,6 +12137,21 @@ Check your passwords anytime in <ph name
+@@ -12389,6 +12389,21 @@ Check your passwords anytime in <ph name
          <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
            Remove from favorites
          </message>
@@ -382,7 +396,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12274,6 +12289,21 @@ Check your passwords anytime in <ph name
+@@ -12532,6 +12547,21 @@ Check your passwords anytime in <ph name
          <message name="IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES" desc="In Title Case: The label of the tab context menu item that moves a favorite back to the pinned tabs section.">
            Remove from Favorites
          </message>
@@ -408,7 +422,7 @@ Index: src/chrome/browser/ui/layout_constants.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/layout_constants.cc
 +++ src/chrome/browser/ui/layout_constants.cc
-@@ -147,9 +147,14 @@ int GetLayoutConstant(LayoutConstant con
+@@ -151,9 +151,14 @@ int GetLayoutConstant(LayoutConstant con
      case LayoutConstant::kVerticalTabCornerRadius:
        return 8;
      case LayoutConstant::kVerticalTabHeight:
@@ -428,7 +442,7 @@ Index: src/chrome/browser/ui/layout_constants.h
 ===================================================================
 --- src.orig/chrome/browser/ui/layout_constants.h
 +++ src/chrome/browser/ui/layout_constants.h
-@@ -226,6 +226,12 @@ enum class LayoutConstant {
+@@ -232,6 +232,12 @@ enum class LayoutConstant {
    // The height of a pinned vertical tab.
    kVerticalTabPinnedHeight,
  
@@ -473,8 +487,8 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
 +++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -67,6 +67,15 @@ source_set("impl") {
-     "tab_view.h",
+@@ -76,6 +76,15 @@ source_set("impl") {
+     "tab_view_vertical_layout.h",
      "unpinned_tab_container_view.cc",
      "unpinned_tab_container_view_layout.cc",
 +
@@ -489,7 +503,7 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
    ]
  
    deps = [
-@@ -74,6 +83,7 @@ source_set("impl") {
+@@ -84,6 +93,7 @@ source_set("impl") {
      "//chrome/browser/glic",
      "//chrome/browser/glic/browser_ui:glow",
      "//chrome/browser/glic/browser_ui:glow_controller",
@@ -514,7 +528,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "chrome/browser/ui/tabs/tab_style.h"
  #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
  #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
-@@ -110,6 +115,40 @@ UnpinnedTabContainerView::UnpinnedTabCon
+@@ -111,6 +116,40 @@ UnpinnedTabContainerView::UnpinnedTabCon
  
  UnpinnedTabContainerView::~UnpinnedTabContainerView() = default;
  
@@ -555,7 +569,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  
  std::optional<BrowserRootView::DropIndex>
  UnpinnedTabContainerView::GetLinkDropIndex(const gfx::Point& loc_in_container) {
-@@ -119,9 +158,16 @@ UnpinnedTabContainerView::GetLinkDropInd
+@@ -120,9 +159,16 @@ UnpinnedTabContainerView::GetLinkDropInd
    const bool is_horizontal =
        collection_node_->orientation() == TabStripOrientation::kHorizontal;
  
@@ -1783,8 +1797,8 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  // The view class that represents the unpinned tab region for the
  // tab strip. It hosts all the unpinned tabs and serves as the drag target
  // for unpinned tabs which aren't grouped. Layout is managed by
-@@ -49,6 +53,16 @@ class UnpinnedTabContainerView
-       const gfx::Point& point_in_local_coords);
+@@ -64,6 +68,16 @@ class UnpinnedTabContainerView
+   views::SizeBound available_space() const { return available_space_; }
  
   private:
 +  // helium-fork: the profile's workspace model, or null (off-the-record
@@ -1804,7 +1818,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
-@@ -1106,7 +1106,17 @@ void TabView::UpdateTabData(const tabs::
+@@ -1087,7 +1087,17 @@ void TabView::UpdateTabData(const tabs::
      UpdateAccessibleName();
    }
  
@@ -1823,7 +1837,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
    icon_->SetActiveState(tab->IsActivated());
    icon_->SetAttention(TabIcon::AttentionType::kBlockedWebContents,
                        !tab->IsActivated() && tab->IsBlocked());
-@@ -1136,9 +1146,14 @@ void TabView::SetDataForTesting(tabs::Ta
+@@ -1117,9 +1127,14 @@ void TabView::SetDataForTesting(tabs::Ta
  void TabView::UpdateTitle(std::u16string title,
                            bool should_render_loading_title) {
    if (should_render_loading_title) {
@@ -1895,7 +1909,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
-@@ -125,8 +125,14 @@ views::ProposedLayout TabStripViewLayout
+@@ -185,8 +185,14 @@ views::ProposedLayout TabStripViewLayout
    const int region_horizontal_padding =
        GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
  
@@ -1912,7 +1926,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
  
    int y = 0;
  
-@@ -145,8 +151,14 @@ views::ProposedLayout TabStripViewLayout
+@@ -205,8 +211,14 @@ views::ProposedLayout TabStripViewLayout
    int remaining_height = 0;
    if (size_bounds.height().is_bounded()) {
      remaining_height = size_bounds.height().value();
@@ -1929,7 +1943,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
      }
      // Clamp the remaining height to 0 if we have less space.
      remaining_height = std::max(remaining_height, 0);
-@@ -175,10 +187,22 @@ views::ProposedLayout TabStripViewLayout
+@@ -235,10 +247,22 @@ views::ProposedLayout TabStripViewLayout
  
    if (pinned_container_bounds.height()) {
      y += pinned_container_bounds.height();
@@ -1960,7 +1974,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layou
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
 +++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
-@@ -166,7 +166,20 @@ views::ProposedLayout UnpinnedTabContain
+@@ -205,7 +205,20 @@ views::ProposedLayout UnpinnedTabContain
    const int horizontal_padding =
        GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
  
@@ -1981,7 +1995,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layou
      int x =
          views::AsViewClass<TabGroupView>(child) &&
                  collapse_state != tabs::VerticalTabStripCollapseState::kExpanded
-@@ -259,9 +272,18 @@ gfx::Size UnpinnedTabContainerViewLayout
+@@ -312,9 +325,18 @@ gfx::Size UnpinnedTabContainerViewLayout
    std::optional<tab_groups::TabGroupId> focused_group_id =
        GetFocusedGroupId(tab_container_view);
  

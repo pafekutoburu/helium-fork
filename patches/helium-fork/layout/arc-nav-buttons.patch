@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -225,7 +225,9 @@
+@@ -233,7 +233,9 @@
  #include "chrome/browser/ui/views/toolbar/chrome_labs/chrome_labs_coordinator.h"
  #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.h"
  #include "chrome/browser/ui/views/toolbar/reload_control.h"
@@ -12,7 +12,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
  #include "chrome/browser/ui/views/translate/translate_bubble_view.h"
  #include "chrome/browser/ui/views/update_recommended_message_box.h"
-@@ -2180,39 +2182,147 @@ void BrowserView::UpdateArcSidebarContro
+@@ -2244,39 +2246,147 @@ void BrowserView::UpdateArcSidebarContro
      return;
    }
  
@@ -171,7 +171,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // hidden strip conceals/reveals instantly with the toggle -- in every
    // address bar mode, zen included, since zen no longer owns the sidebar.
    // While the toggle choreography runs it owns the animation -- the
-@@ -2266,10 +2376,20 @@ bool BrowserView::MaybeHandleSidebarColl
+@@ -2330,10 +2440,20 @@ bool BrowserView::MaybeHandleSidebarColl
      // -- and slide the card out over the new contents.
      ArmContentsResizeHold();
      zen_side_chrome_animation_.Reset(1);
@@ -193,7 +193,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      zen_side_chrome_animation_.Hide();
    } else {
      // SHOW: one atomic flip -- the docked sidebar and the resized contents
-@@ -2287,6 +2407,9 @@ void BrowserView::RunSidebarDockFlip() {
+@@ -2351,6 +2471,9 @@ void BrowserView::RunSidebarDockFlip() {
    sidebar_toggle_phase_ = SidebarTogglePhase::kFlipping;
    ArmContentsResizeHold();
    vertical_tab_strip_region_view_->StartCollapseMotionNow(false);
@@ -203,7 +203,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    DeprecatedLayoutImmediately();
    DisarmContentsResizeHold();
    sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
-@@ -6983,6 +7106,10 @@ void BrowserView::AnimationProgressed(co
+@@ -7148,6 +7271,10 @@ void BrowserView::AnimationProgressed(co
      // ties it to the top chrome, the hidden sidebar ties it to the floating
      // card -- so route every frame through the single write point.
      UpdateCaptionButtonsOpacityForChromeState();
@@ -218,7 +218,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -975,9 +975,12 @@ class BrowserView : public BrowserWindow
+@@ -979,9 +979,12 @@ class BrowserView : public BrowserWindow
    // mode -- the fully-hidden floating sidebar state (Arc behavior).
    bool IsSidebarHiddenModeActive() const;
    // helium-fork: moves the toolbar's sidebar-bound controls (the collapse
@@ -233,7 +233,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    // helium-fork: single write point for the macOS window-control opacity.
    // Zen fades them with the top chrome, the hidden sidebar fades them with
    // the floating card, and every other state keeps them fully shown.
-@@ -1283,9 +1286,13 @@ class BrowserView : public BrowserWindow
+@@ -1288,9 +1291,13 @@ class BrowserView : public BrowserWindow
    // fullscreen mode. See BrowserView::ReparentTopContainerForEndOfImmersive.
    std::optional<size_t> horizontal_tab_strip_region_insertion_index_;
  
@@ -253,18 +253,18 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -1868,7 +1868,9 @@ void ToolbarView::LayoutCommon() {
+@@ -2064,7 +2064,9 @@ void ToolbarView::LayoutCommon() {
    if (features::IsWebUIBackForwardButtonEnabled()) {
-     toolbar_webview_->SetBackButtonLeadingMargin(
-         collapse_button_on_leading_edge ? 0 : margin);
+     toolbar_webview_->SetIsMaximizedOrFullscreen(
+         is_maximized_or_fullscreen && !collapse_button_on_leading_edge);
 -  } else {
 +  } else if (back_ && back_->parent() == this) {
 +    // helium-fork: the button takes no toolbar edge margins while it lives
 +    // in the Arc shell sidebar top row.
-     back_->SetLeadingMargin(collapse_button_on_leading_edge ? 0 : margin);
-   }
- 
-@@ -2038,11 +2040,12 @@ void ToolbarView::UpdateVerticalTabsColl
+     const int margin =
+         is_maximized_or_fullscreen && !collapse_button_on_leading_edge
+             ? interior_margin.left()
+@@ -2212,11 +2214,12 @@ void ToolbarView::UpdateVerticalTabsColl
  
    auto* controller =
        tabs::VerticalTabStripStateController::From(browser_view_->browser());
@@ -278,14 +278,14 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 -                           show_vertical_tabs_collapse_button_.GetValue() &&
 -                           !zen_hide;
 +                           show_vertical_tabs_collapse_button_.GetValue();
-   vertical_tabs_collapse_button_->SetVisible(should_show);
- 
-   if (!should_show) {
+   // Let overflow layout decide whether the eligible button fits.
+   if (should_show != layout_manager_->CanBeVisible(
+           vertical_tabs_collapse_button_)) {
 Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -189,8 +189,10 @@ class ToolbarView : public views::Access
+@@ -198,8 +198,10 @@ class ToolbarView : public views::Access
      return extensions_container_;
    }
    ToolbarButton* forward_button() const { return forward_; }
@@ -302,7 +302,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -1538,8 +1538,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1659,8 +1659,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
        const BrowserLayoutExclusionArea& side_exclusion =
            vertical_right_aligned ? browser_params.trailing_exclusion
                                   : browser_params.leading_exclusion;

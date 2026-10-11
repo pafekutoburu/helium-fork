@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -1101,7 +1101,28 @@ void LocationBarView::Layout(PassKey) {
+@@ -1074,7 +1074,28 @@ void LocationBarView::Layout(PassKey) {
    // the rounded ends.
    location_bounds.Intersect(GetLocalBoundsWithoutEndcaps());
  
@@ -36,35 +36,37 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -1968,16 +1968,18 @@ void ToolbarView::UpdateToolbarLayout()
-       : features::HeliumUseCompactLocationWidth()
-           ? views::MinimumFlexSizeRule::kScaleToMinimum
-           : views::MinimumFlexSizeRule::kPreferred;
+@@ -2169,11 +2169,6 @@ void ToolbarView::UpdateToolbarLayout()
+           ? GetLayoutConstant(LayoutConstant::kHeliumBasePadding)
+           : GetLayoutConstant(LayoutConstant::kLocationBarMargin);
+   const bool is_compact_layout = IsCompactLayout();
 -  // helium-fork: in the Arc shell's docked band the field is sized to the
 -  // domain rather than to the window, so it must stop growing at its preferred
 -  // width. `arc_trailing_spacer_` below takes over the right-alignment that the
 -  // unbounded rule was doubling as.
 -  const bool arc_band = IsArcBandHosted();
--  const auto max_location_bar_flex =
--      arc_band ? views::MaximumFlexSizeRule::kPreferred
--               : views::MaximumFlexSizeRule::kUnbounded;
-+  // helium-fork: in the Arc shell's docked band the field spans the whole
-+  // middle of the band (Dia geometry, measured 2026-08-16: the hover capsule
-+  // runs from the leading controls to the extensions). The field itself is
-+  // the band's one flexible element -- its internal layout keeps the omnibox
-+  // at text width, and everything right of that is field-owned blank that
-+  // hovers, drags the window, and eats nothing. This retires the
-+  // kPreferred cap that `arc_trailing_spacer_` used to compensate for; the
-+  // 2/5-band preferred size (user-picked when the capsule WAS the field)
-+  // survives only as the flex floor.
-   const views::FlexSpecification location_bar_flex_rule =
--      views::FlexSpecification(min_location_bar_flex, max_location_bar_flex)
-+      views::FlexSpecification(min_location_bar_flex,
-+                               views::MaximumFlexSizeRule::kUnbounded)
-           .WithOrder(kLocationBarFlexOrder);
- 
-   const bool is_compact_layout = IsCompactLayout();
-@@ -2034,23 +2036,13 @@ void ToolbarView::UpdateToolbarLayout()
+   if (location_bar_view_) {
+     if (arc_sidebar_hosted_) {
+       // helium-fork: a preferred width the sidebar can actually grant. Left at
+@@ -2201,7 +2196,16 @@ void ToolbarView::UpdateToolbarLayout()
+                                       gfx::Insets::VH(0, location_bar_margin));
+     }
+     if (display_mode_ == DisplayMode::kNormal) {
+-      const auto maximum = is_compact_layout || arc_band
++      // helium-fork: in the Arc shell's docked band the field spans the whole
++      // middle of the band (Dia geometry, measured 2026-08-16: the hover
++      // capsule runs from the leading controls to the extensions). The field
++      // itself is the band's one flexible element -- its internal layout keeps
++      // the omnibox at text width, and everything right of that is field-owned
++      // blank that hovers, drags the window, and eats nothing. This retires the
++      // kPreferred cap that `arc_trailing_spacer_` used to compensate for; the
++      // 2/5-band preferred size (user-picked when the capsule WAS the field)
++      // survives only as the flex floor.
++      const auto maximum = is_compact_layout
+                                ? views::MaximumFlexSizeRule::kPreferred
+                                : views::MaximumFlexSizeRule::kUnbounded;
+       // helium-fork: in the Arc shell's hidden address bar mode this whole
+@@ -2228,23 +2232,13 @@ void ToolbarView::UpdateToolbarLayout()
    }
  
    if (arc_trailing_spacer_) {
@@ -94,4 +96,4 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +    arc_trailing_spacer_->SetVisible(false);
    }
  
-   // Pinned actions (including downloads) and extensions
+   InvalidateLayout();

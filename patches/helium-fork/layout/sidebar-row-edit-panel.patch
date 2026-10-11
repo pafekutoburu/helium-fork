@@ -293,15 +293,15 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -105,6 +105,7 @@
+@@ -108,6 +108,7 @@
  #include "chrome/browser/ui/helium/arc_band_colors.h"
  #include "chrome/browser/ui/helium/arc_band_tint_store.h"
  #include "chrome/browser/ui/helium/arc_caption_opacity.h"
 +#include "chrome/browser/ui/helium/arc_omnibox_panel.h"
- #include "chrome/browser/ui/layout_constants.h"
- #include "chrome/browser/ui/navigator/browser_navigator.h"
- #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
-@@ -715,6 +716,13 @@ class ArcOmniboxDismissHandler : public
+ #include "chrome/browser/ui/global_error/global_error.h"
+ #include "chrome/browser/ui/global_error/global_error_service.h"
+ #include "chrome/browser/ui/global_error/global_error_service_factory.h"
+@@ -719,6 +720,13 @@ class ArcOmniboxDismissHandler : public
  
    // ui::EventObserver:
    void OnEvent(const ui::Event& event) override {
@@ -315,7 +315,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      browser_view_->MaybeEndArcFieldEditing();
    }
  
-@@ -1153,15 +1161,8 @@ BrowserView::BrowserView(Browser* browse
+@@ -1155,15 +1163,8 @@ BrowserView::BrowserView(BrowserWindowIn
    // colors, and there is no color provider until this view is in a widget.
    arc_card_shadow_->SetVisible(false);
  
@@ -333,7 +333,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // Bounds come from the tail of Layout(), the loading state from the active
    // tab (OnActiveTabChanged).
    arc_loading_bar_ = AddChildView(std::make_unique<ArcLoadingBarView>());
-@@ -1225,6 +1226,34 @@ BrowserView::BrowserView(Browser* browse
+@@ -1227,6 +1228,34 @@ BrowserView::BrowserView(BrowserWindowIn
    // bar widget.
    find_bar_host_view_ = AddChildView(std::make_unique<View>());
  
@@ -368,7 +368,19 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    window_scrim_view_ = AddChildView(std::make_unique<ScrimView>());
    window_scrim_view_->layer()->SetName("WindowScrimView");
  
-@@ -2180,6 +2209,19 @@ void BrowserView::UpdateZenModeReveal(bo
+@@ -1352,6 +1381,11 @@ BrowserView::~BrowserView() {
+   if (arc_omnibox_panel_) {
+     arc_omnibox_panel_->SetLocationBar(nullptr);
+   }
++  // The sidebar row's edit hand-off observes the same field, from a member:
++  // left to the member's own destructor, the observation would be dropped only
++  // after RemoveAllChildViews() below has freed the field (a use-after-free
++  // on every window close; Chromium 154's freed-memory poisoning crashes it).
++  arc_location_bar_observation_.Reset();
+   // The monitor must go before the window it is attached to.
+   arc_omnibox_dismiss_handler_.reset();
+ 
+@@ -2218,6 +2252,19 @@ void BrowserView::UpdateZenModeReveal(bo
      reveal_top = true;
    }
  
@@ -388,7 +400,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // Keep the top chrome visible while a bubble/popup anchored inside the top
    // container or a side panel is open.
    if (!reveal_top && HasOpenBubbleFromTopContainer()) {
-@@ -2531,6 +2573,123 @@ void BrowserView::MaybeEndArcFieldEditin
+@@ -2574,6 +2621,123 @@ void BrowserView::MaybeEndArcFieldEditin
      return;
    }
    location_bar->EndArcFieldEditing();
@@ -512,7 +524,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  }
  
  void BrowserView::UpdateArcAddressBarPlacement() {
-@@ -2560,16 +2719,54 @@ void BrowserView::UpdateArcAddressBarPla
+@@ -2603,16 +2767,54 @@ void BrowserView::UpdateArcAddressBarPla
        layout_controller && !layout_controller->HasAddressBarBand() &&
        ShouldDrawVerticalTabStrip() && GetIsNormalType();
  
@@ -574,7 +586,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    }
    // The toolbar keeps its CustomCornersBackground either way: the band's
    // layout pass reaches for it by type to apply the page tint, and swapping it
-@@ -2682,6 +2879,16 @@ bool BrowserView::MaybeHandleSidebarColl
+@@ -2725,6 +2927,16 @@ bool BrowserView::MaybeHandleSidebarColl
    // and drive the slide it no longer owns.
    zen_cursor_exit_timer_.Stop();
    if (collapse) {
@@ -591,7 +603,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      // HIDE: flip the layout to floating-over-full-width contents under a viz
      // hold -- the previous frame stays on glass until the renderer delivers
      // the full-width frame, then chrome and contents swap in one activation
-@@ -6259,6 +6466,27 @@ void BrowserView::Layout(PassKey) {
+@@ -6336,6 +6548,27 @@ void BrowserView::Layout(PassKey) {
    // the sidebar's width. The observer still earns its keep for relayouts that
    // stay inside the toolbar (an extension icon arriving), where the ancestors
    // do not move and this pass does not run.
@@ -619,7 +631,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    if (arc_omnibox_panel_) {
      arc_omnibox_panel_->UpdateFromField();
    }
-@@ -6439,6 +6667,12 @@ void BrowserView::AddedToWidget() {
+@@ -6530,6 +6763,12 @@ void BrowserView::AddedToWidget() {
    if (arc_omnibox_panel_) {
      arc_omnibox_panel_->SetLocationBar(toolbar_->location_bar_view());
    }
@@ -636,7 +648,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -25,6 +25,7 @@
+@@ -24,6 +24,7 @@
  #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_service.h"
  #include "chrome/browser/ui/browser_window.h"
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
@@ -644,7 +656,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
  #include "chrome/browser/ui/tabs/organizer/organizer_panel_state_controller.h"
  #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
  #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
-@@ -162,7 +163,8 @@ class BrowserView : public BrowserWindow
+@@ -155,7 +156,8 @@ class BrowserView : public BrowserWindow
                      public BookmarkBarController::Delegate,
                      public ui::EventObserver,
                      public gfx::AnimationDelegate,
@@ -654,7 +666,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    METADATA_HEADER(BrowserView, views::ClientView)
  
   public:
-@@ -476,6 +478,13 @@ class BrowserView : public BrowserWindow
+@@ -474,6 +476,13 @@ class BrowserView : public BrowserWindow
    // Returns false when it does not apply and the plain instant motion should
    // run instead (zen mode, non-vertical layout, uninitialized strip).
    bool MaybeHandleSidebarCollapseRequest(bool collapse);
@@ -668,7 +680,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    void ToggleZenModeTopChrome();
  
    // Returns the widget for anchoring bubbles and dialogs.
-@@ -833,6 +842,13 @@ class BrowserView : public BrowserWindow
+@@ -835,6 +844,13 @@ class BrowserView : public BrowserWindow
    void AnimationEnded(const gfx::Animation* animation) override;
    void AnimationCanceled(const gfx::Animation* animation) override;
  
@@ -682,7 +694,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    // AppMenuButtonObserver:
    void AppMenuShown() override;
    void AppMenuClosed() override;
-@@ -1018,6 +1034,17 @@ class BrowserView : public BrowserWindow
+@@ -1020,6 +1036,17 @@ class BrowserView : public BrowserWindow
    // inside the field. Called for every mouse press in the window, and on
    // deactivation.
    void MaybeEndArcFieldEditing();
@@ -700,7 +712,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    // helium-fork toggle choreography (see MaybeHandleSidebarCollapseRequest).
    enum class SidebarTogglePhase { kIdle, kSliding, kFlipping };
    void RunSidebarDockFlip();
-@@ -1295,6 +1322,17 @@ class BrowserView : public BrowserWindow
+@@ -1301,6 +1328,17 @@ class BrowserView : public BrowserWindow
    // here because the band clips its own contents. See ArcOmniboxPanelView.
    raw_ptr<ArcOmniboxPanelView> arc_omnibox_panel_ = nullptr;
  
@@ -722,7 +734,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -691,6 +691,16 @@ void LocationBarView::SelectAll() {
+@@ -684,6 +684,16 @@ void LocationBarView::SelectAll() {
  
  void LocationBarView::FocusLocation(bool is_user_initiated,
                                      bool clear_focus_if_failed) {
@@ -739,25 +751,23 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    omnibox_view_->SetFocus(is_user_initiated);
    if (clear_focus_if_failed && !omnibox_view_->HasFocus()) {
      // If none of location bar got focus, then clear focus.
-@@ -1039,9 +1049,14 @@ void LocationBarView::Layout(PassKey) {
-           ? 4
-           : trailing_decorations_edge_padding;
-   // helium-fork: see arc_minimal_rest above -- both page action containers
--  // sit out the rest state and fade back with the hover/focus reveal.
--  page_action_icon_container_->SetVisible(!arc_minimal_rest);
--  page_action_container_->SetVisible(!arc_minimal_rest);
-+  // sit out the rest state and fade back with the hover/focus reveal. In the
-+  // sidebar-hosted row they sit out entirely: the row's width belongs to the
+@@ -1025,9 +1035,13 @@ void LocationBarView::Layout(PassKey) {
+   };
+ 
+   // helium-fork: see arc_minimal_rest above -- the page action container sits
+-  // out the rest state and fades back with the hover/focus reveal. (Chromium
++  // out the rest state and fades back with the hover/focus reveal. In the
++  // sidebar-hosted row it sits out entirely: the row's width belongs to the
 +  // domain, and the two actions that lived here (install-PWA, bookmark) moved
-+  // into the page info bubble's header (user's ask, 2026-08-18).
++  // into the page info bubble's header (user's ask, 2026-08-18). (Chromium
+   // 154 has no legacy page_action_icon_container_ any more.)
+-  page_action_container_->SetVisible(!arc_minimal_rest);
 +  const bool sidebar_hosted_row = ToolbarView::IsArcSidebarHostedFor(this);
-+  page_action_icon_container_->SetVisible(!arc_minimal_rest &&
-+                                          !sidebar_hosted_row);
 +  page_action_container_->SetVisible(!arc_minimal_rest && !sidebar_hosted_row);
-   add_trailing_decoration(page_action_icon_container_,
-                           /*intra_item_padding=*/0,
-                           /*edge_padding=*/
-@@ -1931,6 +1946,13 @@ void LocationBarView::RefreshBackground(
+   if (features::IsPageActionsElevatedToolbarEnabled()) {
+     if (page_action_container_ && page_action_container_->GetVisible()) {
+       const bool is_capsule_active = page_action_container_->IsCapsuleActive();
+@@ -1864,6 +1878,13 @@ void LocationBarView::RefreshBackground(
    // hover tween brings the weak wash in ("默认状态下地址栏只显示网址").
    if (ShouldMinimizeArcChrome() && !is_caret_visible && !input_in_progress) {
      normal = SkColorSetA(normal, 0);
@@ -771,7 +781,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    }
  
    background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
-@@ -2716,6 +2738,12 @@ void LocationBarView::OnOmniboxHovered(b
+@@ -2668,6 +2689,12 @@ void LocationBarView::OnOmniboxHovered(b
    // 2026-08-16), so the swap does not animate.
    if (is_hovering != arc_hovered_) {
      arc_hovered_ = is_hovering;
@@ -784,7 +794,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
      if (ShouldMinimizeArcChrome() && omnibox_view_ &&
          !omnibox_view_->HasFocus() &&
          !GetOmniboxController()->edit_model()->user_input_in_progress()) {
-@@ -2734,9 +2762,16 @@ bool LocationBarView::IsArcHoverUrlPrevi
+@@ -2686,9 +2713,16 @@ bool LocationBarView::IsArcHoverUrlPrevi
  
  helium::ArcOmniboxPanelMetrics LocationBarView::GetArcOmniboxPanelMetrics()
      const {
@@ -816,7 +826,7 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
  #include <utility>
  
  #include "base/functional/bind.h"
-@@ -511,16 +512,33 @@ void RoundedOmniboxResultsFrame::OnPaint
+@@ -529,16 +530,33 @@ void RoundedOmniboxResultsFrame::OnPaint
    // helium-fork: the Arc panel's fill and Dia's shadow. This lands in the
    // widget's own layer, underneath `contents_host_`'s -- which paints the same
    // rounded rect in the same color on top of it, so the only thing that
@@ -856,7 +866,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -1343,6 +1343,10 @@ void ToolbarView::AnimationEnded(const g
+@@ -1413,6 +1413,10 @@ void ToolbarView::AnimationEnded(const g
  }
  
  void ToolbarView::AnimationProgressed(const gfx::Animation* animation) {
@@ -867,7 +877,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    BrowserWindow::FromBrowser(browser())->ToolbarSizeChanged(
        /*is_animating=*/true);
  }
-@@ -1901,6 +1905,15 @@ void ToolbarView::LayoutCommon() {
+@@ -2023,6 +2027,15 @@ void ToolbarView::LayoutCommon() {
    if (IsArcBandHosted()) {
      interior_margin =
          gfx::Insets(GetLayoutConstant(LayoutConstant::kHeliumBasePadding));
@@ -883,10 +893,10 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
    }
  
    auto* vts_controller = tabs::VerticalTabStripStateController::From(browser_);
-@@ -2080,8 +2093,12 @@ void ToolbarView::UpdateToolbarLayout()
-       constexpr int kArcSidebarLocationBarWidth = 130;
+@@ -2208,8 +2221,12 @@ void ToolbarView::UpdateToolbarLayout()
        location_bar_view_->SetPreferredSize(
-           gfx::Size(kArcSidebarLocationBarWidth, 0));
+           gfx::Size(kArcSidebarLocationBarWidth,
+                     GetLayoutConstant(LayoutConstant::kLocationBarHeight)));
 -      location_bar_view_->SetProperty(views::kMarginsKey,
 -                                      gfx::Insets::VH(0, location_bar_margin));
 +      location_bar_view_->SetProperty(views::kMarginsKey, gfx::Insets());
@@ -896,9 +906,9 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +        extensions_container_->SetProperty(views::kMarginsKey, gfx::Insets());
 +      }
      } else if (is_compact_layout) {
-       location_bar_view_->SetPreferredSize(gfx::Size(kPreferredCompactWidth, 0));
-       location_bar_view_->SetProperty(
-@@ -2217,6 +2234,70 @@ bool ToolbarView::IsArcBandHostedFor(con
+       location_bar_view_->SetPreferredSize(gfx::Size(
+           kPreferredCompactWidth,
+@@ -2360,6 +2377,70 @@ bool ToolbarView::IsArcBandHostedFor(con
    return false;
  }
  
@@ -969,7 +979,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  // static
  std::optional<SkColor> ToolbarView::GetArcBandTintFor(const views::View* view) {
    for (const views::View* ancestor = view; ancestor;
-@@ -2236,6 +2317,9 @@ void ToolbarView::SetArcSidebarHosted(bo
+@@ -2379,6 +2460,9 @@ void ToolbarView::SetArcSidebarHosted(bo
      return;
    }
    arc_sidebar_hosted_ = hosted;
@@ -983,7 +993,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -226,6 +226,22 @@ class ToolbarView : public views::Access
+@@ -230,6 +230,22 @@ class ToolbarView : public views::Access
    // callers that hold a child rather than the toolbar. Same ancestor walk as
    // GetArcBandTintFor(); false for anything reparented out of the toolbar.
    static bool IsArcBandHostedFor(const views::View* view);
@@ -1006,7 +1016,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
  
    ToolbarButton* vertical_tabs_collapse_button() const {
      return vertical_tabs_collapse_button_;
-@@ -329,6 +345,8 @@ class ToolbarView : public views::Access
+@@ -346,6 +362,8 @@ class ToolbarView : public views::Access
    void AnimationEnded(const gfx::Animation* animation) override;
    void AnimationProgressed(const gfx::Animation* animation) override;
  
@@ -1015,7 +1025,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    // Declarative layout for child controls.
    void InitLayout();
  
-@@ -456,6 +474,10 @@ class ToolbarView : public views::Access
+@@ -472,6 +490,10 @@ class ToolbarView : public views::Access
    raw_ptr<ToolbarButton> vertical_tabs_collapse_button_ = nullptr;
    // helium-fork: see SetArcSidebarHosted().
    bool arc_sidebar_hosted_ = false;

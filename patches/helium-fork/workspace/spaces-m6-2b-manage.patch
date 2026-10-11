@@ -2,7 +2,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -12233,6 +12233,18 @@
+@@ -12485,6 +12485,18 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_SPACE_MENU_CHANGE_ICON" desc="The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that opens the emoji / icon picker for the space's icon.">
            Change Space Icon…
          </message>
@@ -21,7 +21,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_HELIUM_WS_SPACE_FORM_TITLE" desc="Title of the in-sidebar form that creates a new sidebar space.">
            Create a Space
          </message>
-@@ -12532,6 +12544,18 @@
+@@ -12790,6 +12802,18 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_SPACE_MENU_CHANGE_ICON" desc="In Title Case: The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that opens the emoji / icon picker for the space's icon.">
            Change Space Icon…
          </message>
@@ -44,7 +44,7 @@ Index: src/chrome/app/vector_icons/BUILD.gn
 ===================================================================
 --- src.orig/chrome/app/vector_icons/BUILD.gn
 +++ src/chrome/app/vector_icons/BUILD.gn
-@@ -161,6 +161,7 @@
+@@ -160,6 +160,7 @@ aggregate_vector_icons("chrome_vector_ic
      "hardware_computer_old.icon",
      "hardware_computer_small_custom.icon",
      "hardware_smartphone_old.icon",
@@ -77,7 +77,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -4101,6 +4101,8 @@
+@@ -2638,6 +2638,8 @@ static_library("ui") {
        "views/frame/helium_space_icon_picker_view.h",
        "views/tabs/vertical/helium_space_create_form_view.cc",
        "views/tabs/vertical/helium_space_create_form_view.h",
@@ -85,8 +85,8 @@ Index: src/chrome/browser/ui/BUILD.gn
 +      "views/tabs/vertical/helium_space_manage_view.h",
        "views/frame/helium_sidebar_submenu_view.cc",
        "views/frame/helium_sidebar_submenu_view.h",
-       "views/frame/web_contents_close_handler.cc",
-@@ -5887,6 +5889,8 @@
+       "views/frame/horizontal_tab_strip_region_view.cc",
+@@ -4341,6 +4343,8 @@ test("helium_workspace_unittests") {
      "helium/arc_sidebar_surface_unittest.cc",
      "helium/arc_space_form.h",
      "helium/arc_space_form_unittest.cc",
@@ -489,7 +489,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
  #include "base/strings/string_number_conversions.h"
  #include "base/test/task_environment.h"
  #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
-@@ -874,6 +875,76 @@
+@@ -874,6 +875,76 @@ TEST_F(WorkspaceServiceTest, AddSpaceIns
    EXPECT_THAT(SpaceShape(*service_), ElementsAre(c, kDefaultSpaceId, b, a));
  }
  
@@ -570,7 +570,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
-@@ -541,6 +541,16 @@
+@@ -541,6 +541,16 @@ void WorkspaceTabController::NewSpaceFro
    }
  }
  
@@ -591,7 +591,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 +++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
-@@ -179,6 +179,10 @@
+@@ -179,6 +179,10 @@ class WorkspaceTabController : public Ta
    // IDC_HELIUM_WS_NEW_SPACE and the sidebar menu's row: opens Arc's Create
    // a Space form in the sidebar (M6 轮2, Arc 轮0 g2b/g2c and 轮2 g18).
    void NewSpaceFromMenu();
@@ -619,7 +619,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  
  #include <algorithm>
  #include <optional>
-@@ -931,6 +933,13 @@
+@@ -939,6 +941,13 @@ void VerticalTabStripRegionView::OnCurre
    // slide (its label's subpixel text goes greyscale for those 180ms: a
    // non-opaque layer cannot carry LCD text, label.cc). Set up before the
    // strip starts so the first frame's transform reaches it too.
@@ -633,7 +633,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (TabStripView* const strip = tab_strip_view()) {
      if (const auto* controller = helium_workspace::WorkspaceTabController::From(
              browser_view()->browser())) {
-@@ -1106,12 +1115,39 @@
+@@ -1114,12 +1123,39 @@ void VerticalTabStripRegionView::ShowSpa
                            base::Unretained(this)),
        base::BindRepeating(&VerticalTabStripRegionView::OnCreateFormPickIcon,
                            base::Unretained(this)));
@@ -676,7 +676,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    CloseSidebarSheet();
    // Right after the address row, before the tab strip: the flex layout
    // runs children in order, and the sheet takes all the height the hidden
-@@ -1127,7 +1163,7 @@
+@@ -1135,7 +1171,7 @@ void VerticalTabStripRegionView::ShowSid
        views::kFlexBehaviorKey,
        views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
                                 views::MaximumFlexSizeRule::kUnbounded));
@@ -685,7 +685,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    InvalidateLayout();
  }
  
-@@ -1141,12 +1177,14 @@
+@@ -1149,12 +1185,14 @@ void VerticalTabStripRegionView::CloseSi
    views::View* const sheet = sheet_;
    sheet_ = nullptr;
    create_form_ = nullptr;
@@ -702,7 +702,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // Arc g18: everything below the top row goes -- the address row, the
    // favorites, the head row, the lists, New Tab -- and the bar changes
    // shape. SetVisible rather than a cover: an invisible child is neither
-@@ -1170,7 +1208,13 @@
+@@ -1178,7 +1216,13 @@ void VerticalTabStripRegionView::ApplySh
      undo_bar_->Dismiss();
    }
    if (space_bar_) {
@@ -717,7 +717,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    }
    UpdateMediaStripVisibility();
    if (shown && tab_strip_view()) {
-@@ -1210,6 +1254,84 @@
+@@ -1218,6 +1262,84 @@ void VerticalTabStripRegionView::OnCreat
    CloseSidebarSheet();
  }
  
@@ -802,7 +802,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  void VerticalTabStripRegionView::OnCreateFormPickIcon(views::View* anchor,
                                                        const std::string& icon) {
    BrowserView* const view = browser_view();
-@@ -1962,6 +2084,16 @@
+@@ -1967,6 +2089,16 @@ void VerticalTabStripRegionView::OnColla
      if (HeliumSidebarMenuView* const menu = browser_view()->helium_sidebar_menu()) {
        menu->HideForSidebarFold();
      }
@@ -823,8 +823,8 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -42,6 +42,8 @@
- class VerticalTabStripBottomContainer;
+@@ -43,6 +43,8 @@ class VerticalTabStripBottomContainer;
+ class VerticalTabStripFocusSwipeController;
  class HeliumCardShadowView;
  class HeliumSpaceCreateFormView;
 +class HeliumSpaceManageView;
@@ -832,7 +832,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class HeliumViewSnapshotLayer;
  class WorkspaceEntryDragOverlay;
  class ShadowFrameView;
-@@ -100,6 +102,9 @@
+@@ -101,6 +103,9 @@ class VerticalTabStripRegionView final
    // the top row stays (⛔ ←/→/⟳) and the bottom bar changes shape.
    // CloseSidebarSheet puts everything back.
    void ShowSpaceCreateForm();
@@ -842,7 +842,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    void CloseSidebarSheet();
    bool HasSidebarSheet() const { return sheet_ != nullptr; }
    // Whether the space carousel is mid-slide (an anchor taken through
-@@ -347,6 +352,7 @@
+@@ -350,6 +355,7 @@ class VerticalTabStripRegionView final
    // M6 轮2: the sheet in the lists' place, and the form when it is one.
    raw_ptr<views::View> sheet_ = nullptr;
    raw_ptr<HeliumSpaceCreateFormView> create_form_ = nullptr;
@@ -850,7 +850,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    raw_ptr<HeliumMediaStripView> media_strip_ = nullptr;
    raw_ptr<HeliumMediaStripExpandedView> media_strip_panel_ = nullptr;
    // The strip's and the panel's floating-card shadows: sibling
-@@ -397,9 +403,25 @@
+@@ -400,9 +406,25 @@ class VerticalTabStripRegionView final
  
    void OnMediaStripModelChanged();
    void UpdateMediaStripVisibility();
@@ -883,7 +883,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
-@@ -648,6 +648,15 @@
+@@ -648,6 +648,15 @@ void WorkspaceSidebarView::OnSpaceChange
    StartSpaceIconPick(space_id);
  }
  
@@ -903,7 +903,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-@@ -277,6 +277,7 @@
+@@ -277,6 +277,7 @@ class WorkspaceSidebarView : public view
    void OnSpaceNewFolderRequested(const std::string& space_id) override;
    void OnSpaceDeleteRequested(const std::string& space_id) override;
    void OnSpaceChangeIconRequested(const std::string& space_id) override;
@@ -915,7 +915,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
-@@ -471,7 +471,7 @@
+@@ -471,7 +471,7 @@ void WorkspaceSpaceHeadRowView::RunComma
        delegate_->OnSpaceChangeIconRequested(space_id_);
        break;
      case WorkspaceSpaceMenuCommand::kManageSpaces:
@@ -928,7 +928,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.h
 +++ src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.h
-@@ -71,6 +71,9 @@
+@@ -71,6 +71,9 @@ class WorkspaceSpaceHeadRowView : public
      // The menu's Change Space Icon…: the delegate opens the picker at this
      // row's icon slot (M6 轮2).
      virtual void OnSpaceChangeIconRequested(const std::string& space_id) = 0;
@@ -958,7 +958,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.cc
    AddItemWithStringId(static_cast<int>(WorkspaceSpaceMenuCommand::kChangeIcon),
                        IDS_HELIUM_WS_SPACE_MENU_CHANGE_ICON);
    AddItemWithStringId(static_cast<int>(WorkspaceSpaceMenuCommand::kRename),
-@@ -21,6 +22,12 @@
+@@ -21,6 +22,12 @@ WorkspaceSpaceMenuModel::WorkspaceSpaceM
    AddItemWithStringId(static_cast<int>(WorkspaceSpaceMenuCommand::kNewFolder),
                        IDS_HELIUM_WS_NEW_FOLDER);
    AddSeparator(ui::NORMAL_SEPARATOR);
@@ -975,7 +975,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.h
 +++ src/chrome/browser/ui/views/tabs/common/workspace_space_menu_model.h
-@@ -30,7 +30,13 @@
+@@ -30,7 +30,13 @@ class WorkspaceSpaceMenuModel : public u
    using CommandCallback =
        base::RepeatingCallback<void(WorkspaceSpaceMenuCommand)>;
  
@@ -2501,7 +2501,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
 +++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
-@@ -370,13 +370,13 @@
+@@ -370,13 +370,13 @@ WorkspaceSpaceBarView::WorkspaceSpaceBar
  
  WorkspaceSpaceBarView::~WorkspaceSpaceBarView() = default;
  
@@ -2519,7 +2519,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
    }
    InvalidateLayout();
    SchedulePaint();
-@@ -412,27 +412,30 @@
+@@ -412,27 +412,30 @@ void WorkspaceSpaceBarView::Layout(PassK
    // all of them (the 42pt collapsed width) shows what fits -- the current
    // space first, see Rebuild.
    const int menu_x = std::max(0, width() - kIconSlot);
@@ -2556,7 +2556,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
      placeholder_->SetVisible(false);
    }
    const int group_width = static_cast<int>(row.size()) * kIconSlot;
-@@ -500,7 +503,7 @@
+@@ -500,7 +503,7 @@ void WorkspaceSpaceBarView::Rebuild() {
          base::BindRepeating(&WorkspaceSpaceBarView::ShowSpaceMenu,
                              base::Unretained(this))));
      button->SetSpace(spaces[i], i);
@@ -2565,7 +2565,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
      buttons_.push_back(button);
    }
    UpdateCurrent();
-@@ -609,7 +612,7 @@
+@@ -609,7 +612,7 @@ void WorkspaceSpaceBarView::RunSpaceMenu
        ShowIconPickerForSpace(space_id);
        break;
      case WorkspaceSpaceMenuCommand::kManageSpaces:
@@ -2578,7 +2578,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
 +++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
-@@ -77,10 +77,20 @@
+@@ -77,10 +77,20 @@ class WorkspaceSpaceBarView
    // downloads button no longer shows anywhere -- user ruling 2026-09-02).
    void SetDownloadIndicator(bool shown);
  
@@ -2603,7 +2603,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
  
    // views::View:
    gfx::Size CalculatePreferredSize(
-@@ -109,8 +119,6 @@
+@@ -109,8 +119,6 @@ class WorkspaceSpaceBarView
    void ShowSpaceMenu(const std::string& space_id,
                       const gfx::Point& point,
                       ui::mojom::MenuSourceType source_type);
@@ -2612,7 +2612,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
    // T053: the icon menu is gone -- drop the square it was keeping.
    void OnSpaceMenuClosed();
    // Change Space Icon… from the bar: the picker above |space_id|'s icon.
-@@ -127,7 +135,7 @@
+@@ -127,7 +135,7 @@ class WorkspaceSpaceBarView
    std::vector<raw_ptr<SpaceButton>> buttons_;
    raw_ptr<views::ImageButton> menu_button_ = nullptr;
    raw_ptr<PlaceholderDot> placeholder_ = nullptr;

@@ -2,7 +2,7 @@ Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 ===================================================================
 --- src.orig/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -664,6 +664,7 @@
+@@ -658,6 +658,7 @@
  #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
  #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_service_factory.h"
  #endif
@@ -10,7 +10,7 @@ Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
  
  #if BUILDFLAG(USE_NSS_CERTS)
  #include "chrome/browser/net/nss_service_factory.h"
-@@ -857,6 +858,7 @@ void ChromeBrowserMainExtraPartsProfiles
+@@ -854,6 +855,7 @@ void ChromeBrowserMainExtraPartsProfiles
  #if defined(TOOLKIT_VIEWS)
    browser_shortcuts::BrowserShortcutServiceFactory::GetInstance();
  #endif
@@ -22,7 +22,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -10,6 +10,7 @@ import("//build/config/ui.gni")
+@@ -11,6 +11,7 @@ import("//build/config/ui.gni")
  import("//chrome/browser/buildflags.gni")
  import("//chrome/common/features.gni")
  import("//components/captive_portal/core/features.gni")
@@ -30,8 +30,8 @@ Index: src/chrome/browser/ui/BUILD.gn
  import("//components/compose/features.gni")
  import("//components/enterprise/buildflags/buildflags.gni")
  import("//components/lens/features.gni")
-@@ -403,8 +404,15 @@ static_library("ui") {
-     "helium/helium_layout_state_controller.h",
+@@ -606,8 +607,15 @@ static_library("ui") {
+   sources = [
      "helium/helium_tab_switcher_controller.cc",
      "helium/helium_tab_switcher_controller.h",
 +    "helium_workspace/workspace_entry.cc",
@@ -43,12 +43,12 @@ Index: src/chrome/browser/ui/BUILD.gn
 +    "helium_workspace/workspace_service.h",
 +    "helium_workspace/workspace_service_factory.cc",
 +    "helium_workspace/workspace_service_factory.h",
-     "idle_bubble.h",
-     "managed_ui.cc",
-     "managed_ui.h",
-@@ -5763,3 +5771,45 @@ source_set("storage_pressure_bubble") {
-   public = [ "storage_pressure_bubble.h" ]
-   public_deps = [ "//url" ]
+     "tab_helpers.cc",
+     "tab_helpers.h",
+   ]
+@@ -4217,3 +4225,45 @@ if (is_mac) {
+     ]
+   }
  }
 +
 +# helium-fork: standalone workspace unit tests. The full unit_tests target is

@@ -2,7 +2,7 @@ Index: src/chrome/app/chrome_command_ids.h
 ===================================================================
 --- src.orig/chrome/app/chrome_command_ids.h
 +++ src/chrome/app/chrome_command_ids.h
-@@ -117,6 +117,11 @@
+@@ -119,6 +119,11 @@
  #define IDC_BROWSER_LAYOUT_VERTICAL     34084
  #define IDC_BROWSER_LAYOUT_VERTICAL_RIGHT 34085
  #define IDC_BROWSER_LAYOUT_DYNAMIC      34086
@@ -14,7 +14,7 @@ Index: src/chrome/app/chrome_command_ids.h
  
  #define IDC_CTRL_S_SHORTCUT             34090
  #define IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN 34091
-@@ -130,6 +135,18 @@
+@@ -132,6 +137,18 @@
  // helium-fork M3.13: a new sidebar folder, from the window menu.
  #define IDC_HELIUM_WS_NEW_FOLDER        34097
  
@@ -37,7 +37,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -2005,6 +2005,18 @@
+@@ -2024,6 +2024,18 @@ are declared in tools/grit/grit_args.gni
        <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_FOLDER" desc="Command name shown on the Settings shortcuts page for creating a new folder among the pinned entries of the sidebar.">
          New sidebar folder
        </message>
@@ -56,7 +56,7 @@ Index: src/chrome/app/generated_resources.grd
        <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
          Toggle developer tools
        </message>
-@@ -12185,6 +12197,63 @@
+@@ -12437,6 +12449,63 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
            Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
          </message>
@@ -120,7 +120,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12361,6 +12430,63 @@
+@@ -12619,6 +12688,63 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="In Title Case: Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
            Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
          </message>
@@ -188,7 +188,7 @@ Index: src/chrome/browser/global_keyboard_shortcuts_mac.mm
 ===================================================================
 --- src.orig/chrome/browser/global_keyboard_shortcuts_mac.mm
 +++ src/chrome/browser/global_keyboard_shortcuts_mac.mm
-@@ -118,8 +118,25 @@
+@@ -118,8 +118,25 @@ const std::vector<KeyboardShortcutData>&
        {true,  true,  false, false, kVK_ANSI_LeftBracket,  IDC_SELECT_PREVIOUS_TAB},
        {false, false, true,  false, kVK_PageDown,          IDC_SELECT_NEXT_TAB},
        {false, false, true,  false, kVK_PageUp,            IDC_SELECT_PREVIOUS_TAB},
@@ -220,7 +220,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -523,7 +523,13 @@
+@@ -545,7 +545,13 @@ bool BrowserCommandController::IsReserve
           command_id == IDC_CYCLE_TO_NEXT_TAB ||
           command_id == IDC_CYCLE_TO_PREV_TAB || command_id == IDC_EXIT ||
           command_id == IDC_COPY_OR_INSPECT_SHORTCUT || command_id == IDC_DEV_TOOLS ||
@@ -235,7 +235,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  }
  
  void BrowserCommandController::TabStateChanged() {
-@@ -1549,6 +1555,43 @@
+@@ -1564,6 +1570,43 @@ void BrowserCommandController::HandleCom
        }
        break;
      }
@@ -279,7 +279,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
      // Hosted App commands
      case IDC_COPY_URL:
        CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
-@@ -2112,6 +2155,16 @@
+@@ -2135,6 +2178,16 @@ void BrowserCommandController::InitComma
                                           normal_window);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_NEW_FOLDER,
                                           normal_window);
@@ -300,15 +300,15 @@ Index: src/chrome/browser/ui/browser_live_tab_context.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_live_tab_context.cc
 +++ src/chrome/browser/ui/browser_live_tab_context.cc
-@@ -28,6 +28,7 @@
- #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+@@ -30,6 +30,7 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
  #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h"
  #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
  #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
-@@ -156,6 +157,10 @@
+@@ -178,6 +179,10 @@ std::map<std::string, std::string> Brows
  
    glic::PopulateGlicExtraData(tab_strip_model_->GetTabAtIndex(index),
                                &extra_data);
@@ -331,7 +331,7 @@ Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
  #include "build/build_config.h"
  #include "chrome/app/chrome_command_ids.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
-@@ -258,6 +259,25 @@
+@@ -256,6 +257,25 @@ std::optional<BrowserShortcutCommandLabe
        return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_CLOSE_UNPINNED_TABS);
      case IDC_HELIUM_WS_NEW_FOLDER:
        return Label(IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_FOLDER);
@@ -357,7 +357,7 @@ Index: src/chrome/browser/ui/browser_shortcuts/browser_shortcut_metadata.cc
      case IDC_CARET_BROWSING_TOGGLE:
        return Label(IDS_SETTINGS_ENABLE_CARET_BROWSING_TITLE);
      case IDC_CLEAR_BROWSING_DATA:
-@@ -363,6 +383,8 @@
+@@ -361,6 +381,8 @@ std::vector<int> GetBrowserShortcutComma
    // helium-fork M3.13: same story -- New Folder ships unbound, and being
    // listed here is what makes it bindable on the shortcuts page at all.
    commands.push_back(IDC_HELIUM_WS_NEW_FOLDER);
@@ -371,14 +371,14 @@ Index: src/chrome/browser/ui/browser_tabrestore.cc
 --- src.orig/chrome/browser/ui/browser_tabrestore.cc
 +++ src/chrome/browser/ui/browser_tabrestore.cc
 @@ -19,6 +19,7 @@
- #include "chrome/browser/tab_contents/tab_util.h"
  #include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h"
  #include "chrome/browser/ui/send_tab_to_self/send_tab_to_self_activation_tracker.h"
  #include "chrome/browser/ui/tab_ui_helper.h"
  #include "chrome/browser/ui/tabs/public/tab_features.h"
-@@ -88,6 +89,10 @@
+@@ -86,6 +87,10 @@ std::unique_ptr<WebContents> CreateResto
    glic::RestoreGlicStateFromExtraData(web_contents.get(), extra_data);
    send_tab_to_self::SendTabToSelfActivationTracker::RestoreFromExtraData(
        web_contents.get(), extra_data);
@@ -393,7 +393,7 @@ Index: src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/system_menu_model_builder.cc
 +++ src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
-@@ -195,6 +195,9 @@
+@@ -205,6 +205,9 @@ void SystemMenuModelBuilder::BuildSystem
      // its New Folder, one menu item instead of a second menu.
      model->AddItemWithStringId(IDC_HELIUM_WS_NEW_FOLDER,
                                 IDS_HELIUM_WS_NEW_FOLDER);

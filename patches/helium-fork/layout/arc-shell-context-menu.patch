@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -887,6 +887,16 @@ void BrowserCommandController::HandleCom
+@@ -902,6 +902,16 @@ void BrowserCommandController::HandleCom
      case IDC_BROWSER_LAYOUT_VERTICAL_RIGHT:
        ToggleVerticalTabStripRightAligned(browser_);
        break;
@@ -19,7 +19,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  
  #if BUILDFLAG(IS_CHROMEOS)
      case IDC_TAKE_SCREENSHOT:
-@@ -1825,13 +1835,20 @@ void BrowserCommandController::InitComma
+@@ -1844,13 +1854,20 @@ void BrowserCommandController::InitComma
    command_updater_->UpdateCommandEnabled(IDC_SHOW_AI_MODE_OMNIBOX_BUTTON, true);
  
    // Helium layout menu
@@ -43,12 +43,12 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 +  command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_AUTO, true);
  
    // Window management commands
-   command_updater_->UpdateCommandEnabled(IDC_FORCE_PASTE, true);
+   command_updater_->UpdateCommandEnabled(IDC_CLOSE_WINDOW, true);
 Index: src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/system_menu_model_builder.cc
 +++ src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
-@@ -160,23 +160,23 @@ void SystemMenuModelBuilder::BuildSystem
+@@ -170,23 +170,23 @@ void SystemMenuModelBuilder::BuildSystem
    if (!browser()->GetProfile()->IsOffTheRecord()) {
      model->AddSeparator(ui::NORMAL_SEPARATOR);
  
@@ -87,7 +87,7 @@ Index: src/chrome/app/chrome_command_ids.h
 ===================================================================
 --- src.orig/chrome/app/chrome_command_ids.h
 +++ src/chrome/app/chrome_command_ids.h
-@@ -121,6 +121,11 @@
+@@ -123,6 +123,11 @@
  #define IDC_CTRL_S_SHORTCUT             34090
  #define IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN 34091
  #define IDC_HELIUM_WS_TOGGLE_PIN        34092
@@ -103,7 +103,7 @@ Index: src/chrome/browser/ui/browser_commands.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_commands.cc
 +++ src/chrome/browser/ui/browser_commands.cc
-@@ -2496,6 +2496,16 @@ void SetBrowserLayout(BrowserWindowInter
+@@ -2630,6 +2630,16 @@ void SetBrowserLayout(BrowserWindowInter
    }
  }
  
@@ -124,7 +124,7 @@ Index: src/chrome/browser/ui/browser_commands.h
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_commands.h
 +++ src/chrome/browser/ui/browser_commands.h
-@@ -300,6 +300,9 @@ void ToggleVerticalTabs(BrowserWindowInt
+@@ -302,6 +302,9 @@ void ToggleVerticalTabs(BrowserWindowInt
  void ToggleVerticalTabsExpandOnHover(BrowserWindowInterface* browser);
  void ToggleCollapseVerticalTabs(BrowserWindowInterface* browser);
  void SetBrowserLayout(BrowserWindowInterface* browser, HeliumLayoutType layout);
@@ -138,7 +138,7 @@ Index: src/chrome/browser/ui/views/frame/system_menu_model_delegate.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/system_menu_model_delegate.cc
 +++ src/chrome/browser/ui/views/frame/system_menu_model_delegate.cc
-@@ -77,6 +77,24 @@ bool SystemMenuModelDelegate::IsCommandI
+@@ -80,6 +80,24 @@ bool SystemMenuModelDelegate::IsCommandI
      }
    }
  

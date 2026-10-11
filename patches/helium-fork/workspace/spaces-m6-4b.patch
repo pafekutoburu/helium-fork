@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -3543,6 +3543,8 @@
+@@ -2399,6 +2399,8 @@ static_library("ui") {
        "views/frame/immersive_mode_controller_mac.mm",
        "views/frame/immersive_mode_overlay_views_mac.h",
        "views/frame/immersive_mode_overlay_views_mac.mm",
@@ -15,7 +15,7 @@ Index: src/chrome/browser/ui/helium/arc_space_form.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/arc_space_form.h
 +++ src/chrome/browser/ui/helium/arc_space_form.h
-@@ -37,6 +37,19 @@
+@@ -37,6 +37,19 @@ inline constexpr int kSpaceFormSideInset
  inline constexpr int kSpaceFormIllustrationTop = 50;
  inline constexpr int kSpaceFormIllustrationWidth = 65;
  inline constexpr int kSpaceFormIllustrationHeight = 42;
@@ -50,7 +50,7 @@ Index: src/chrome/browser/ui/helium/arc_space_motion.h
  
  // helium-fork M6 轮4: the space-level transitions -- the switch carousel,
  // the two-finger swipe, the bottom bar making way -- measured on Arc
-@@ -47,17 +49,79 @@
+@@ -47,17 +49,79 @@ inline constexpr double kSpaceSwipeFollo
  // unmeasured; it completes here.
  inline constexpr double kSpaceSwipeCommitFraction = 0.5;
  
@@ -141,7 +141,7 @@ Index: src/chrome/browser/ui/helium/arc_space_motion.h
  
  // ⚠ Ours (Arc: "the first stretch picks the axis and it stays", g43): the
  // axis is decided once either finger total reaches this many points.
-@@ -157,9 +221,220 @@
+@@ -157,9 +221,220 @@ inline int SwipeReleaseTarget(double x,
    return std::clamp(target, first, last);
  }
  
@@ -369,7 +369,7 @@ Index: src/chrome/browser/ui/helium/arc_space_motion_unittest.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/arc_space_motion_unittest.cc
 +++ src/chrome/browser/ui/helium/arc_space_motion_unittest.cc
-@@ -127,11 +127,215 @@
+@@ -127,11 +127,215 @@ TEST(ArcSpaceMotionTest, AReleaseNeverLe
    EXPECT_EQ(0, SwipeReleaseTarget(-0.9, 0, 0, 0, 4));
  }
  
@@ -594,7 +594,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -2873,6 +2873,17 @@
+@@ -2916,6 +2916,17 @@ bool BrowserView::MaybeBeginArcFieldEdit
    if (arc_field_edit_active_ || !toolbar_) {
      return false;
    }
@@ -612,7 +612,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    LocationBarView* const location_bar = toolbar_->location_bar_view();
    if (!location_bar) {
      return false;
-@@ -2953,6 +2964,12 @@
+@@ -2996,6 +3007,12 @@ void BrowserView::BeginArcSidebarFieldEd
        !vertical_tab_strip_region_view_) {
      return;
    }
@@ -1020,7 +1020,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "base/time/time.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/animation/browser_animation_controller.h"
-@@ -82,12 +85,14 @@
+@@ -85,12 +88,14 @@
  #include "ui/base/interaction/element_tracker.h"
  #include "ui/base/l10n/l10n_util.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
@@ -1035,7 +1035,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "ui/views/background.h"
  #include "ui/views/controls/button/label_button.h"
  #include "ui/views/controls/focus_ring.h"
-@@ -103,6 +108,26 @@
+@@ -106,6 +111,26 @@
  #include "ui/views/view.h"
  #include "ui/views/view_class_properties.h"
  #include "ui/views/view_utils.h"
@@ -1062,7 +1062,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  
  namespace {
  constexpr int kResizeAreaWidth = 5;
-@@ -153,6 +178,616 @@
+@@ -156,6 +181,616 @@ constexpr ShadowFrameView::ShadowAlpha k
  
  }  // namespace
  
@@ -1679,7 +1679,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  DEFINE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(VerticalTabStripRegionView,
                                         kAnimationCompletedEvent);
  
-@@ -295,6 +930,7 @@
+@@ -298,6 +933,7 @@ VerticalTabStripRegionView::VerticalTabS
            &VerticalTabStripRegionView::OnSpaceSwitchActivatedForToday,
            base::Unretained(this))));
    carousel_ = std::make_unique<SpaceCarousel>(this, this);
@@ -1687,7 +1687,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    space_bar_->SetProperty(
        views::kMarginsKey,
        gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
-@@ -690,9 +1326,16 @@
+@@ -698,9 +1334,16 @@ void VerticalTabStripRegionView::AddedTo
    if (GetFocusManager()) {
      GetFocusManager()->AddFocusChangeListener(&focus_listener_);
    }
@@ -1704,7 +1704,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // M6 轮4: the pictures live in the strip's layer; land before it goes.
    if (carousel_) {
      carousel_->Stop();
-@@ -926,10 +1569,26 @@
+@@ -934,10 +1577,26 @@ void VerticalTabStripRegionView::Layout(
    }
  }
  
@@ -1732,7 +1732,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (carousel_ && previous_bounds.width() != width()) {
      carousel_->Stop();
    }
-@@ -986,6 +1645,10 @@
+@@ -994,6 +1653,10 @@ void VerticalTabStripRegionView::OnSpace
  }
  
  void VerticalTabStripRegionView::OnCurrentSpaceWillChange(int direction) {
@@ -1743,7 +1743,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (!carousel_) {
      return;
    }
-@@ -1104,16 +1767,441 @@
+@@ -1112,16 +1775,441 @@ void VerticalTabStripRegionView::OnCarou
    }
  }
  
@@ -2187,7 +2187,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
      undo_bar_->ShowForWatermark(watermark);
    }
  }
-@@ -1121,7 +2209,9 @@
+@@ -1129,7 +2217,9 @@ void VerticalTabStripRegionView::ShowUnd
  void VerticalTabStripRegionView::ShowUndoBarForTurnIntoSpace(
      const std::u16string& folder_title,
      base::OnceClosure on_undo) {
@@ -2198,7 +2198,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
      undo_bar_->ShowForAction(
          l10n_util::GetStringFUTF16(IDS_HELIUM_WS_TURNED_INTO_SPACE_BODY,
                                     folder_title),
-@@ -1132,7 +2222,9 @@
+@@ -1140,7 +2230,9 @@ void VerticalTabStripRegionView::ShowUnd
  void VerticalTabStripRegionView::ShowMovedToSpaceBar(
      const std::u16string& space_name,
      base::OnceClosure on_go) {
@@ -2209,7 +2209,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
      undo_bar_->ShowForOffer(
          l10n_util::GetStringFUTF16(IDS_HELIUM_WS_ENTRY_MOVED_BODY, space_name),
          l10n_util::GetStringUTF16(IDS_HELIUM_WS_ENTRY_MOVED_GO),
-@@ -1143,7 +2235,9 @@
+@@ -1151,7 +2243,9 @@ void VerticalTabStripRegionView::ShowMov
  void VerticalTabStripRegionView::ShowUndoBarForFolderDelete(
      const std::u16string& folder_title,
      base::OnceClosure on_undo) {
@@ -2220,7 +2220,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
      undo_bar_->ShowForAction(
          l10n_util::GetStringFUTF16(IDS_HELIUM_WS_FOLDER_DELETED_BODY,
                                     folder_title),
-@@ -1207,6 +2301,9 @@
+@@ -1215,6 +2309,9 @@ void VerticalTabStripRegionView::ShowSpa
  void VerticalTabStripRegionView::ShowSidebarSheet(
      std::unique_ptr<views::View> sheet,
      SidebarSheetKind kind) {
@@ -2230,7 +2230,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // M6 轮4: the lists are about to be hidden; land whatever was moving.
    if (carousel_) {
      carousel_->Stop();
-@@ -1467,6 +2564,9 @@
+@@ -1475,6 +2572,9 @@ void VerticalTabStripRegionView::SyncMed
      ids.push_back(rows[i]->item_id);
    }
    if (ids != overlay_capsule_ids_) {
@@ -2240,7 +2240,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
      // Rebuild on membership change only, same rule as everything else here:
      // metadata churn updates in place and a pressed button is never deleted
      // under the pointer.
-@@ -1617,9 +2717,13 @@
+@@ -1625,9 +2725,13 @@ void VerticalTabStripRegionView::UpdateM
    const int strip_width =
        width() - 2 * GetLayoutConstant(
                          LayoutConstant::kVerticalTabStripHorizontalPadding);
@@ -2256,7 +2256,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    media_strip_->SetShown(shown, at_once);
    // The floating half: capsules for sessions beyond the first -- one shown
    // flag, one trigger frame, one 200ms fade for all of it (M3.3h). The
-@@ -2122,6 +3226,8 @@
+@@ -2127,6 +3231,8 @@ void VerticalTabStripRegionView::OnTabSt
  }
  
  void VerticalTabStripRegionView::OnTabStripViewWillClear() {
@@ -2265,7 +2265,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    new_tab_row_pressed_subscription_ = {};
    on_animation_update_subscription_.reset();
    expand_on_hover_enabled_changed_subscription_.reset();
-@@ -2180,7 +3286,11 @@
+@@ -2185,7 +3291,11 @@ void VerticalTabStripRegionView::OnColla
      manage_view_->AbortDrag();
    }
    // M6 轮4: and the space carousel lands (pitfalls 2b-r1 #4: a fold is no
@@ -2290,7 +2290,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  #include "ui/views/accessible_pane_view.h"
  #include "ui/views/controls/resize_area_delegate.h"
  #include "ui/views/focus/focus_manager.h"
-@@ -159,6 +160,10 @@
+@@ -160,6 +161,10 @@ class VerticalTabStripRegionView final
    // (HeliumAddressBarMode::kHidden -- Arc's default shape). Empty otherwise.
    // BrowserView::UpdateArcAddressBarPlacement() owns what goes in it.
    views::View* arc_address_row() { return arc_address_row_; }
@@ -2301,16 +2301,16 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  
    bool IsPositionInWindowCaption(const gfx::Point& point) override;
  
-@@ -215,6 +220,8 @@
+@@ -216,6 +221,8 @@ class VerticalTabStripRegionView final
    void OnMouseMoved(const ui::MouseEvent& event) override;
    void OnMouseExited(const ui::MouseEvent& event) override;
    void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 +  // M6 轮4 4b-r5: keeps the card in flight over the page turn's picture.
 +  void ReorderChildLayers(ui::Layer* parent_layer) override;
  
-   void OnTabGroupFocusChanged(
-       std::optional<tab_groups::TabGroupId> new_focused_group_id,
-@@ -391,6 +398,23 @@
+   std::unique_ptr<ExpandOnHoverLock> GetExpandOnHoverLock(
+       ExpandOnHoverLockType lock_type) override;
+@@ -394,6 +401,23 @@ class VerticalTabStripRegionView final
    raw_ptr<views::View> row_shadow_host_ = nullptr;
    // M6 轮4: the space switch's motion (decisions 「M6 轮4」④).
    std::unique_ptr<SpaceCarousel> carousel_;
@@ -2334,7 +2334,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    // 3a-r1: the press metric of the strip's own "+ New Tab" row (the bottom
    // container wires its copy itself).
    base::CallbackListSubscription new_tab_row_pressed_subscription_;
-@@ -467,6 +491,55 @@
+@@ -470,6 +494,55 @@ class VerticalTabStripRegionView final
    void OnCarouselFrame(float live_dx) override;
    void OnCarouselBlend(const std::map<std::string, float>& greys) override;
    void OnCarouselEnded() override;
@@ -2406,7 +2406,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
  #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
  #include "ui/compositor/layer.h"
-@@ -40,6 +43,8 @@
+@@ -40,6 +43,8 @@ SpaceCarousel::~SpaceCarousel() = defaul
  
  void SpaceCarousel::OnSwitchWillStart(int direction) {
    pending_ = false;
@@ -2415,7 +2415,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
    helium_workspace::WorkspaceTabController* const controller =
        delegate_->CarouselController();
    TabStripView* const strip = delegate_->CarouselStrip();
-@@ -56,6 +61,14 @@
+@@ -56,6 +61,14 @@ void SpaceCarousel::OnSwitchWillStart(in
      // under it): land and start over from rest.
      Stop();
    }
@@ -2430,7 +2430,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
    // Where the user left the list, for when the space comes back (and for
    // its picture while it slides out).
    SaveScroll(from);
-@@ -103,6 +116,15 @@
+@@ -103,6 +116,15 @@ void SpaceCarousel::OnSwitchActivated()
    const int from_slot = live_slot_;
    const int to_slot = wrapping ? from_slot + pending_direction_
                                 : from_slot + (to_index - from_index);
@@ -2446,7 +2446,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
  
    // The slots the motion will show: everything between here and there, and
    // one more the way a moving spring may run on before it turns.
-@@ -147,8 +169,8 @@
+@@ -147,8 +169,8 @@ void SpaceCarousel::OnSwitchActivated()
    // or wherever a cross-fade that is still running has got to -- to the new
    // current in colour and everything else grey.
    std::map<std::string, float> start;
@@ -2457,7 +2457,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
    } else {
      start[from] = 0.0f;
    }
-@@ -180,12 +202,22 @@
+@@ -180,12 +202,22 @@ void SpaceCarousel::OnSwitchActivated()
  
  void SpaceCarousel::Stop() {
    pending_ = false;
@@ -2480,7 +2480,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
    if (!active_) {
      return;
    }
-@@ -343,7 +375,10 @@
+@@ -343,7 +375,10 @@ void SpaceCarousel::Apply() {
      return;
    }
    const double width = width_;
@@ -2492,7 +2492,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
    strip->SetListOffset(live_dx);
    // A picture of a longer list than the committed one reaches below the
    // strip's bottom edge; it slides out whole (every Arc list is as long as
-@@ -352,12 +387,234 @@
+@@ -352,12 +387,234 @@ void SpaceCarousel::Apply() {
    delegate_->OnCarouselFrame(live_dx);
    for (auto& [slot, picture] : slots_) {
      const gfx::Transform transform = gfx::Transform::MakeTranslation(
@@ -2733,7 +2733,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.h
 +++ src/chrome/browser/ui/views/tabs/common/space_carousel.h
-@@ -62,6 +62,14 @@
+@@ -62,6 +62,14 @@ class SpaceCarousel : public views::Anim
      virtual void OnCarouselBlend(const std::map<std::string, float>& greys) = 0;
      // At rest again: the live list's offset is 0, every picture is gone.
      virtual void OnCarouselEnded() = 0;
@@ -2748,7 +2748,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
  
     protected:
      virtual ~Delegate() = default;
-@@ -83,6 +91,38 @@
+@@ -83,6 +91,38 @@ class SpaceCarousel : public views::Anim
    // Lands at once: the live list at rest, every picture gone. Safe idle.
    void Stop();
  
@@ -2787,7 +2787,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
   private:
    struct Slot {
      Slot();
-@@ -122,6 +162,17 @@
+@@ -122,6 +162,17 @@ class SpaceCarousel : public views::Anim
    void Apply();
    // The involved icons' greys at |x|.
    std::map<std::string, float> BlendAt(double x) const;
@@ -2805,7 +2805,7 @@ Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
  
    const raw_ptr<Delegate> delegate_;
    // A clock and nothing more: the spring is evaluated off its elapsed time
-@@ -146,7 +197,32 @@
+@@ -146,7 +197,32 @@ class SpaceCarousel : public views::Anim
    // Set by a (re)aim: its first frame steps the spring by at most
    // helium::kSpaceSpringMaxFirstStep.
    bool cap_first_step_ = false;
@@ -2851,7 +2851,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  #include "ui/views/view_utils.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
  
-@@ -940,6 +942,17 @@
+@@ -940,6 +942,17 @@ void WorkspaceSidebarView::OnCurrentSpac
    ScheduleHoverResync();
  }
  
@@ -2873,7 +2873,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-@@ -131,6 +131,11 @@
+@@ -131,6 +131,11 @@ class WorkspaceSidebarView : public view
    // photographs it and points them back within one task. Nothing is
    // painted in between.
    void ResyncToShownSpace();
@@ -2889,7 +2889,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.c
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.cc
 +++ src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.cc
-@@ -226,6 +226,14 @@
+@@ -226,6 +226,14 @@ HeliumSpaceCreateFormView::HeliumSpaceCr
    subtitle_->SetLineHeight(helium::kSpaceFormSubtitleLineHeight);
    subtitle_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
    subtitle_->SetAutoColorReadabilityEnabled(false);
@@ -2904,7 +2904,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.c
  
    icon_button_ = AddChildView(std::make_unique<IconButton>(
        base::BindRepeating(&HeliumSpaceCreateFormView::OnIconPressed,
-@@ -296,6 +304,53 @@
+@@ -296,6 +304,53 @@ void HeliumSpaceCreateFormView::Layout(P
    cancel_->SetBoundsRect(l.cancel);
  }
  
@@ -2958,7 +2958,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.c
  void HeliumSpaceCreateFormView::OnPaint(gfx::Canvas* canvas) {
    views::View::OnPaint(canvas);
    const ui::ColorProvider* colors = GetColorProvider();
-@@ -306,44 +361,14 @@
+@@ -306,44 +361,14 @@ void HeliumSpaceCreateFormView::OnPaint(
    const SkColor sidebar = colors->GetColor(kColorToolbar);
  
    // The illustration: three white cards fanned out (Arc's stacked-cards
@@ -3011,7 +3011,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.c
    }
  
    // The input row: a white, inset field (user 2026-09-05 #2 "白色的输入框
-@@ -404,6 +429,9 @@
+@@ -404,6 +429,9 @@ bool HeliumSpaceCreateFormView::OnKeyPre
  
  void HeliumSpaceCreateFormView::AddedToWidget() {
    views::View::AddedToWidget();
@@ -3041,7 +3041,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.h
  namespace views {
  class Button;
  class Label;
-@@ -58,6 +64,27 @@
+@@ -58,6 +64,27 @@ class HeliumSpaceCreateFormView : public
    // Puts the caret in the name field.
    void FocusNameField();
  
@@ -3069,7 +3069,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_create_form_view.h
    // views::View:
    void Layout(PassKey) override;
    void OnPaint(gfx::Canvas* canvas) override;
-@@ -84,6 +111,8 @@
+@@ -84,6 +111,8 @@ class HeliumSpaceCreateFormView : public
    const base::RepeatingClosure on_cancel_;
    const PickIconCallback on_pick_icon_;
    std::string icon_;
@@ -3091,7 +3091,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
  #include "ui/gfx/geometry/transform.h"
  #include "ui/gfx/vector_icon_types.h"
  #include "ui/views/accessibility/view_accessibility.h"
-@@ -186,8 +188,9 @@
+@@ -186,8 +188,9 @@ class HeliumSpaceManageView::Row : publi
          icon_image_->SetImage(ui::ImageModel());
          icon_label_->SetText(base::UTF8ToUTF16(icon_));
        }
@@ -3103,7 +3103,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
                                !helium_workspace::IsVectorIconRef(icon_));
        SchedulePaint();
      }
-@@ -219,6 +222,19 @@
+@@ -219,6 +222,19 @@ class HeliumSpaceManageView::Row : publi
    // The sheet ended the gesture from outside (Escape, a settle): what is
    // left of the press is not a drag any more.
    void Disarm() { armed_ = false; }
@@ -3123,7 +3123,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
    // After a drag the rows have moved under a pointer that sent no exits.
    // Only ever clears (M3.11-r1): lighting is the synthesized move's job.
    void ClearStaleHover() {
-@@ -279,7 +295,7 @@
+@@ -279,7 +295,7 @@ class HeliumSpaceManageView::Row : publi
        fill.setColor(HoverFillFor(this, colors));
        canvas->DrawRoundRect(gfx::RectF(GetLocalBounds()), CornerRadius(), fill);
      }
@@ -3132,7 +3132,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
        // No icon: the bar's 8pt dot, centred in the slot.
        const helium::SpaceManageRowLayout l =
            helium::ComputeSpaceManageRowLayout(width());
-@@ -412,6 +428,7 @@
+@@ -412,6 +428,7 @@ class HeliumSpaceManageView::Row : publi
    bool menu_open_ = false;
    bool ghost_ = false;
    bool away_ = false;
@@ -3140,7 +3140,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
    // Between a press on the row and its release.
    bool armed_ = false;
    // Where the button went down, in this row's coordinates.
-@@ -681,6 +698,32 @@
+@@ -681,6 +698,32 @@ HeliumSpaceManageView::HeliumSpaceManage
  
  HeliumSpaceManageView::~HeliumSpaceManageView() = default;
  
@@ -3173,7 +3173,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
  void HeliumSpaceManageView::OnIconPicked(const std::string& space_id,
                                           const std::string& icon) {
    if (service_) {
-@@ -759,6 +802,9 @@
+@@ -759,6 +802,9 @@ void HeliumSpaceManageView::AddedToWidge
      }
    }
    Rebuild();
@@ -3195,7 +3195,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h
  #include "ui/gfx/geometry/rect.h"
  #include "ui/gfx/geometry/vector2d_f.h"
  #include "ui/views/animation/animation_delegate_views.h"
-@@ -103,6 +104,17 @@
+@@ -103,6 +104,17 @@ class HeliumSpaceManageView : public vie
    // removes nothing, so no RemovedFromWidget comes -- reviewer 2026-09-17).
    void AbortDrag() { FinishRowDrag(); }
  
@@ -3213,7 +3213,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.h
    // The picker's answer for |space_id|: written to the service (the row
    // re-syncs from there) and the focus comes back here -- the picker
    // clears it on its way out and a pick runs no closed callback, so
-@@ -246,6 +258,7 @@
+@@ -246,6 +258,7 @@ class HeliumSpaceManageView : public vie
    // deferred Sync() is a no-op re-sync.
    bool suppress_rebuild_ = false;
    bool rebuild_pending_ = false;

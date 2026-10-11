@@ -2,7 +2,7 @@ Index: src/chrome/browser/sessions/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/sessions/BUILD.gn
 +++ src/chrome/browser/sessions/BUILD.gn
-@@ -10,6 +10,7 @@
+@@ -10,6 +10,7 @@ source_set("sessions") {
    public = [
      "chrome_serialized_navigation_driver.h",
      "chrome_tab_restore_service_client.h",
@@ -10,7 +10,7 @@ Index: src/chrome/browser/sessions/BUILD.gn
      "session_common_utils.h",
      "session_restore.h",
      "session_restore_observer.h",
-@@ -107,6 +108,7 @@
+@@ -108,6 +109,7 @@ source_set("impl") {
        "app_session_service_factory.cc",
        "exit_type_service.cc",
        "exit_type_service_factory.cc",
@@ -122,8 +122,8 @@ Index: src/chrome/browser/sessions/session_service_base.cc
 +
  #include <stddef.h>
  
- #include <set>
-@@ -663,6 +665,18 @@
+ #include <memory>
+@@ -671,6 +673,18 @@ void SessionServiceBase::BuildCommandsFo
          sessions::CreatePinnedStateCommand(session_id, true));
    }
  
@@ -146,7 +146,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -440,8 +440,12 @@
+@@ -643,8 +643,12 @@ static_library("ui") {
      "helium_workspace/workspace_service.h",
      "helium_workspace/workspace_service_factory.cc",
      "helium_workspace/workspace_service_factory.h",
@@ -157,24 +157,31 @@ Index: src/chrome/browser/ui/BUILD.gn
 +    "helium_workspace/workspace_tab_restore_data.cc",
 +    "helium_workspace/workspace_tab_restore_data.h",
      "helium_workspace/workspace_url_drop.h",
-     "idle_bubble.h",
-     "managed_ui.cc",
-@@ -4078,6 +4082,14 @@
-       "views/tabs/vertical/helium_media_strip_view.h",
-       "views/tabs/vertical/helium_undo_bar_view.cc",
-       "views/tabs/vertical/helium_undo_bar_view.h",
-+      "views/tabs/vertical/workspace_space_bar_view.cc",
-+      "views/tabs/vertical/workspace_space_bar_view.h",
+     "tab_helpers.cc",
+     "tab_helpers.h",
+@@ -2617,6 +2621,12 @@ static_library("ui") {
+       "views/frame/custom_floating_corner.h",
+       "views/frame/find_bar_owner_views.cc",
+       "views/frame/find_bar_owner_views.h",
 +      "views/frame/helium_sidebar_menu_data.cc",
 +      "views/frame/helium_sidebar_menu_data.h",
 +      "views/frame/helium_sidebar_menu_view.cc",
 +      "views/frame/helium_sidebar_menu_view.h",
 +      "views/frame/helium_sidebar_submenu_view.cc",
 +      "views/frame/helium_sidebar_submenu_view.h",
-       "views/frame/web_contents_close_handler.cc",
-       "views/frame/web_contents_close_handler.h",
-       "views/frame/web_contents_close_handler_delegate.h",
-@@ -5854,6 +5866,8 @@
+       "views/frame/horizontal_tab_strip_region_view.cc",
+       "views/frame/horizontal_tab_strip_region_view.h",
+       "views/frame/immersive_mode_controller_factory_views.cc",
+@@ -2683,6 +2693,8 @@ static_library("ui") {
+       "views/tabs/vertical/helium_media_strip_view.h",
+       "views/tabs/vertical/helium_undo_bar_view.cc",
+       "views/tabs/vertical/helium_undo_bar_view.h",
++      "views/tabs/vertical/workspace_space_bar_view.cc",
++      "views/tabs/vertical/workspace_space_bar_view.h",
+       "views/web_apps/create_shortcut_confirmation_view.cc",
+       "views/web_apps/create_shortcut_confirmation_view.h",
+       "views/web_apps/frame_toolbar/web_app_frame_toolbar_view.cc",
+@@ -4308,6 +4320,8 @@ test("helium_workspace_unittests") {
      "helium/arc_media_strip_unittest.cc",
      "helium/arc_minimal_field_state.h",
      "helium/arc_minimal_field_state_unittest.cc",
@@ -183,7 +190,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_sidebar_split.h",
      "helium/arc_sidebar_split_unittest.cc",
      "helium/arc_sidebar_surface.h",
-@@ -5881,6 +5895,9 @@
+@@ -4335,6 +4349,9 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_service.cc",
      "helium_workspace/workspace_service.h",
      "helium_workspace/workspace_service_unittest.cc",
@@ -348,7 +355,7 @@ Index: src/chrome/browser/ui/helium/arc_sidebar_surface.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/arc_sidebar_surface.h
 +++ src/chrome/browser/ui/helium/arc_sidebar_surface.h
-@@ -181,6 +181,22 @@
+@@ -181,6 +181,22 @@ inline SkColor GetSidebarSelectedSurface
    return color_utils::AlphaBlend(SK_ColorWHITE, sidebar, kSelectedAlpha);
  }
  
@@ -383,7 +390,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.cc
  #include "chrome/browser/ui/tabs/tab_enums.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "components/tabs/public/tab_interface.h"
-@@ -57,6 +58,10 @@
+@@ -57,6 +58,10 @@ ArchiveTabState SampleTab(tabs::TabInter
    state.is_active = (tab == active);
    state.is_split = tab->IsSplit();
    state.is_workspace_entry = service.IsWorkspaceTab(tab->GetHandle());
@@ -406,7 +413,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
  #include <vector>
  
  #include "base/containers/span.h"
-@@ -95,6 +96,13 @@
+@@ -95,6 +96,13 @@ struct ArchiveTabState {
    // Cmd+D makes a tab permanent.
    bool is_workspace_entry = false;
  
@@ -420,7 +427,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
    // IsCurrentlyAudible() && !IsAudioMuted(). A muted tab is not bothering
    // anyone and gets no protection.
    bool is_audible = false;
-@@ -137,6 +145,9 @@
+@@ -137,6 +145,9 @@ enum class ArchiveSkipReason {
    kMediaActive,   // picture-in-picture, or being captured
    kBeforeUnload,  // would put up a "Leave site?" dialog
    kTooRecent,     // has not aged past the tier yet
@@ -430,7 +437,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
  };
  
  struct ArchivePlan {
-@@ -237,8 +248,24 @@
+@@ -237,8 +248,24 @@ inline ArchiveSkipReason ClassifyForAuto
  // The user asked for these tabs to go. A page holding unsaved work still
  // gets to object -- Chromium puts up its own confirmation dialog on the way
  // out, which is the right place to change your mind.
@@ -457,7 +464,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy.h
  }
  
  // |window_tabs| must be *every* tab in the window, active one included, in
-@@ -267,12 +294,16 @@
+@@ -267,12 +294,16 @@ inline ArchivePlan PlanAutoArchive(base:
  }
  
  // Same contract on |window_tabs| as above. Unlike the sweep, this one can
@@ -481,7 +488,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_archive_policy_unittest.
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_archive_policy_unittest.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_archive_policy_unittest.cc
-@@ -390,5 +390,62 @@
+@@ -390,5 +390,62 @@ TEST_F(WorkspaceArchivePolicyTest, Close
    EXPECT_FALSE(plan.empties_window);
  }
  
@@ -557,7 +564,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
  #include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
  #include "components/pref_registry/pref_registry_syncable.h"
  
-@@ -12,7 +14,8 @@
+@@ -12,7 +14,8 @@ namespace helium_workspace::prefs {
  void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
    registry->RegisterListPref(kWorkspaceEntries);
    registry->RegisterBooleanPref(kWorkspaceMigratedFromPinnedTabs, false);
@@ -571,7 +578,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_prefs.h
 +++ src/chrome/browser/ui/helium_workspace/workspace_prefs.h
-@@ -24,10 +24,20 @@
+@@ -24,10 +24,20 @@ inline constexpr char kWorkspaceEntries[
  inline constexpr char kWorkspaceMigratedFromPinnedTabs[] =
      "helium.workspace.migrated_from_pinned_tabs";
  
@@ -612,7 +619,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
  #include "base/functional/bind.h"
  #include "base/uuid.h"
  #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
-@@ -26,7 +28,13 @@
+@@ -26,7 +28,13 @@ constexpr base::TimeDelta kPersistDeboun
  
  }  // namespace
  
@@ -627,7 +634,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    LoadFromPrefs();
  
    // One-shot migration off the old model, where every entry was backed by a
-@@ -67,7 +75,8 @@
+@@ -67,7 +75,8 @@ const WorkspaceEntry* WorkspaceService::
  
  std::string WorkspaceService::AddEntry(WorkspaceEntry::Section section,
                                         const GURL& url,
@@ -637,7 +644,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    if (!url.is_valid()) {
      return std::string();
    }
-@@ -83,10 +92,11 @@
+@@ -83,10 +92,11 @@ std::string WorkspaceService::AddEntry(W
  
    WorkspaceEntry entry;
    entry.id = base::Uuid::GenerateRandomV4().AsLowercaseString();
@@ -650,7 +657,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    const std::string id = entry.id;
    entries_.push_back(std::move(entry));
    SortEntries();
-@@ -166,7 +176,8 @@
+@@ -166,7 +176,8 @@ bool WorkspaceService::SetEntryFavicon(c
  }
  
  bool WorkspaceService::SetEntrySection(const std::string& id,
@@ -660,7 +667,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    for (WorkspaceEntry& entry : entries_) {
      if (entry.id != id) {
        continue;
-@@ -179,9 +190,20 @@
+@@ -179,9 +190,20 @@ bool WorkspaceService::SetEntrySection(c
        // The grid holds tiles, not folders (Arc rejects this too, 轮0).
        return false;
      }
@@ -682,7 +689,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
      SortEntries();
      PersistToPrefs();
      NotifyChanged();
-@@ -192,7 +214,8 @@
+@@ -192,7 +214,8 @@ bool WorkspaceService::SetEntrySection(c
  
  bool WorkspaceService::MoveEntry(const std::string& id,
                                   WorkspaceEntry::Section target_section,
@@ -692,7 +699,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    const auto source = std::ranges::find_if(
        entries_, [&](const WorkspaceEntry& e) { return e.id == id; });
    if (source == entries_.end()) {
-@@ -214,6 +237,14 @@
+@@ -214,6 +237,14 @@ bool WorkspaceService::MoveEntry(const s
    // that); a child moved this way leaves its folder. Into-folder moves are
    // MoveEntryToFolder()'s business.
    moved.folder_id.clear();
@@ -707,7 +714,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
  
    // |target_index| counts the target section's top-level entries with the
    // moved one already removed. Open a gap at the clamped slot by renumbering
-@@ -221,7 +252,8 @@
+@@ -221,7 +252,8 @@ bool WorkspaceService::MoveEntry(const s
    // renumber every scope densely (the pref is rewritten in full anyway).
    std::vector<WorkspaceEntry*> scope;
    for (WorkspaceEntry& entry : entries_) {
@@ -717,7 +724,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
        scope.push_back(&entry);
      }
    }
-@@ -249,13 +281,16 @@
+@@ -249,13 +281,16 @@ size_t WorkspaceService::CountFavorites(
    });
  }
  
@@ -736,7 +743,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    const std::string id = entry.id;
    entries_.push_back(std::move(entry));
    SortEntries();
-@@ -347,11 +382,14 @@
+@@ -347,11 +382,14 @@ bool WorkspaceService::MoveEntryToFolder
    if (!folder || !folder->is_folder()) {
      return false;
    }
@@ -751,7 +758,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
  
    // Same gap-at-slot technique as MoveEntry, over the folder's children.
    std::vector<WorkspaceEntry*> scope;
-@@ -378,6 +416,255 @@
+@@ -378,6 +416,255 @@ bool WorkspaceService::MoveEntryToFolder
    return true;
  }
  
@@ -1007,7 +1014,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
  void WorkspaceService::BindTab(tabs::TabHandle handle,
                                 const std::string& entry_id) {
    const auto it = tab_to_entry_.find(handle);
-@@ -479,6 +766,28 @@
+@@ -479,6 +766,28 @@ void WorkspaceService::Shutdown() {
  }
  
  void WorkspaceService::LoadFromPrefs() {
@@ -1036,7 +1043,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    entries_.clear();
    for (const base::Value& value :
         prefs_->GetList(prefs::kWorkspaceEntries)) {
-@@ -503,9 +812,37 @@
+@@ -503,9 +812,37 @@ void WorkspaceService::LoadFromPrefs() {
        entry.folder_id.clear();
      }
    }
@@ -1074,7 +1081,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
  void WorkspaceService::PersistToPrefs() {
    persist_timer_.Stop();
    ScopedListPrefUpdate update(prefs_, prefs::kWorkspaceEntries);
-@@ -537,12 +874,24 @@
+@@ -537,12 +874,24 @@ void WorkspaceService::NotifyBindingsCha
    }
  }
  
@@ -1104,7 +1111,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    std::map<std::string, int> folder_top_position;
    for (const WorkspaceEntry& entry : entries_) {
      if (entry.is_folder()) {
-@@ -551,12 +900,16 @@
+@@ -551,12 +900,16 @@ void WorkspaceService::SortEntries() {
    }
    auto sort_key = [&](const WorkspaceEntry& e) {
      const bool pinned = e.section == WorkspaceEntry::Section::kPinned;
@@ -1122,7 +1129,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
    };
    std::stable_sort(entries_.begin(), entries_.end(),
                     [&](const WorkspaceEntry& a, const WorkspaceEntry& b) {
-@@ -566,24 +919,41 @@
+@@ -566,24 +919,41 @@ void WorkspaceService::SortEntries() {
  
  void WorkspaceService::RenumberScopes() {
    int favorite_position = 0;
@@ -1181,7 +1188,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
  #include "components/keyed_service/core/keyed_service.h"
  #include "components/tabs/public/tab_interface.h"
  
-@@ -34,6 +35,12 @@
+@@ -34,6 +35,12 @@ namespace helium_workspace {
  // -- at most one per window -- so lookups that care about a specific window
  // must say so.
  //
@@ -1194,7 +1201,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
  // Nothing here pins a tab. The pinned region of every TabStripModel is
  // deliberately kept empty (WorkspaceTabController undoes any native pin),
  // which is what keeps TabStripModel::empty() meaningful.
-@@ -55,6 +62,12 @@
+@@ -55,6 +62,12 @@ class WorkspaceService : public KeyedSer
      // invalidate the layout, and title/favicon churn must not (r5,
      // 2026-08-20).
      virtual void OnWorkspaceBindingsChanged() {}
@@ -1207,7 +1214,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
    };
  
    static constexpr size_t kMaxFavorites = 12;
-@@ -62,7 +75,9 @@
+@@ -62,7 +75,9 @@ class WorkspaceService : public KeyedSer
    // Takes the PrefService rather than the Profile it came from: everything
    // here is entry data plus a tab-handle map, and keeping the dependency this
    // narrow is what lets helium_workspace_unittests exercise it directly.
@@ -1218,7 +1225,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
    WorkspaceService(const WorkspaceService&) = delete;
    WorkspaceService& operator=(const WorkspaceService&) = delete;
    ~WorkspaceService() override;
-@@ -78,10 +93,13 @@
+@@ -78,10 +93,13 @@ class WorkspaceService : public KeyedSer
        BrowserWindowInterface* window) const;
  
    // Returns the new entry's id, or the empty string if rejected (favorites
@@ -1234,7 +1241,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
    bool RemoveEntry(const std::string& id);
    bool SetEntryUrl(const std::string& id, const GURL& url);
    bool SetEntryTitle(const std::string& id, const std::u16string& title);
-@@ -89,23 +107,32 @@
+@@ -89,23 +107,32 @@ class WorkspaceService : public KeyedSer
    // entries that have no tab.
    bool SetEntryFavicon(const std::string& id, std::string png_bytes);
    // Moves an entry between the Favorites and Pinned sections. Promoting to
@@ -1273,7 +1280,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
    // Folder-only. Persists synchronously (structural, rare).
    bool SetFolderCollapsed(const std::string& id, bool collapsed);
    // Deletes the folder AND its children (user ruling 2026-08-31 — closest
-@@ -123,11 +150,44 @@
+@@ -123,11 +150,44 @@ class WorkspaceService : public KeyedSer
    // Moves a pinned site into |folder_id|'s children at |target_index|
    // (same "counted with the moved one removed" contract as MoveEntry), or
    // back to the pinned top level when |folder_id| is empty. Refuses folders
@@ -1319,7 +1326,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
    // ---- Runtime tab binding (never persisted) ----
    void BindTab(tabs::TabHandle handle, const std::string& entry_id);
    void UnbindTab(tabs::TabHandle handle);
-@@ -144,6 +204,29 @@
+@@ -144,6 +204,29 @@ class WorkspaceService : public KeyedSer
    std::optional<WorkspaceEntry::Section> GetSectionForTab(
        tabs::TabHandle handle) const;
  
@@ -1349,7 +1356,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
    void AddObserver(Observer* observer);
    void RemoveObserver(Observer* observer);
  
-@@ -153,26 +236,36 @@
+@@ -153,26 +236,36 @@ class WorkspaceService : public KeyedSer
   private:
    void LoadFromPrefs();
    void PersistToPrefs();
@@ -1405,7 +1412,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_factory.cc
  
  namespace helium_workspace {
  
-@@ -39,8 +41,11 @@
+@@ -39,8 +41,11 @@ WorkspaceServiceFactory::~WorkspaceServi
  std::unique_ptr<KeyedService>
  WorkspaceServiceFactory::BuildServiceInstanceForBrowserContext(
      content::BrowserContext* context) const {
@@ -1422,7 +1429,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
-@@ -36,7 +36,7 @@
+@@ -36,7 +36,7 @@ class WorkspaceServiceTest : public test
      // compile error here rather than a silent behaviour change.
      prefs::RegisterProfilePrefs(prefs_.registry());
      prefs_.registry()->RegisterListPref(::prefs::kPinnedTabs);
@@ -1431,7 +1438,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
    }
  
    // A tab that reports |url| and claims to live in |window|. Destroying it
-@@ -205,7 +205,7 @@
+@@ -205,7 +205,7 @@ TEST_F(WorkspaceServiceTest, LegacyPinne
    prefs_.SetList(::prefs::kPinnedTabs, std::move(pinned));
  
    // A second service on the same prefs must leave the list alone.
@@ -1440,7 +1447,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
    EXPECT_EQ(1u, prefs_.GetList(::prefs::kPinnedTabs).size());
  }
  
-@@ -218,7 +218,7 @@
+@@ -218,7 +218,7 @@ TEST_F(WorkspaceServiceTest, EntriesRoun
    ASSERT_TRUE(service_->SetEntryTitle(id, u"Renamed"));
    service_->Shutdown();
  
@@ -1449,7 +1456,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
    ASSERT_EQ(1u, reloaded.entries().size());
    const WorkspaceEntry& entry = reloaded.entries().front();
    EXPECT_EQ(GURL("https://example.com/"), entry.url);
-@@ -306,7 +306,7 @@
+@@ -306,7 +306,7 @@ TEST_F(WorkspaceServiceTest, MoveEntryCr
                ElementsAre("https://p1.example/", "https://f.example/"));
  
    service_->Shutdown();
@@ -1458,7 +1465,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
    EXPECT_THAT(SectionUrls(reloaded, WorkspaceEntry::Section::kFavorite),
                ElementsAre("https://p2.example/"));
    EXPECT_THAT(SectionUrls(reloaded, WorkspaceEntry::Section::kPinned),
-@@ -589,7 +589,7 @@
+@@ -589,7 +589,7 @@ TEST_F(WorkspaceServiceTest, FoldersAndC
    ASSERT_TRUE(service_->SetFolderCollapsed(folder, true));
    service_->Shutdown();
  
@@ -1467,7 +1474,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
    const WorkspaceEntry* reloaded_folder = reloaded.FindEntryById(folder);
    ASSERT_TRUE(reloaded_folder);
    EXPECT_TRUE(reloaded_folder->is_folder());
-@@ -698,12 +698,304 @@
+@@ -698,12 +698,304 @@ TEST_F(WorkspaceServiceTest, DanglingFol
      });
    }
  
@@ -2026,7 +2033,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
  #include "components/tabs/public/tab_interface.h"
  #include "content/public/browser/navigation_controller.h"
  #include "content/public/browser/navigation_entry.h"
-@@ -100,6 +113,18 @@
+@@ -100,6 +113,18 @@ WorkspaceTabController::WorkspaceTabCont
      // ORDER CONTRACT on OnChildrenAdded): the claim must precede the row.
      model->Root()->AddObserver(this);
    }
@@ -2045,7 +2052,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
  
    // Deferred: BrowserWindowFeatures::Init() runs before this window's
    // startup or session-restore tabs have been inserted, so there would be
-@@ -110,6 +135,9 @@
+@@ -110,6 +135,9 @@ WorkspaceTabController::WorkspaceTabCont
  }
  
  WorkspaceTabController::~WorkspaceTabController() {
@@ -2055,7 +2062,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    if (TabStripModel* model = browser_window_->GetTabStripModel()) {
      model->RemoveObserver(this);
      model->Root()->RemoveObserver(this);
-@@ -158,7 +186,8 @@
+@@ -158,7 +186,8 @@ void WorkspaceTabController::ToggleEntry
    content::WebContents* contents = tab->GetContents();
    const std::string id =
        service_->AddEntry(WorkspaceEntry::Section::kPinned, url,
@@ -2065,7 +2072,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    if (!id.empty()) {
      BindTabToEntry(tab, id);
    }
-@@ -190,13 +219,15 @@
+@@ -190,13 +219,15 @@ void WorkspaceTabController::AddTabToFav
    if (const WorkspaceEntry* existing =
            service_->FindEntryByUrlUnboundInWindow(url, browser_window_)) {
      id = existing->id;
@@ -2083,7 +2090,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
      if (id.empty()) {
        return;  // Favorites cap.
      }
-@@ -273,9 +304,10 @@
+@@ -273,9 +304,10 @@ void WorkspaceTabController::CloseUnpinn
      return;
    }
    // SampleWindow() reads the whole strip, entry tabs included -- the plan
@@ -2097,7 +2104,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    if (plan.to_close.empty()) {
      // A window holding nothing but sidebar entries. Do nothing at all: no
      // toast, no stray new tab.
-@@ -336,9 +368,11 @@
+@@ -336,9 +368,11 @@ void WorkspaceTabController::NewFolderFr
      return;
    }
    // Arc's defaults, all three (轮0 2026-08-31): named "Untitled", landed at
@@ -2111,7 +2118,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    if (id.empty()) {
      return;
    }
-@@ -354,6 +388,313 @@
+@@ -354,6 +388,313 @@ void WorkspaceTabController::NewFolderFr
    }
  }
  
@@ -2425,7 +2432,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
  void WorkspaceTabController::DeleteFolder(const std::string& folder_id) {
    if (!service_) {
      return;
-@@ -451,6 +792,175 @@
+@@ -451,6 +792,175 @@ void WorkspaceTabController::UndoLastDel
    RewindTabRestoreTo(watermark);
  }
  
@@ -2601,7 +2608,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
  void WorkspaceTabController::ResetEntryTab(const std::string& entry_id) {
    TabStripModel* model = browser_window_->GetTabStripModel();
    const WorkspaceEntry* entry = service_->FindEntryById(entry_id);
-@@ -517,6 +1027,19 @@
+@@ -517,6 +1027,19 @@ void WorkspaceTabController::AdoptTabsIn
        }
      }
    }
@@ -2621,7 +2628,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
  }
  
  bool WorkspaceTabController::ClaimTabForMatchingEntry(
-@@ -656,30 +1179,39 @@
+@@ -656,30 +1179,39 @@ void WorkspaceTabController::OnTabStripM
          BindTabToEntry(inserted.tab, pending_bind_entry_id_);
        }
        pending_bind_entry_id_.clear();
@@ -2678,7 +2685,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    if (change.type() != TabStripModelChange::kRemoved) {
      return;
    }
-@@ -697,7 +1229,7 @@
+@@ -697,7 +1229,7 @@ void WorkspaceTabController::OnTabStripM
      // is nothing to capture anyway: the icon a closing tab is showing is the
      // one its last OnTabChangedAt already persisted.
      last_favicon_.erase(handle);
@@ -2687,7 +2694,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    }
  }
  
-@@ -762,7 +1294,8 @@
+@@ -762,7 +1294,8 @@ void WorkspaceTabController::OnTabPinned
          content::WebContents* contents = tab->GetContents();
          const std::string id = service_->AddEntry(
              WorkspaceEntry::Section::kPinned, url,
@@ -2718,7 +2725,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
  #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
  #include "components/tabs/public/tab_collection.h"
  #include "components/tabs/public/tab_collection_observer.h"
-@@ -24,8 +28,6 @@
+@@ -24,8 +28,6 @@ class BrowserWindowInterface;
  
  namespace helium_workspace {
  
@@ -2727,7 +2734,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
  // Per-window half of the workspace sidebar. Entries themselves are profile
  // data owned by WorkspaceService; this class is what turns them into tabs in
  // one particular window, and what keeps that window's tab strip in the shape
-@@ -42,11 +44,32 @@
+@@ -42,11 +44,32 @@ class WorkspaceService;
  //     as an entry instead. The pinned region must stay empty: it is what
  //     makes TabStripModel::empty() -- and therefore "closing the last tab
  //     closes the window" -- correct.
@@ -2761,7 +2768,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    WorkspaceTabController(BrowserWindowInterface* browser_window,
                           WorkspaceService* service);
    WorkspaceTabController(const WorkspaceTabController&) = delete;
-@@ -87,7 +110,8 @@
+@@ -87,7 +110,8 @@ class WorkspaceTabController : public Ta
    // that would ask "Leave site?" (that page still gets to object, through
    // Chromium's own dialog on the way out).
    //
@@ -2771,7 +2778,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    void CloseUnpinnedTabs();
  
    // Undo for the last CloseUnpinnedTabs() in this window. Reopens tabs until
-@@ -109,8 +133,9 @@
+@@ -109,8 +133,9 @@ class WorkspaceTabController : public Ta
  
    // ---- Folders (M3.13) ----
  
@@ -2783,7 +2790,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    void NewFolderFromMenu();
  
    // Deletes |folder_id| with everything in it (user ruling 2026-08-31): the
-@@ -124,6 +149,55 @@
+@@ -124,6 +149,55 @@ class WorkspaceTabController : public Ta
    // closed tabs come back too.
    void UndoLastDeleteFolder();
  
@@ -2839,7 +2846,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
   private:
    // Binds tabs already open in this window to entries with the same URL, so
    // a restored session does not show the same page twice.
-@@ -147,6 +221,45 @@
+@@ -147,6 +221,45 @@ class WorkspaceTabController : public Ta
    // call at any time; a tab with no icon yet leaves the entry untouched.
    void CaptureFavicon(tabs::TabInterface* tab, const std::string& entry_id);
  
@@ -2885,7 +2892,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    // TabStripModelObserver:
    void OnTabStripModelChanged(
        TabStripModel* tab_strip_model,
-@@ -202,6 +315,26 @@
+@@ -202,6 +315,26 @@ class WorkspaceTabController : public Ta
    // -- RestoreEntries() refuses ids that exist again.
    std::vector<WorkspaceEntry> folder_undo_snapshot_;
    SessionID folder_undo_watermark_ = SessionID::InvalidValue();

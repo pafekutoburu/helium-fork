@@ -2,7 +2,7 @@ Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 ===================================================================
 --- src.orig/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -651,6 +651,7 @@
+@@ -658,6 +658,7 @@
  #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
  #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_service_factory.h"
  #endif
@@ -10,7 +10,7 @@ Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
  #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
  
  #if BUILDFLAG(USE_NSS_CERTS)
-@@ -847,6 +848,11 @@ void ChromeBrowserMainExtraPartsProfiles
+@@ -856,6 +857,11 @@ void ChromeBrowserMainExtraPartsProfiles
    browser_shortcuts::BrowserShortcutServiceFactory::GetInstance();
  #endif
    helium_workspace::WorkspaceServiceFactory::GetInstance();
@@ -26,8 +26,8 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -391,6 +391,12 @@ static_library("ui") {
-     "helium/helium_layout_state_controller.h",
+@@ -622,6 +622,12 @@ static_library("ui") {
+     "helium/arc_toolbar_host.h",
      "helium/helium_tab_switcher_controller.cc",
      "helium/helium_tab_switcher_controller.h",
 +    "helium_workspace/workspace_archive_policy.cc",
@@ -39,7 +39,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium_workspace/workspace_entry.cc",
      "helium_workspace/workspace_entry.h",
      "helium_workspace/workspace_drag_math.h",
-@@ -6064,6 +6070,8 @@ test("helium_workspace_unittests") {
+@@ -4304,6 +4310,8 @@ test("helium_workspace_unittests") {
      "helium/arc_toolbar_host_unittest.cc",
      "helium/arc_omnibox_panel.h",
      "helium/arc_omnibox_panel_unittest.cc",

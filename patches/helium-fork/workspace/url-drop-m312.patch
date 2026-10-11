@@ -2,23 +2,23 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -413,6 +413,7 @@ static_library("ui") {
+@@ -618,6 +618,7 @@ static_library("ui") {
      "helium/arc_media_strip.h",
      "helium/arc_minimal_field_state.h",
      "helium/arc_omnibox_panel.h",
 +    "helium/arc_sidebar_split.h",
      "helium/arc_sidebar_surface.h",
      "helium/arc_toolbar_host.h",
-     "helium/helium_layout_state_controller.cc",
-@@ -441,6 +442,7 @@ static_library("ui") {
+     "helium/helium_tab_switcher_controller.cc",
+@@ -644,6 +645,7 @@ static_library("ui") {
      "helium_workspace/workspace_service_factory.h",
      "helium_workspace/workspace_tab_controller.cc",
      "helium_workspace/workspace_tab_controller.h",
 +    "helium_workspace/workspace_url_drop.h",
-     "idle_bubble.h",
-     "managed_ui.cc",
-     "managed_ui.h",
-@@ -5852,6 +5854,8 @@ test("helium_workspace_unittests") {
+     "tab_helpers.cc",
+     "tab_helpers.h",
+   ]
+@@ -4306,6 +4308,8 @@ test("helium_workspace_unittests") {
      "helium/arc_media_strip_unittest.cc",
      "helium/arc_minimal_field_state.h",
      "helium/arc_minimal_field_state_unittest.cc",
@@ -27,7 +27,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_sidebar_surface.h",
      "helium/arc_sidebar_surface_unittest.cc",
      "helium/arc_toolbar_host.h",
-@@ -5877,6 +5881,8 @@ test("helium_workspace_unittests") {
+@@ -4331,6 +4335,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_service.cc",
      "helium_workspace/workspace_service.h",
      "helium_workspace/workspace_service_unittest.cc",
@@ -362,7 +362,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -230,12 +230,7 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -233,12 +233,7 @@ VerticalTabStripRegionView::VerticalTabS
              region->OnMediaCapsuleHovered(region->media_strip_);
            },
            base::Unretained(this))));
@@ -376,7 +376,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  
    // r5: the floating half of the stack -- capsules for sessions beyond the
    // first, over the tab rows. A plain positioning host: no layer of its own
-@@ -602,9 +597,11 @@ void VerticalTabStripRegionView::Removed
+@@ -610,9 +605,11 @@ void VerticalTabStripRegionView::Removed
  //
  // ⚠ These all have a base implementation: BaseTabStripRegionView routes the
  // *link* drop (drag a URL onto the strip to open it) through the very same
@@ -391,7 +391,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  
  UnpinnedTabContainerView* VerticalTabStripRegionView::TodayDropContainer()
      const {
-@@ -624,6 +621,11 @@ bool VerticalTabStripRegionView::HasWork
+@@ -632,6 +629,11 @@ bool VerticalTabStripRegionView::HasWork
    return sidebar && sidebar->HasEntryDragSession();
  }
  
@@ -403,7 +403,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  bool VerticalTabStripRegionView::IsWorkspaceEntryDrag(
      const ui::OSExchangeData& data) const {
    // Session first: reading the payload means unpickling the OSExchangeData,
-@@ -641,6 +643,14 @@ bool VerticalTabStripRegionView::GetDrop
+@@ -649,6 +651,14 @@ bool VerticalTabStripRegionView::GetDrop
    const bool base_wants =
        BaseTabStripRegionView::GetDropFormats(formats, format_types);
    format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
@@ -418,7 +418,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    return base_wants || true;
  }
  
-@@ -649,12 +659,13 @@ bool VerticalTabStripRegionView::AreDrop
+@@ -657,12 +667,13 @@ bool VerticalTabStripRegionView::AreDrop
  }
  
  bool VerticalTabStripRegionView::CanDrop(const ui::OSExchangeData& data) {
@@ -434,7 +434,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
      BaseTabStripRegionView::OnDragEntered(event);
      return;
    }
-@@ -667,7 +678,8 @@ int VerticalTabStripRegionView::OnDragUp
+@@ -675,7 +686,8 @@ int VerticalTabStripRegionView::OnDragUp
    // Only the session is consulted here, never the payload: a live entry
    // session and a link drag cannot both be in flight, so this tells the two
    // apart without touching the pasteboard once per frame.
@@ -444,7 +444,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
      return BaseTabStripRegionView::OnDragUpdated(event);
    }
    UnpinnedTabContainerView* const today = TodayDropContainer();
-@@ -675,25 +687,40 @@ int VerticalTabStripRegionView::OnDragUp
+@@ -683,25 +695,40 @@ int VerticalTabStripRegionView::OnDragUp
        tab_strip_view() ? tab_strip_view()->GetPinnedTabsContainer() : nullptr;
    WorkspaceSidebarView* const sidebar =
        pinned ? pinned->workspace_view() : nullptr;
@@ -496,7 +496,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    return today->HandleWorkspaceEntryDragAt(point);
  }
  
-@@ -708,8 +735,9 @@ void VerticalTabStripRegionView::OnDragE
+@@ -716,8 +743,9 @@ void VerticalTabStripRegionView::OnDragE
  
  views::View::DropCallback VerticalTabStripRegionView::GetDropCallback(
      const ui::DropTargetEvent& event) {
@@ -508,7 +508,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
      return BaseTabStripRegionView::GetDropCallback(event);
    }
    UnpinnedTabContainerView* const today = TodayDropContainer();
-@@ -994,11 +1022,41 @@ void VerticalTabStripRegionView::UpdateM
+@@ -1002,11 +1030,41 @@ void VerticalTabStripRegionView::UpdateM
    if (media_scrim_) {
      media_scrim_->SetShown(stack_shown);
    }
@@ -550,7 +550,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  void VerticalTabStripRegionView::SetMediaStripExpanded(bool expanded) {
    if (!media_strip_panel_) {
      return;
-@@ -1161,7 +1219,11 @@ VerticalTabStripRegionView::GetExpandOnH
+@@ -1165,7 +1223,11 @@ VerticalTabStripRegionView::GetExpandOnH
  
  void VerticalTabStripRegionView::HandleDragUpdate(
      const std::optional<BrowserRootView::DropIndex>& index) {
@@ -567,7 +567,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -147,6 +147,10 @@ class VerticalTabStripRegionView final
+@@ -148,6 +148,10 @@ class VerticalTabStripRegionView final
    // Cheap per-frame discriminator; IsWorkspaceEntryDrag() additionally reads
    // the payload and is only for the once-per-gesture calls.
    bool HasWorkspaceEntryDragSession() const;
@@ -578,7 +578,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    bool IsWorkspaceEntryDrag(const ui::OSExchangeData& data) const;
  
   public:
-@@ -340,6 +344,11 @@ class VerticalTabStripRegionView final
+@@ -343,6 +347,11 @@ class VerticalTabStripRegionView final
  
    void OnMediaStripModelChanged();
    void UpdateMediaStripVisibility();
@@ -594,7 +594,7 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
 +++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -78,6 +78,8 @@ source_set("impl") {
+@@ -87,6 +87,8 @@ source_set("impl") {
      "workspace_entry_drag_data.h",
      "workspace_entry_drag_overlay.cc",
      "workspace_entry_drag_overlay.h",
@@ -607,7 +607,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_group_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_group_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_group_view.cc
-@@ -295,72 +295,6 @@ const TabCollectionNode* TabGroupView::G
+@@ -386,71 +386,6 @@ const TabCollectionNode* TabGroupView::G
    return nullptr;
  }
  
@@ -616,8 +616,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_group_view.cc
 -  if (!collection_node_) {
 -    return std::nullopt;
 -  }
--  const bool is_horizontal =
--      collection_node_->orientation() == TabStripOrientation::kHorizontal;
+-  const bool is_horizontal = orientation_ == TabStripOrientation::kHorizontal;
 -
 -  // Use the position along drag axis to find the child view being dragged over.
 -  const int header_end = is_horizontal ? group_header_->bounds().right()
@@ -692,7 +691,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_group_view.h
  #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
  #include "chrome/browser/ui/views/tabs/common/tab_group_header_view.h"
-@@ -72,9 +71,6 @@ class TabGroupView : public views::View,
+@@ -80,9 +79,6 @@ class TabGroupView : public views::View,
  
    bool IsCollapsed() const;
  
@@ -700,279 +699,13 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_group_view.h
 -      const gfx::Point& point_in_local_coords);
 -
    const TabCollectionNode* collection_node() const { return collection_node_; }
- 
-   TabGroupHeaderView* group_header() { return group_header_; }
-Index: src/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
-===================================================================
---- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
-+++ src/chrome/browser/ui/views/tabs/common/tab_strip_link_drag_browsertest.cc
-@@ -71,6 +71,22 @@ class VerticalTabStripLinkDragTest
-     return region_view()->GetDropIndex(event);
-   }
- 
-+  // helium-fork M3.12-r1/r2: this pins the BrowserRootView FALLBACK path
-+  // (GetDropIndex), which never replaces a tab and always appends at the
-+  // end. Since r2 a real URL drag over Today is claimed by the workspace
-+  // session (slot + positional drop, user ruling 2026-08-30) and never gets
-+  // here; what still does: text/paste-and-go drags, and a link whose first
-+  // touch is the dead tail before any session exists.
-+  void ExpectAppendAtEnd(views::View* view, const gfx::Point& loc_in_view) {
-+    auto drop_index = GetDropIndexAt(view, loc_in_view);
-+    ASSERT_TRUE(drop_index.has_value());
-+    EXPECT_EQ(drop_index->index, tab_strip_model()->count());
-+    EXPECT_EQ(drop_index->relative_to_index,
-+              BrowserRootView::DropIndex::RelativeToIndex::kInsertBeforeIndex);
-+    EXPECT_EQ(drop_index->group_inclusion,
-+              BrowserRootView::DropIndex::GroupInclusion::kDontIncludeInGroup);
-+  }
-+
-   std::vector<TabView*> WaitForTabs(size_t count) {
-     std::vector<TabView*> tab_views;
-     EXPECT_TRUE(base::test::RunUntil([&]() {
-@@ -138,58 +154,39 @@ class VerticalTabStripLinkDragTest
-           gfx::Animation::RichAnimationRenderMode::FORCE_DISABLED);
- };
- 
--IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropBeforeAndAfterTabs) {
-+IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, AnyBandAppendsAtEnd) {
-   EnsureTabCount(3);
-   auto tab_views = WaitForTabs(3);
- 
--  // Drop at the top of the first tab.
--  {
--    gfx::Point location(tab_views[0]->width() / 2, 2);
--    auto drop_index = GetDropIndexAt(tab_views[0], location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 0);
--  }
--
--  // Drop at the bottom of the first tab.
--  {
--    gfx::Point location(tab_views[0]->width() / 2, tab_views[0]->height() - 2);
--    auto drop_index = GetDropIndexAt(tab_views[0], location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 1);
--  }
-+  // Top band of the first tab.
-+  ExpectAppendAtEnd(tab_views[0], gfx::Point(tab_views[0]->width() / 2, 2));
- 
--  // Drop at the bottom of the last tab.
--  {
--    gfx::Point location(tab_views[2]->width() / 2, tab_views[2]->height() - 2);
--    auto drop_index = GetDropIndexAt(tab_views[2], location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 3);
--  }
-+  // Bottom band of the first tab.
-+  ExpectAppendAtEnd(
-+      tab_views[0],
-+      gfx::Point(tab_views[0]->width() / 2, tab_views[0]->height() - 2));
-+
-+  // Bottom band of the last tab.
-+  ExpectAppendAtEnd(
-+      tab_views[2],
-+      gfx::Point(tab_views[2]->width() / 2, tab_views[2]->height() - 2));
- }
- 
--IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInMiddleToReplace) {
-+IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest,
-+                       MiddleOfRowAppendsNotReplaces) {
-   EnsureTabCount(3);
-   auto tab_views = WaitForTabs(3);
- 
--  // Drop in the middle of the first tab.
--  {
--    gfx::Point location(tab_views[0]->width() / 2, tab_views[0]->height() / 2);
--    auto drop_index = GetDropIndexAt(tab_views[0], location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 0);
--    EXPECT_EQ(drop_index->relative_to_index,
--              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
--  }
--
--  // Drop in the middle of the second tab.
--  {
--    gfx::Point location(tab_views[1]->width() / 2, tab_views[1]->height() / 2);
--    auto drop_index = GetDropIndexAt(tab_views[1], location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 1);
--    EXPECT_EQ(drop_index->relative_to_index,
--              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
--  }
-+  // Middle of the first tab -- upstream answered kReplaceIndex here, which
-+  // navigated the hovered tab away.
-+  ExpectAppendAtEnd(
-+      tab_views[0],
-+      gfx::Point(tab_views[0]->width() / 2, tab_views[0]->height() / 2));
-+
-+  // Middle of the second tab.
-+  ExpectAppendAtEnd(
-+      tab_views[1],
-+      gfx::Point(tab_views[1]->width() / 2, tab_views[1]->height() / 2));
- }
- 
- IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInSplitTabs) {
-@@ -202,64 +199,21 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripL
- 
-   auto* split_view = WaitForSplitView();
- 
--  // Drop at the top of the split tab -> before split.
--  {
--    gfx::Point location(split_view->width() / 2, 2);
--    auto drop_index = GetDropIndexAt(split_view, location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 0);
--    EXPECT_EQ(drop_index->relative_to_index,
--              BrowserRootView::DropIndex::RelativeToIndex::kInsertBeforeIndex);
--  }
--
--  // Drop at the bottom of the split tab -> after split.
--  {
--    gfx::Point location(split_view->width() / 2, split_view->height() - 2);
--    auto drop_index = GetDropIndexAt(split_view, location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 2);
--    EXPECT_EQ(drop_index->relative_to_index,
--              BrowserRootView::DropIndex::RelativeToIndex::kInsertBeforeIndex);
--  }
--
--  // Drop in the middle of the first tab in the split -> replace tab 0.
--  {
--    gfx::Point location(split_view->width() / 4, split_view->height() / 2);
--    auto drop_index = GetDropIndexAt(split_view, location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 0);
--    EXPECT_EQ(drop_index->relative_to_index,
--              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
--  }
--
--  // Drop in the middle of the second tab in the split -> replace tab 1.
--  {
--    gfx::Point location(3 * split_view->width() / 4, split_view->height() / 2);
--    auto drop_index = GetDropIndexAt(split_view, location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 1);
--    EXPECT_EQ(drop_index->relative_to_index,
--              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
--  }
--
--  // Drop in the middle of the split view horizontally and vertically.
--  {
--    // Just to the left of the center point -> replace tab 0.
--    gfx::Point location(split_view->width() / 2 - 1, split_view->height() / 2);
--    auto drop_index = GetDropIndexAt(split_view, location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 0);
--    EXPECT_EQ(drop_index->relative_to_index,
--              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
--
--    // Just to the right of the center point -> replace tab 1.
--    location.set_x(split_view->width() / 2 + 1);
--    drop_index = GetDropIndexAt(split_view, location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 1);
--    EXPECT_EQ(drop_index->relative_to_index,
--              BrowserRootView::DropIndex::RelativeToIndex::kReplaceIndex);
--  }
-+  // A split gets no special treatment: every band and both halves append.
-+  ExpectAppendAtEnd(split_view, gfx::Point(split_view->width() / 2, 2));
-+  ExpectAppendAtEnd(
-+      split_view, gfx::Point(split_view->width() / 2, split_view->height() - 2));
-+  ExpectAppendAtEnd(
-+      split_view, gfx::Point(split_view->width() / 4, split_view->height() / 2));
-+  ExpectAppendAtEnd(
-+      split_view,
-+      gfx::Point(3 * split_view->width() / 4, split_view->height() / 2));
-+  ExpectAppendAtEnd(
-+      split_view,
-+      gfx::Point(split_view->width() / 2 - 1, split_view->height() / 2));
-+  ExpectAppendAtEnd(
-+      split_view,
-+      gfx::Point(split_view->width() / 2 + 1, split_view->height() / 2));
- }
- 
- IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInGroups) {
-@@ -270,36 +224,16 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripL
- 
-   auto* group_view = WaitForGroupView();
- 
--  // Drop at the top of the group header -> before group.
--  {
--    gfx::Point location(group_view->group_header()->width() / 2, 2);
--    auto drop_index = GetDropIndexAt(group_view->group_header(), location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 0);
--    EXPECT_EQ(drop_index->group_inclusion,
--              BrowserRootView::DropIndex::GroupInclusion::kDontIncludeInGroup);
--  }
--
--  // Drop at the bottom of the group header -> inside group at start.
--  {
--    gfx::Point location(group_view->group_header()->width() / 2,
--                        group_view->group_header()->height() - 2);
--    auto drop_index = GetDropIndexAt(group_view->group_header(), location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 0);
--    EXPECT_EQ(drop_index->group_inclusion,
--              BrowserRootView::DropIndex::GroupInclusion::kIncludeInGroup);
--  }
--
--  // Drop at the bottom of the last tab in the group -> ungrouped.
--  {
--    gfx::Point location(tab_views[1]->width() / 2, tab_views[1]->height() - 2);
--    auto drop_index = GetDropIndexAt(tab_views[1], location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 2);
--    EXPECT_EQ(drop_index->group_inclusion,
--              BrowserRootView::DropIndex::GroupInclusion::kDontIncludeInGroup);
--  }
-+  // Groups get no special treatment: header bands and grouped tabs all
-+  // append at the end, outside the group.
-+  ExpectAppendAtEnd(group_view->group_header(),
-+                    gfx::Point(group_view->group_header()->width() / 2, 2));
-+  ExpectAppendAtEnd(group_view->group_header(),
-+                    gfx::Point(group_view->group_header()->width() / 2,
-+                               group_view->group_header()->height() - 2));
-+  ExpectAppendAtEnd(
-+      tab_views[1],
-+      gfx::Point(tab_views[1]->width() / 2, tab_views[1]->height() - 2));
- }
- 
- IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInCollapsedGroups) {
-@@ -316,22 +250,12 @@ IN_PROC_BROWSER_TEST_F(VerticalTabStripL
- 
-   auto* group_view = WaitForGroupView(/*collapsed=*/true);
- 
--  // Drop at the top of the collapsed group header -> before group.
--  {
--    gfx::Point location(group_view->group_header()->width() / 2, 2);
--    auto drop_index = GetDropIndexAt(group_view->group_header(), location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 0);
--  }
--
--  // Drop at the bottom of the collapsed group header -> after group.
--  {
--    gfx::Point location(group_view->group_header()->width() / 2,
--                        group_view->group_header()->height() - 2);
--    auto drop_index = GetDropIndexAt(group_view->group_header(), location);
--    ASSERT_TRUE(drop_index.has_value());
--    EXPECT_EQ(drop_index->index, 2);
--  }
-+  // Both halves of a collapsed group header append at the end.
-+  ExpectAppendAtEnd(group_view->group_header(),
-+                    gfx::Point(group_view->group_header()->width() / 2, 2));
-+  ExpectAppendAtEnd(group_view->group_header(),
-+                    gfx::Point(group_view->group_header()->width() / 2,
-+                               group_view->group_header()->height() - 2));
- }
- 
- IN_PROC_BROWSER_TEST_F(VerticalTabStripLinkDragTest, DropInPinnedTabs) {
+   TabStripOrientation orientation() const { return orientation_; }
+   const tab_groups::TabGroupVisualData& tab_group_visual_data() const {
 Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -12,6 +12,7 @@
+@@ -13,6 +13,7 @@
  #include "chrome/browser/ui/browser_element_identifiers.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
@@ -980,16 +713,16 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  #include "chrome/browser/ui/helium_workspace/workspace_service.h"
  #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
  #include "chrome/browser/ui/layout_constants.h"
-@@ -25,6 +26,8 @@
+@@ -28,6 +29,8 @@
  #include "chrome/browser/ui/views/tabs/common/tab_strip_utils.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_view_layout.h"
  #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ #include "chrome/browser/ui/views/tabs/horizontal/horizontal_tab_strip_overflow_indicator_view.h"
+ #include "chrome/browser/ui/views/tabs/horizontal/tab_scroll_button_container.h"
  #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
- #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_scroll_bar.h"
- #include "components/tabs/public/tab_group.h"
-@@ -180,6 +183,13 @@ TabStripView::TabStripView(TabCollection
+@@ -188,6 +191,13 @@ TabStripView::TabStripView(TabCollection
        std::make_unique<TabStripViewLayout>(collection_node->orientation()));
    SetProperty(views::kElementIdentifierKey, kTabStripElementId);
  
@@ -1003,8 +736,8 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    pinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
        views::ScrollView::ScrollWithLayers::kEnabled));
    SetScrollViewProperties(pinned_tabs_scroll_view_);
-@@ -501,6 +511,12 @@ bool TabStripView::IsPositionInWindowCap
-       continue;
+@@ -553,6 +563,12 @@ bool TabStripView::IsPositionInWindowCap
+       return scroll_button_container->IsPositionInWindowCaption(point_in_child);
      }
  
 +    // M3.12-r2: the favorites band is content, not caption -- a click on a
@@ -1016,7 +749,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
      auto* scroll_view = views::AsViewClass<views::ScrollView>(child);
      if (!scroll_view) {
        return true;
-@@ -541,7 +557,14 @@ views::View* TabStripView::AddScrollView
+@@ -593,7 +609,14 @@ views::View* TabStripView::AddScrollView
    auto* container = views::AsViewClass<PinnedTabContainerView>(view.get());
    CHECK(container);
    pinned_tabs_container_view_ = container;
@@ -1032,7 +765,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  }
  
  void TabStripView::RemoveScrollViewContents(views::View* view) {
-@@ -551,6 +574,10 @@ void TabStripView::RemoveScrollViewConte
+@@ -603,6 +626,10 @@ void TabStripView::RemoveScrollViewConte
      return;
    }
    if (views::IsViewClass<PinnedTabContainerView>(view)) {
@@ -1047,15 +780,15 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
-@@ -15,6 +15,7 @@
+@@ -17,6 +17,7 @@ class PrefService;
  class TabCollectionNode;
  class PinnedTabContainerView;
  class UnpinnedTabContainerView;
 +class WorkspaceFavoritesBandView;
+ class TabScrollButtonContainer;
  
- namespace views {
- class ScrollView;
-@@ -46,6 +47,9 @@ class TabStripView final : public views:
+ namespace tabs {
+@@ -56,6 +57,9 @@ class TabStripView final : public views:
    views::ScrollView* unpinned_tabs_scroll_view() const {
      return unpinned_tabs_scroll_view_;
    }
@@ -1065,9 +798,9 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
  
    void SetCollapsedState(bool is_collapsed);
    void SetIsAnimatingSize(bool is_animating);
-@@ -124,6 +128,7 @@ class TabStripView final : public views:
-   friend class TabStripViewLayout;
+@@ -145,6 +149,7 @@ class TabStripView final : public views:
  
+   PrefChangeRegistrar pref_change_registrar_;
    raw_ptr<TabCollectionNode> collection_node_ = nullptr;
 +  raw_ptr<WorkspaceFavoritesBandView> favorites_band_ = nullptr;
    raw_ptr<views::ScrollView> pinned_tabs_scroll_view_ = nullptr;
@@ -1085,7 +818,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "ui/base/dragdrop/drag_drop_types.h"
  #include "ui/base/dragdrop/drop_target_event.h"
  #include "ui/base/dragdrop/os_exchange_data.h"
-@@ -76,7 +77,7 @@ class UnpinnedTabContainerViewTargeter :
+@@ -77,7 +78,7 @@ class UnpinnedTabContainerViewTargeter :
      // last row plainly means "put it at the end", and the default rule --
      // only the rows themselves are hittable -- makes that release land on
      // nothing and silently cancel the drag.
@@ -1094,7 +827,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
        return view_->GetLocalBounds().Intersects(rect);
      }
      gfx::Rect content_bounds;
-@@ -273,81 +274,12 @@ UnpinnedTabContainerView::GetLinkDropInd
+@@ -274,81 +275,12 @@ UnpinnedTabContainerView::GetLinkDropInd
    if (!collection_node_) {
      return std::nullopt;
    }
@@ -1182,7 +915,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
    return GetDragHandler().GetLinkDropIndexForNode(*collection_node_,
                                                    std::nullopt);
  }
-@@ -390,6 +322,10 @@ bool UnpinnedTabContainerView::HasWorksp
+@@ -391,6 +323,10 @@ bool UnpinnedTabContainerView::HasWorksp
    return workspace_drag_host_ && workspace_drag_host_->HasEntryDragSession();
  }
  
@@ -1193,7 +926,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  std::optional<UnpinnedTabContainerView::EntryDropSpot>
  UnpinnedTabContainerView::EntryDropSpotAt(const gfx::Point& loc) {
    if (!collection_node_) {
-@@ -430,6 +366,11 @@ bool UnpinnedTabContainerView::GetDropFo
+@@ -431,6 +367,11 @@ bool UnpinnedTabContainerView::GetDropFo
      int* formats,
      std::set<ui::ClipboardFormatType>* format_types) {
    format_types->insert(helium_workspace::WorkspaceEntryDragFormat());
@@ -1205,7 +938,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
    return true;
  }
  
-@@ -438,13 +379,23 @@ bool UnpinnedTabContainerView::AreDropTy
+@@ -439,13 +380,23 @@ bool UnpinnedTabContainerView::AreDropTy
  }
  
  bool UnpinnedTabContainerView::CanDrop(const ui::OSExchangeData& data) {
@@ -1232,7 +965,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
    OnDragUpdated(event);
  }
  
-@@ -479,8 +430,14 @@ int UnpinnedTabContainerView::HandleWork
+@@ -480,8 +431,14 @@ int UnpinnedTabContainerView::HandleWork
        *this, point_in_this,
        spot ? std::optional<int>(spot->tab_index) : std::nullopt,
        spot ? spot->row_position : 0u);
@@ -1263,7 +996,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
    // The same drag handling, addressed by a point in this view's coordinates
    // rather than by an event. VerticalTabStripRegionView forwards the dead
    // space *under* Today through here: that space belongs to the region (this
-@@ -122,9 +125,10 @@ class UnpinnedTabContainerView
+@@ -137,9 +140,10 @@ class UnpinnedTabContainerView
      size_t row_position = 0;
    };
    // Midpoint rule -- land before the first row whose centre is below the
@@ -2493,17 +2226,17 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
-@@ -8,7 +8,9 @@
- 
+@@ -10,7 +10,9 @@
  #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tabs/tab_style.h"
  #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
 +#include "chrome/browser/ui/helium/arc_sidebar_split.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h"
  #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+ #include "chrome/browser/ui/views/tabs/horizontal/tab_scroll_button_container.h"
  #include "ui/views/controls/scroll_view.h"
- #include "ui/views/controls/separator.h"
-@@ -146,6 +148,18 @@ views::ProposedLayout TabStripViewLayout
+@@ -206,6 +208,18 @@ views::ProposedLayout TabStripViewLayout
    const int unpinned_preferred_height =
        unpinned_tabs_scroll_view->GetPreferredSize(size_bounds).height();
  
@@ -2522,7 +2255,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
    // If the height is bounded, calculate the available space for laying out the
    // pinned and unpinned containers.
    int remaining_height = 0;
-@@ -155,13 +169,39 @@ views::ProposedLayout TabStripViewLayout
+@@ -215,13 +229,39 @@ views::ProposedLayout TabStripViewLayout
      // whenever the pinned section is present -- matching where it is placed
      // below. Keying this off Today's contents as well would under-reserve the
      // moment Today emptied.
@@ -2563,7 +2296,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
    }
  
    // Place the pinned container.
-@@ -172,8 +212,15 @@ views::ProposedLayout TabStripViewLayout
+@@ -232,8 +272,15 @@ views::ProposedLayout TabStripViewLayout
              tab_strip_view->GetPinnedTabsContainer()) {
        min_pinned_height = pinned_container->GetMinimumSize().height();
      }

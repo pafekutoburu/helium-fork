@@ -2,15 +2,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -376,6 +376,7 @@ static_library("ui") {
+@@ -609,6 +609,7 @@ static_library("ui") {
      "helium/arc_band_colors.h",
      "helium/arc_band_tint_store.cc",
      "helium/arc_band_tint_store.h",
 +    "helium/arc_caption_opacity.h",
      "helium/arc_card_layout.h",
-     "helium/helium_layout_state_controller.cc",
-     "helium/helium_layout_state_controller.h",
-@@ -6013,6 +6014,8 @@ test("helium_workspace_unittests") {
+     "helium/helium_tab_switcher_controller.cc",
+     "helium/helium_tab_switcher_controller.h",
+@@ -4253,6 +4254,8 @@ test("helium_workspace_unittests") {
      "helium/arc_address_bar_mode_unittest.cc",
      "helium/arc_band_colors.h",
      "helium/arc_band_colors_unittest.cc",
@@ -133,15 +133,15 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -104,6 +104,7 @@
+@@ -107,6 +107,7 @@
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/arc_band_colors.h"
  #include "chrome/browser/ui/helium/arc_band_tint_store.h"
 +#include "chrome/browser/ui/helium/arc_caption_opacity.h"
- #include "chrome/browser/ui/layout_constants.h"
- #include "chrome/browser/ui/navigator/browser_navigator.h"
- #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
-@@ -2301,30 +2302,20 @@ void BrowserView::UpdateCaptionButtonsOp
+ #include "chrome/browser/ui/global_error/global_error.h"
+ #include "chrome/browser/ui/global_error/global_error_service.h"
+ #include "chrome/browser/ui/global_error/global_error_service_factory.h"
+@@ -2360,30 +2361,20 @@ void BrowserView::UpdateCaptionButtonsOp
    if (!frame_view) {
      return;
    }
@@ -186,7 +186,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  }
  
  void BrowserView::UpdateArcSidebarControlPlacement() {
-@@ -2497,6 +2488,12 @@ void BrowserView::UpdateArcAddressBarPla
+@@ -2556,6 +2547,12 @@ void BrowserView::UpdateArcAddressBarPla
    // and putting it here rather than at the mode-change callback covers the
    // layout-change and initialization callers too.
    UpdateAddressBarBandTint();
@@ -203,7 +203,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -868,18 +868,17 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -907,18 +907,17 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    const bool arc_shell = layout_data_->tab_strip_type == TabStripType::kVertical;
    const bool arc_content_card = arc_shell && should_use_rounded_frame;
  

@@ -2,15 +2,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -401,6 +401,8 @@ static_library("ui") {
+@@ -606,6 +606,8 @@ source_set("tab_dialogs") {
+ static_library("ui") {
    sources = [
-     "crypto_module_password_dialog.h",
      "helium/arc_band_colors.h",
 +    "helium/arc_band_tint_store.cc",
 +    "helium/arc_band_tint_store.h",
      "helium/arc_card_layout.h",
-     "helium/helium_layout_state_controller.cc",
-     "helium/helium_layout_state_controller.h",
+     "helium/helium_tab_switcher_controller.cc",
+     "helium/helium_tab_switcher_controller.h",
 Index: src/chrome/browser/ui/helium/arc_band_tint_store.cc
 ===================================================================
 --- /dev/null
@@ -118,15 +118,15 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -103,6 +103,7 @@
+@@ -106,6 +106,7 @@
  #include "chrome/browser/ui/focus/browser_focus_controller.h"
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/arc_band_colors.h"
 +#include "chrome/browser/ui/helium/arc_band_tint_store.h"
- #include "chrome/browser/ui/layout_constants.h"
- #include "chrome/browser/ui/navigator/browser_navigator.h"
- #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
-@@ -2245,6 +2246,15 @@ void BrowserView::UpdateAddressBarBandTi
+ #include "chrome/browser/ui/global_error/global_error.h"
+ #include "chrome/browser/ui/global_error/global_error_service.h"
+ #include "chrome/browser/ui/global_error/global_error_service_factory.h"
+@@ -2288,6 +2289,15 @@ void BrowserView::UpdateAddressBarBandTi
    if (toolbar_) {
      toolbar_->SetBandTint(tint);
    }

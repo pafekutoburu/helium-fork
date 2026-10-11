@@ -2,7 +2,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -12152,6 +12152,9 @@ Check your passwords anytime in <ph name
+@@ -12404,6 +12404,9 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
            Remove
          </message>
@@ -12,7 +12,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12304,6 +12307,9 @@ Check your passwords anytime in <ph name
+@@ -12562,6 +12565,9 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="In Title Case: The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
            Remove
          </message>
@@ -26,7 +26,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -424,6 +424,8 @@ static_library("ui") {
+@@ -627,6 +627,8 @@ static_library("ui") {
      "helium_workspace/workspace_favicon_image.h",
      "helium_workspace/workspace_grid_math.h",
      "helium_workspace/workspace_omnibox_match.h",
@@ -35,7 +35,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium_workspace/workspace_prefs.cc",
      "helium_workspace/workspace_prefs.h",
      "helium_workspace/workspace_service.cc",
-@@ -5855,6 +5857,8 @@ test("helium_workspace_unittests") {
+@@ -4309,6 +4311,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_grid_math.h",
      "helium_workspace/workspace_omnibox_match.h",
      "helium_workspace/workspace_omnibox_match_unittest.cc",
@@ -710,7 +710,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    const ui::ImageModel favicon =
        tabs::TabData::FromTabInterface(tab).favicon;
    if (!favicon.IsImage()) {
-@@ -374,9 +434,17 @@ void WorkspaceTabController::OnTabChange
+@@ -373,9 +433,17 @@ void WorkspaceTabController::OnTabChange
      return;
    }
  
@@ -754,59 +754,6 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    // Puts the tab at |index| straight into Favorites: records (or adopts) the
    // entry and binds the tab to it. Arc lets an ordinary tab become a favorite
    // in one step; promoting an existing Pinned entry is
-Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
-===================================================================
---- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
-+++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
-@@ -635,7 +635,22 @@ void TabView::PaintTabBackgroundFill(
-                                     hovered)) {
-     cc::PaintFlags flags;
-     flags.setAntiAlias(true);
--    flags.setColor(GetCurrentTabBackgroundColor(selection_state));
-+    if (hovered_ && !split_ &&
-+        selection_state == TabStyle::TabSelectionState::kInactive) {
-+      // helium-fork M3.10: a hovered row is Dia's white capsule (L243 on an
-+      // L228 sidebar, 2026-08-23), painted straight from the hovered bit: Dia
-+      // has no fade (sckrec at 120fps, first changed frame is the final
-+      // value), and neither the glow tween nor the native-materials tint
-+      // (both folded into GetCurrentTabBackgroundColor since 152) ever
-+      // reached a color this sidebar could show (the hover token is the
-+      // sidebar's own color at 0.45 over itself; the glass tint is fainter
-+      // still). Paint-time only, so GetBackgroundColor consumers keep
-+      // upstream's answer. Selected-but-inactive rows keep upstream's blend.
-+      flags.setColor(helium::GetSidebarHoverSurfaceColor(
-+          GetColorProvider()->GetColor(kColorToolbar)));
-+    } else {
-+      flags.setColor(GetCurrentTabBackgroundColor(selection_state));
-+    }
-     canvas->DrawRect(GetContentsBounds(), flags);
-   }
- 
-@@ -651,8 +666,10 @@ bool TabView::ShouldPaintTabBackgroundCo
-     bool has_custom_background,
-     bool hovered) const {
-   if (ShouldUseNativeFrameMaterials()) {
-+    // helium-fork M3.10: `hovered_` as well as the tween value -- the capsule
-+    // must be there on the very frame the pointer arrives, not 50ms later.
-     return selection_state == TabStyle::TabSelectionState::kActive ||
--           GetHoverAnimationValue() > 0.0;
-+           hovered_ || GetHoverAnimationValue() > 0.0;
-   }
- 
-   if (selection_state == TabStyle::TabSelectionState::kActive) {
-@@ -839,7 +856,11 @@ bool TabView::IsChildVisible(const views
-                          (close_button_ && close_button_->HasFocus()));
-     }
- 
--    return active_ || hovered_ || HasFocus() ||
-+    // helium-fork M3.10: the close button is a hover affordance on every row,
-+    // the active one included -- Dia 2026-08-23: the active card shows its
-+    // ✕ only under the pointer (user: 「鼠标移开的时候是不显示的」). Upstream
-+    // kept it permanently on the active tab.
-+    return hovered_ || HasFocus() ||
-            (close_button_ && close_button_->HasFocus());
-   }
- 
 Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
@@ -1901,7 +1848,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    placeholder_ = AddChildView(std::make_unique<FavoritesEmptyPlaceholder>());
    space_header_ = AddChildView(std::make_unique<WorkspaceSpaceHeader>(
        base::BindRepeating(&WorkspaceSidebarView::ToggleSpaceCollapsed,
-@@ -290,25 +419,101 @@ void WorkspaceSidebarView::LoadSpaceColl
+@@ -290,25 +419,100 @@ void WorkspaceSidebarView::LoadSpaceColl
      return;
    }
    space_collapsed_ = collapsed;
@@ -1977,7 +1924,6 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +}
 +
 +void WorkspaceSidebarView::OnTabChangedAt(tabs::TabInterface* tab,
-+                                          int index,
 +                                          TabChangeType change_type) {
 +  if (!tab) {
 +    return;
@@ -2007,7 +1953,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  void WorkspaceSidebarView::OnWorkspaceEntriesChanged() {
    SyncEntryViews();
  }
-@@ -343,6 +548,7 @@ void WorkspaceSidebarView::SyncEntryView
+@@ -343,6 +547,7 @@ void WorkspaceSidebarView::SyncEntryView
    for (const std::string& id : stale) {
      RemoveChildViewT(entry_views_[id].get());
      entry_views_.erase(id);
@@ -2015,7 +1961,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    }
  
    // Create or update the rest, and rebuild the model order.
-@@ -409,10 +615,54 @@ void WorkspaceSidebarView::SyncBindings(
+@@ -409,10 +614,54 @@ void WorkspaceSidebarView::SyncBindings(
      tabs::TabInterface* tab = handle.Get();
      view->SetBoundTab(tab);
      view->SetActive(tab && tab == active_tab);
@@ -2070,7 +2016,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  int WorkspaceSidebarView::FavoritesPlaceholderHeight(int width) const {
    // The stack of labels decides, not a constant -- see
    // kFavoritesPlaceholderMinHeight. The floor keeps the empty state from
-@@ -423,9 +673,12 @@ int WorkspaceSidebarView::FavoritesPlace
+@@ -423,9 +672,12 @@ int WorkspaceSidebarView::FavoritesPlace
  }
  
  WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::ComputeLayout(
@@ -2084,7 +2030,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  
    const int min_child_width =
        GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
-@@ -470,6 +723,7 @@ WorkspaceSidebarView::SidebarLayout Work
+@@ -470,6 +722,7 @@ WorkspaceSidebarView::SidebarLayout Work
          const int capsule_width = base_width + (col < remainder ? 1 : 0);
          out.entry_bounds[index] =
              gfx::Rect(x, y, capsule_width, capsule_height);
@@ -2092,7 +2038,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
          x += capsule_width + gap;
        }
        y += capsule_height;
-@@ -480,28 +734,92 @@ WorkspaceSidebarView::SidebarLayout Work
+@@ -480,28 +733,92 @@ WorkspaceSidebarView::SidebarLayout Work
    }
  
    y += FavoriteGridGap();
@@ -2195,7 +2141,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  }
  
  gfx::Size WorkspaceSidebarView::GetMinimumSize() const {
-@@ -511,12 +829,13 @@ gfx::Size WorkspaceSidebarView::GetMinim
+@@ -511,12 +828,13 @@ gfx::Size WorkspaceSidebarView::GetMinim
    // actually needs is the space header (permanent -- it is the pinned
    // section's visible edge), the empty-state placeholder while the grid is
    // empty, and one row's worth of content.
@@ -2211,7 +2157,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
      height +=
          kTabPadding + GetLayoutConstant(LayoutConstant::kVerticalTabHeight);
    }
-@@ -525,7 +844,21 @@ gfx::Size WorkspaceSidebarView::GetMinim
+@@ -525,7 +843,21 @@ gfx::Size WorkspaceSidebarView::GetMinim
  }
  
  void WorkspaceSidebarView::Layout(PassKey) {
@@ -2234,7 +2180,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  
    if (placeholder_) {
      placeholder_->SetVisible(layout.placeholder_visible);
-@@ -538,7 +871,15 @@ void WorkspaceSidebarView::Layout(PassKe
+@@ -538,7 +870,15 @@ void WorkspaceSidebarView::Layout(PassKe
    }
    for (size_t i = 0; i < ordered_entries_.size(); ++i) {
      WorkspaceEntryView* view = ordered_entries_[i].get();
@@ -2251,7 +2197,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
      view->SetVisible(visible);
      if (visible) {
        view->SetBoundsRect(layout.entry_bounds[i]);
-@@ -645,6 +986,20 @@ void WorkspaceSidebarView::OnEntryRemove
+@@ -645,6 +985,20 @@ void WorkspaceSidebarView::OnEntryRemove
    }
  }
  
@@ -2330,19 +2276,18 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
    // helium_workspace::WorkspaceService::Observer:
    void OnWorkspaceEntriesChanged() override;
-@@ -62,6 +78,11 @@ class WorkspaceSidebarView : public view
+@@ -62,6 +78,10 @@ class WorkspaceSidebarView : public view
        TabStripModel* tab_strip_model,
        const TabStripModelChange& change,
        const TabStripSelectionChange& selection) override;
 +  // helium-fork M3.10: feeds a bound row its tab's live title and whether
 +  // the tab is still at the entry's pinned URL.
 +  void OnTabChangedAt(tabs::TabInterface* tab,
-+                      int index,
 +                      TabChangeType change_type) override;
  
    // helium-fork: aims the pinned rows' floating-card shadow at the active
    // full-width row. Same contract as UnpinnedTabContainerView: the shadow
-@@ -74,6 +95,8 @@ class WorkspaceSidebarView : public view
+@@ -74,6 +94,8 @@ class WorkspaceSidebarView : public view
    void OnEntryActivated(const std::string& entry_id) override;
    void OnEntryToggleFavorite(const std::string& entry_id) override;
    void OnEntryRemoved(const std::string& entry_id) override;
@@ -2351,7 +2296,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
    bool CanEntryBecomeFavorite(const std::string& entry_id) const override;
  
   private:
-@@ -82,6 +105,9 @@ class WorkspaceSidebarView : public view
+@@ -82,6 +104,9 @@ class WorkspaceSidebarView : public view
    struct SidebarLayout {
      int height = 0;
      std::vector<gfx::Rect> entry_bounds;  // Parallel to |ordered_entries_|.
@@ -2361,7 +2306,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
      gfx::Rect placeholder_bounds;
      gfx::Rect header_bounds;
      bool placeholder_visible = false;
-@@ -102,7 +128,18 @@ class WorkspaceSidebarView : public view
+@@ -102,7 +127,18 @@ class WorkspaceSidebarView : public view
    // active) onto the rows.
    void SyncBindings();
  
@@ -2381,7 +2326,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
    // Re-aims the card shadow at the active pinned row (or hides it). Called
    // wherever the answer can change: bindings sync, layout, scroll.
-@@ -120,6 +157,23 @@ class WorkspaceSidebarView : public view
+@@ -120,6 +156,23 @@ class WorkspaceSidebarView : public view
    raw_ptr<views::View> placeholder_ = nullptr;
    raw_ptr<views::View> space_header_ = nullptr;
    bool space_collapsed_ = false;
@@ -2405,3 +2350,80 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
    // Entry id -> row, plus the model order the layout walks.
    std::map<std::string, raw_ptr<WorkspaceEntryView>> entry_views_;
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_view.h
+@@ -107,6 +107,10 @@ class TabView : public views::View,
+   bool IsActive() const { return active_; }
+   bool IsClosing() const { return !collection_node_; }
+   bool split() const { return split_; }
++  // helium-fork M3.10: the hovered bit itself (UpdateHovered()), which the
++  // sidebar's capsule paints from -- not IsMouseHovered(), which the style
++  // delegate's IsHovering() reports.
++  bool hovered() const { return hovered_; }
+   bool pinned() const { return pinned_; }
+   const tabs::TabInterface* GetTabInterface() const;
+ 
+Index: src/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
+@@ -206,7 +206,11 @@ bool TabViewVerticalLayout::IsChildVisib
+       return TabView().active_ && hovered_or_focused;
+     }
+ 
+-    return TabView().active_ || hovered_or_focused;
++    // helium-fork M3.10: the close button is a hover affordance on every row,
++    // the active one included -- Dia 2026-08-23: the active card shows its
++    // ✕ only under the pointer (user: 「鼠标移开的时候是不显示的」). Upstream
++    // kept it permanently on the active tab.
++    return hovered_or_focused;
+   }
+ 
+   NOTREACHED() << "Unknown tab child view";
+Index: src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
++++ src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
+@@ -154,7 +154,25 @@ void VerticalTabStyleViews::PaintTabBack
+                                     hovered)) {
+     cc::PaintFlags flags;
+     flags.setAntiAlias(true);
+-    flags.setColor(GetCurrentTabBackgroundColor(selection_state));
++    const auto* const tab = views::AsViewClass<TabView>(delegate_->GetView());
++    if (tab && tab->hovered() && !tab->split() &&
++        selection_state == TabStyle::TabSelectionState::kInactive) {
++      // helium-fork M3.10: a hovered row is Dia's white capsule (L243 on an
++      // L228 sidebar, 2026-08-23), painted straight from the hovered bit: Dia
++      // has no fade (sckrec at 120fps, first changed frame is the final
++      // value), and neither the glow tween nor the native-materials tint
++      // (both folded into GetCurrentTabBackgroundColor) ever reached a color
++      // this sidebar could show (the hover token is the sidebar's own color at
++      // 0.45 over itself; the glass tint is fainter still). Paint-time only,
++      // so GetBackgroundColor consumers keep upstream's answer.
++      // Selected-but-inactive rows keep upstream's blend.
++      const ui::ColorProvider* const provider =
++          delegate_->GetView()->GetColorProvider();
++      flags.setColor(helium::GetSidebarHoverSurfaceColor(
++          provider ? provider->GetColor(kColorToolbar) : SK_ColorWHITE));
++    } else {
++      flags.setColor(GetCurrentTabBackgroundColor(selection_state));
++    }
+     canvas->DrawRect(gfx::ScaleToEnclosingRect(
+                          delegate_->GetView()->GetLocalBounds(), scale),
+                      flags);
+@@ -183,8 +201,12 @@ bool VerticalTabStyleViews::ShouldPaintT
+     bool hovered) const {
+   if (helium::ShouldUseNativeFrameMaterials(
+           delegate_->GetBrowserWindowInterface())) {
++    // helium-fork M3.10: the hovered bit as well as the tween value -- the
++    // capsule must be there on the very frame the pointer arrives, not 50ms
++    // later.
++    const auto* const tab = views::AsViewClass<TabView>(delegate_->GetView());
+     return selection_state != TabStyle::TabSelectionState::kInactive ||
+-           delegate_->GetHoverAnimationValue() > 0.0;
++           (tab && tab->hovered()) || delegate_->GetHoverAnimationValue() > 0.0;
+   }
+ 
+   if (selection_state == TabStyle::TabSelectionState::kActive ||

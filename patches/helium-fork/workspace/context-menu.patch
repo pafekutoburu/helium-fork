@@ -2,9 +2,9 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -12196,6 +12196,12 @@ Check your passwords anytime in <ph name
-         <message name="IDS_TAB_CXMENU_UNPIN_TAB" desc="The label of the tab context menu item for unpinning one or more tabs.">
-           Unpin
+@@ -12383,6 +12383,12 @@ Check your passwords anytime in <ph name
+         <message name="IDS_TAB_CXMENU_SOUND_UNMUTE_TAB" desc="The label of the tab context menu item for unmuting one or more tabs. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Unmute tab} other {Unmute tabs}}
          </message>
 +        <message name="IDS_TAB_CXMENU_ADD_TO_FAVORITES" desc="The label of the tab context menu item that moves a workspace pinned tab into the Favorites icon grid.">
 +          Add to favorites
@@ -15,9 +15,9 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12327,6 +12333,12 @@ Check your passwords anytime in <ph name
-         <message name="IDS_TAB_CXMENU_UNPIN_TAB" desc="In Title Case: The label of the tab context menu item for unpinning one or more tabs.">
-           Unpin
+@@ -12520,6 +12526,12 @@ Check your passwords anytime in <ph name
+         <message name="IDS_TAB_CXMENU_SOUND_UNMUTE_TAB" desc="In Title Case: The label of the tab context menu item for unmuting one or more tabs. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
+           {NUM_TABS, plural, =1 {Unmute Tab} other {Unmute Tabs}}
          </message>
 +        <message name="IDS_TAB_CXMENU_ADD_TO_FAVORITES" desc="In Title Case: The label of the tab context menu item that moves a workspace pinned tab into the Favorites icon grid.">
 +          Add to Favorites
@@ -226,7 +226,7 @@ Index: src/chrome/browser/ui/tabs/tab_menu_model.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_menu_model.cc
 +++ src/chrome/browser/ui/tabs/tab_menu_model.cc
-@@ -32,6 +32,9 @@
+@@ -34,6 +34,9 @@
  #include "chrome/browser/ui/tabs/existing_window_sub_menu_model.h"
  #include "chrome/browser/ui/tabs/features.h"
  #include "chrome/browser/ui/tabs/glic_tab_sub_menu_model.h"
@@ -236,7 +236,7 @@ Index: src/chrome/browser/ui/tabs/tab_menu_model.cc
  #include "chrome/browser/ui/tabs/split_tab_menu_model.h"
  #include "chrome/browser/ui/tabs/split_tab_swap_menu_model.h"
  #include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
-@@ -428,6 +431,25 @@ void TabMenuModel::Build(int index) {
+@@ -495,6 +498,25 @@ void TabMenuModel::Build(int index) {
        TabStripModel::CommandTogglePinned,
        will_pin ? IDS_TAB_CXMENU_PIN_TAB : IDS_TAB_CXMENU_UNPIN_TAB);
  
@@ -278,7 +278,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
  #include "chrome/browser/performance_manager/public/user_tuning/user_tuning_utils.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/reading_list/reading_list_model_factory.h"
-@@ -132,6 +137,27 @@ namespace {
+@@ -133,6 +138,27 @@ namespace {
  
  TabGroupModelFactory* factory_instance = nullptr;
  
@@ -306,23 +306,23 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
  // Works similarly to base::AutoReset but checks for access from the wrong
  // thread as well as ensuring that the previous value of the re-entrancy guard
  // variable was false.
-@@ -1381,6 +1407,15 @@ void TabStripModel::CloseWebContentsAt(i
-   ReentrancyCheck::ValidateNotReentrant(&reentrancy_guard_);
+@@ -1482,6 +1508,15 @@ void TabStripModel::CloseWebContents(con
  
-   CHECK(ContainsIndex(index));
+   CHECK(contents);
+   CHECK_NE(GetIndexOfWebContents(contents), kNoTab);
 +  // helium-fork: a window vanishing is a surprise when the user did not
 +  // realise the tab they just closed was the last one, so hand back an empty
 +  // tab instead and let a second close -- of a tab that by then holds nothing
-+  // -- take the window. Ordering matters: adding the tab here lifts count()
-+  // past the upstream flag's own threshold below, so the two never both fire,
-+  // and the flag keeps its stronger "never close" meaning when it is set.
-+  if (!closing_all_ && count() < 2 && !IsBlankNewTab(GetWebContentsAt(index))) {
++  // -- take the window. Every single-tab close funnels through here since
++  // Chromium 154 (CloseWebContentsAt included); there is no upstream
++  // "close-window-with-last-tab" check on this path any more.
++  if (!closing_all_ && count() < 2 && !IsBlankNewTab(contents)) {
 +    delegate()->AddTabAt(GURL(), -1, true);
 +  }
-   if (base::CommandLine::ForCurrentProcess()->
-           GetSwitchValueASCII("close-window-with-last-tab") == "never" &&
-           !closing_all_ && count() < 2)
-@@ -2498,6 +2533,29 @@ bool TabStripModel::IsContextMenuCommand
+   CloseTabs({contents}, close_types);
+ }
+ 
+@@ -2689,6 +2724,29 @@ bool TabStripModel::IsContextMenuCommand
        return false;
      }
  
@@ -352,7 +352,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      case CommandCloseOtherTabs:
      case CommandCloseTabsToLeft:
      case CommandCloseTabsToRight: {
-@@ -2679,6 +2737,36 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -2866,6 +2924,36 @@ void TabStripModel::ExecuteContextMenuCo
        break;
      }
  
@@ -389,7 +389,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      case CommandCloseTab: {
        base::UmaHistogramCounts1000("Tab.ContextMenu.CloseTab.SelectedTabsCount",
                                     selection_model_.size());
-@@ -2741,6 +2829,21 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -2928,6 +3016,21 @@ void TabStripModel::ExecuteContextMenuCo
  
        base::RecordAction(UserMetricsAction("TabContextMenu_TogglePinned"));
  
@@ -411,8 +411,8 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
        std::vector<int> indices = GetIndicesForCommand(context_index);
        std::vector<tab_groups::TabGroupId> groups_to_delete =
            GetGroupsDestroyedFromRemovingIndices(indices);
-@@ -3228,6 +3331,16 @@ void TabStripModel::ExecuteCloseTabs(
-     uint32_t close_types) {
+@@ -3425,6 +3528,16 @@ void TabStripModel::ExecuteCloseTabs(
+   ReentrancyCheck::ValidateNotReentrant(&reentrancy_guard_);
    const std::vector<tabs::TabInterface*> tabs_to_close =
        std::move(get_tabs_to_close).Run();
 +  // helium-fork: the same rule as CloseWebContentsAt, for the paths that close
@@ -425,10 +425,10 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
 +      !(count() == 1 && IsBlankNewTab(tabs_to_close[0]->GetContents()))) {
 +    delegate()->AddTabAt(GURL(), -1, true);
 +  }
-   if (base::CommandLine::ForCurrentProcess()->
-           GetSwitchValueASCII("close-window-with-last-tab") == "never" &&
-           static_cast<int>(tabs_to_close.size()) == count())
-@@ -3291,6 +3404,19 @@ bool TabStripModel::WillContextMenuMuteS
+   if (!tabs_to_close.empty() && !closing_all_ &&
+       static_cast<int>(tabs_to_close.size()) == count() &&
+       delegate()->IsNormalWindow() &&
+@@ -3501,6 +3614,19 @@ bool TabStripModel::WillContextMenuMuteS
  
  bool TabStripModel::WillContextMenuPin(int index) {
    std::vector<int> indices = GetIndicesForCommand(index);
@@ -448,23 +448,11 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
    // If all tabs are pinned, then we unpin, otherwise we pin.
    bool all_pinned = true;
    for (size_t i = 0; i < indices.size() && all_pinned; ++i) {
-Index: src/chrome/browser/ui/tabs/tab_strip_model.h
-===================================================================
---- src.orig/chrome/browser/ui/tabs/tab_strip_model.h
-+++ src/chrome/browser/ui/tabs/tab_strip_model.h
-@@ -775,6 +775,7 @@ class TabStripModel {
-     CommandGlicSwitchToRecentConversation,
-     CommandGlicUnshare,
-     CommandDiscard,
-+    CommandToggleFavorite,
-     CommandLast
-   };
-   // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/histograms.xml:TabContextMenuCommand)
 Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -6000,6 +6000,8 @@ if (enable_dice_support) {
+@@ -4240,6 +4240,8 @@ if (is_mac) {
  # tabs, and a window is only ever compared by pointer.
  test("helium_workspace_unittests") {
    sources = [
@@ -587,3 +575,15 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_blank_tab_unittest.cc
 +
 +}  // namespace
 +}  // namespace helium_workspace
+Index: src/components/tabs/public/tab_context_menu_command.h
+===================================================================
+--- src.orig/components/tabs/public/tab_context_menu_command.h
++++ src/components/tabs/public/tab_context_menu_command.h
+@@ -41,6 +41,7 @@ enum TabContextMenuCommand {
+   CommandGlicUnshare,
+   CommandDiscard,
+   CommandToggleTabMuted,
++  CommandToggleFavorite,
+ };
+ // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/histograms.xml:TabContextMenuCommand)
+ 

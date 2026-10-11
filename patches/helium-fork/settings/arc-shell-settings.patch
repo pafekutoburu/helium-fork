@@ -25,9 +25,9 @@ Index: src/chrome/browser/extensions/api/settings_private/prefs_util.cc
 ===================================================================
 --- src.orig/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ src/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -227,6 +227,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+@@ -230,6 +230,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
        settings_api::PrefType::kBoolean;
-   (*s_allowlist)[::prefs::kHeliumMinimalLocationBar] =
+   (*s_allowlist)[::prefs::kHeliumShowProgressBar] =
        settings_api::PrefType::kBoolean;
 +  // helium-fork: the settings page writes the address bar mode instead of
 +  // the zen-mode boolean, which is now only read once during migration.
@@ -84,9 +84,9 @@ Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
        glassEffectOptions_: {type: Array},
 -      browserLayoutOptions_: {type: Array},
 +      addressBarModeOptions_: {type: Array},
-       showVerticalTabsEnabled_: {type: Boolean},
        showNativeFrameMaterialsOption_: {type: Boolean},
        showGlassEffectEnabled_: {type: Boolean},
+       ntpSimplificationBookmarksBarEnabled_: {type: Boolean},
 @@ -198,8 +197,6 @@ export class SettingsAppearancePageEleme
    protected accessor defaultZoom_: number = 1.0;
  
@@ -153,7 +153,7 @@ Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
        'webkit.webprefs.default_font_size': 'defaultFontSizePref_',
      });
  
-@@ -707,17 +700,13 @@ export class SettingsAppearancePageEleme
+@@ -713,16 +706,14 @@ export class SettingsAppearancePageEleme
    }
  
    protected showVerticalTabsExpandOnHoverSetting_(): boolean {
@@ -164,14 +164,14 @@ Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
    }
  
    protected showVerticalSettings_(): boolean {
--    return this.showVerticalTabsEnabled_ &&
--        this.browserLayoutPref_?.value === BrowserLayout.VERTICAL;
+-    return this.browserLayoutPref_?.value === BrowserLayout.VERTICAL;
 -  }
 -
 -  protected showCenteredLocationBarSetting_(): boolean {
 -    return this.browserLayoutPref_?.value !== BrowserLayout.COMPACT;
-+    // helium-fork: the layout is always the sidebar.
-+    return this.showVerticalTabsEnabled_;
++    // helium-fork: the layout is always the sidebar (154 dropped the
++    // vertical-tabs feature gate this used to read as well).
++    return true;
    }
  
  
@@ -179,7 +179,7 @@ Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.
 ===================================================================
 --- src.orig/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -599,11 +599,14 @@ void AddAppearanceStrings(content::WebUI
+@@ -600,11 +600,14 @@ void AddAppearanceStrings(content::WebUI
        {"nativeFrameMaterials", IDS_SETTINGS_NATIVE_FRAME_MATERIALS},
        {"nativeFrameMaterialsDescription",
         IDS_SETTINGS_NATIVE_FRAME_MATERIALS_DESCRIPTION},
@@ -235,8 +235,8 @@ Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.htm
            pref-key="helium.browser.centered_location_bar"
            label="$i18n{centeredLocationBar}">
        </settings-toggle-button>
-@@ -89,23 +92,6 @@ export function getHtml(this: SettingsAp
-           label="$i18n{minimalLocationBar}">
+@@ -93,23 +96,6 @@ export function getHtml(this: SettingsAp
+           label="$i18n{showProgressBar}">
        </settings-toggle-button>
      </div>
 -    <settings-toggle-button class="hr"

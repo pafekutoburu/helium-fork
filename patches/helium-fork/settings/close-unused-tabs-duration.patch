@@ -45,7 +45,7 @@ Index: src/chrome/browser/extensions/api/settings_private/prefs_util.cc
  #include "chrome/browser/extensions/api/settings_private/prefs_util.h"
  
  #include <memory>
-@@ -240,6 +241,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+@@ -243,6 +244,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kHeliumNativeFrameMaterials] =
        settings_api::PrefType::kBoolean;
@@ -135,7 +135,7 @@ Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.
 ===================================================================
 --- src.orig/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -619,6 +619,15 @@ void AddAppearanceStrings(content::WebUI
+@@ -620,6 +620,15 @@ void AddAppearanceStrings(content::WebUI
         IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS},
        {"sidebarAutoHideExtensionsDescription",
         IDS_SETTINGS_SIDEBAR_AUTO_HIDE_EXTENSIONS_DESCRIPTION},
@@ -148,6 +148,6 @@ Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.
 +      {"closeUnusedTabs7Days", IDS_SETTINGS_CLOSE_UNUSED_TABS_7_DAYS},
 +      {"closeUnusedTabs30Days", IDS_SETTINGS_CLOSE_UNUSED_TABS_30_DAYS},
 +      {"closeUnusedTabsNever", IDS_SETTINGS_CLOSE_UNUSED_TABS_NEVER},
+       {"showProgressBar", IDS_SETTINGS_SHOW_PROGRESS_BAR},
        {"shiftRightClickContextMenu",
         IDS_SETTINGS_SHIFT_RIGHT_CLICK_CONTEXT_MENU},
-       {"showZoomIndicator", IDS_SETTINGS_SHOW_ZOOM_INDICATOR},

@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -4049,6 +4049,8 @@ static_library("ui") {
+@@ -2639,6 +2639,8 @@ static_library("ui") {
        "views/frame/themed_background.h",
        "views/frame/top_container_view.cc",
        "views/frame/top_container_view.h",
@@ -179,8 +179,8 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
 +                       const tabs::TabCollectionNodes& handles,
 +                       bool insert_from_detached) override;
    void OnTabChangedAt(tabs::TabInterface* tab,
-                       int index,
                        TabChangeType change_type) override;
+   void OnTabPinnedStateChanged(tabs::TabInterface* tab, int index) override;
 Index: src/chrome/browser/ui/views/frame/helium_card_shadow_view.cc
 ===================================================================
 --- /dev/null
@@ -381,7 +381,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "chrome/browser/ui/tabs/tab_style.h"
  #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
  #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
-@@ -20,13 +24,20 @@
+@@ -20,14 +24,21 @@
  #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
  #include "chrome/browser/ui/views/tabs/common/tab_view.h"
  #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.h"
@@ -390,6 +390,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +#include "ui/base/dragdrop/drag_drop_types.h"
 +#include "ui/base/dragdrop/drop_target_event.h"
 +#include "ui/base/dragdrop/os_exchange_data.h"
+ #include "components/tabs/public/tab_group.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/gfx/geometry/rect.h"
 +#include "ui/gfx/geometry/rect_conversions.h"
@@ -402,7 +403,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "ui/views/view_targeter.h"
  #include "ui/views/view_targeter_delegate.h"
  #include "ui/views/view_utils.h"
-@@ -54,11 +65,20 @@ static_assert(kMinHeaderHeightPctForGrou
+@@ -55,11 +66,20 @@ static_assert(kMinHeaderHeightPctForGrou
  
  class UnpinnedTabContainerViewTargeter : public views::ViewTargeterDelegate {
   public:
@@ -424,7 +425,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
      gfx::Rect content_bounds;
      for (const views::View* child : view_->children()) {
        if (child->GetVisible()) {
-@@ -69,11 +89,102 @@ class UnpinnedTabContainerViewTargeter :
+@@ -70,11 +90,102 @@ class UnpinnedTabContainerViewTargeter :
    }
  
   private:
@@ -528,7 +529,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  UnpinnedTabContainerView::UnpinnedTabContainerView(
      TabCollectionNode* collection_node)
      : DraggedTabsContainer(
-@@ -101,6 +212,10 @@ UnpinnedTabContainerView::UnpinnedTabCon
+@@ -102,6 +213,10 @@ UnpinnedTabContainerView::UnpinnedTabCon
    SetEventTargeter(std::make_unique<views::ViewTargeter>(
        std::make_unique<UnpinnedTabContainerViewTargeter>(this)));
  
@@ -539,7 +540,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
    collection_node->set_remove_child_from_node(base::BindRepeating(
        &TabCollectionAnimatingLayoutManager::AnimateAndDestroyChildView,
        base::Unretained(&layout_manager_.get())));
-@@ -111,6 +226,9 @@ UnpinnedTabContainerView::UnpinnedTabCon
+@@ -112,6 +227,9 @@ UnpinnedTabContainerView::UnpinnedTabCon
    node_destroyed_subscription_ = collection_node_->RegisterWillDestroyCallback(
        base::BindOnce(&UnpinnedTabContainerView::ResetCollectionNode,
                       base::Unretained(this)));
@@ -549,7 +550,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  }
  
  UnpinnedTabContainerView::~UnpinnedTabContainerView() = default;
-@@ -224,12 +342,164 @@ UnpinnedTabContainerView::GetLinkDropInd
+@@ -225,12 +343,164 @@ UnpinnedTabContainerView::GetLinkDropInd
      }
      return GetDragHandler().GetLinkDropIndexForNode(*child_node, hint);
    }
@@ -714,8 +715,8 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  bool UnpinnedTabContainerView::IsDragging() const {
    if (!collection_node_ || !collection_node_->GetController()) {
      return false;
-@@ -256,6 +526,99 @@ bool UnpinnedTabContainerView::ShouldSna
-   return views::IsViewClass<SplitTabView>(&child_view);
+@@ -301,6 +571,99 @@ int UnpinnedTabContainerView::GetUnconst
+       ->GetUnconstrainedPreferredWidth(this);
  }
  
 +void UnpinnedTabContainerView::AddedToWidget() {
@@ -892,9 +893,9 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
    // TabCollectionAnimatingLayoutManager::Delegate:
    bool IsDragging() const override;
    bool IsViewDragging(const views::View& child_view) const override;
-@@ -52,7 +102,31 @@ class UnpinnedTabContainerView
-   std::optional<BrowserRootView::DropIndex> GetLinkDropIndex(
-       const gfx::Point& point_in_local_coords);
+@@ -67,7 +117,31 @@ class UnpinnedTabContainerView
+   void SetAvailableSpace(views::SizeBound space) { available_space_ = space; }
+   views::SizeBound available_space() const { return available_space_; }
  
 +  // helium-fork: aims the active row's floating-card shadow at `target` (the
 +  // active tab's TabView, wherever it nests -- groups, splits), or hides it
@@ -924,7 +925,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
    // helium-fork: the profile's workspace model, or null (off-the-record
    // windows, or before this view has a widget). Tabs bound to an entry are
    // drawn by the sidebar and skipped here.
-@@ -79,10 +153,46 @@ class UnpinnedTabContainerView
+@@ -94,6 +168,31 @@ class UnpinnedTabContainerView
  
    void ResetCollectionNode();
  
@@ -954,6 +955,9 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
 +  bool constructed_ = false;
 +
    raw_ptr<TabCollectionNode> collection_node_;
+ 
+   // The available main-axis space allocated by TabStripViewLayout.
+@@ -102,6 +201,17 @@ class UnpinnedTabContainerView
    const raw_ref<TabCollectionAnimatingLayoutManager> layout_manager_;
  
    base::CallbackListSubscription node_destroyed_subscription_;
@@ -975,15 +979,15 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layou
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
 +++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layout.cc
-@@ -14,6 +14,7 @@
+@@ -15,6 +15,7 @@
  #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
- #include "chrome/browser/ui/views/tabs/common/tab_strip_utils.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_layout_utils.h"
  #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ #include "chrome/browser/ui/views/tabs/horizontal/horizontal_tab_closing_helper.h"
  #include "components/tabs/public/tab_group.h"
  #include "ui/gfx/geometry/rect.h"
- #include "ui/views/layout/proposed_layout.h"
-@@ -174,12 +175,35 @@ views::ProposedLayout UnpinnedTabContain
+@@ -213,12 +214,35 @@ views::ProposedLayout UnpinnedTabContain
    const helium_workspace::WorkspaceService* workspace_service =
        tab_container_view->GetWorkspaceService();
  
@@ -1019,7 +1023,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view_layou
      int x =
          views::AsViewClass<TabGroupView>(child) &&
                  collapse_state != tabs::VerticalTabStripCollapseState::kExpanded
-@@ -221,6 +245,7 @@ views::ProposedLayout UnpinnedTabContain
+@@ -263,6 +287,7 @@ views::ProposedLayout UnpinnedTabContain
      layouts.child_layouts.emplace_back(child, true, bounds);
      height += bounds.height() + kTabVerticalPadding;
      width = std::max(width, bounds.width() + bounds.x());

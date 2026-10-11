@@ -10,7 +10,7 @@ Index: src/chrome/browser/prefs/browser_prefs.cc
  #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
  #include "chrome/browser/ui/network_profile_bubble.h"
  #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
-@@ -1831,6 +1832,9 @@
+@@ -1887,6 +1888,9 @@ void RegisterProfilePrefs(user_prefs::Pr
    regional_capabilities::prefs::RegisterProfilePrefs(registry);
    browser_shortcuts::prefs::RegisterProfilePrefs(registry);
    helium_workspace::prefs::RegisterProfilePrefs(registry);
@@ -35,7 +35,7 @@ Index: src/chrome/browser/ui/helium/arc_band_colors.h
  #include "third_party/skia/include/core/SkColor.h"
  #include "ui/gfx/color_utils.h"
  
-@@ -61,16 +63,31 @@
+@@ -61,16 +63,31 @@ namespace helium {
  //    that whole window. Reading them early turned the band black several
  //    hundred milliseconds before the dark page it belonged to appeared. The
  //    band is the page's color, so it may only change when the page does.
@@ -68,7 +68,7 @@ Index: src/chrome/browser/ui/helium/arc_band_colors.h
    if (!page_color) {
      page_color = declared_background;
    }
-@@ -145,6 +162,192 @@
+@@ -145,6 +162,192 @@ inline SkColor GetBandFieldColor(SkColor
                                   hovered ? kFieldAlphaHovered : kFieldAlpha);
  }
  
@@ -274,7 +274,7 @@ Index: src/chrome/browser/ui/helium/arc_band_colors_unittest.cc
  #include "testing/gtest/include/gtest/gtest.h"
  
  namespace helium {
-@@ -194,5 +196,134 @@
+@@ -194,5 +196,134 @@ TEST(ResolveBandTintTest, OutputIsAlways
    EXPECT_EQ(SkColorSetRGB(0x20, 0x30, 0x40), *tint);
  }
  
@@ -437,7 +437,7 @@ Index: src/chrome/browser/ui/helium/arc_band_tint_store.cc
  
  namespace helium {
  namespace {
-@@ -49,4 +62,85 @@
+@@ -49,4 +62,85 @@ std::optional<SkColor> GetPublishedBandT
    return stored ? stored->tint : std::nullopt;
  }
  
@@ -546,7 +546,7 @@ Index: src/chrome/browser/ui/helium/arc_band_tint_store.h
  // helium-fork: the published address bar band tint, parked on the tab it
  // belongs to.
  //
-@@ -36,6 +45,63 @@
+@@ -36,6 +45,63 @@ void SetPublishedBandTint(content::WebCo
  
  std::optional<SkColor> GetPublishedBandTint(content::WebContents* contents);
  
@@ -614,7 +614,7 @@ Index: src/chrome/browser/ui/views/frame/contents_web_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/contents_web_view.h
 +++ src/chrome/browser/ui/views/frame/contents_web_view.h
-@@ -79,8 +79,16 @@
+@@ -79,8 +79,16 @@ class ContentsWebView : public views::We
    void CloneWebContentsLayer() override;
    void DestroyClonedLayer() override;
  
@@ -662,7 +662,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  #include "third_party/blink/public/common/widget/constants.h"
  #include "third_party/skia/include/core/SkBitmap.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
-@@ -65,8 +73,174 @@
+@@ -65,8 +73,174 @@ struct PageTint : public base::SupportsU
    // Readback is asynchronous; a sample requested before a navigation must not
    // be allowed to paint the new page with the old page's color.
    int sample_generation = 0;
@@ -837,7 +837,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  constexpr char kPageTintUserDataKey[] = "helium-fork-arc-page-tint";
  
  PageTint* FindPageTint(content::WebContents* contents) {
-@@ -218,22 +392,55 @@
+@@ -218,22 +392,55 @@ bool TopContainerView::PageColorSchemeIs
                        ui::NativeTheme::PreferredColorScheme::kDark;
  }
  
@@ -904,7 +904,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  }
  
  void TopContainerView::WatchPageColors(content::WebContents* contents) {
-@@ -250,12 +457,72 @@
+@@ -250,12 +457,72 @@ void TopContainerView::WatchPageColors(c
    page_paint_timer_.Stop();
    page_painted_ = !contents || contents->CompletedFirstVisuallyNonEmptyPaint();
    awaiting_first_frame_ = !page_painted_;
@@ -977,7 +977,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  }
  
  void TopContainerView::DidChangeThemeColor() {
-@@ -263,6 +530,29 @@
+@@ -263,6 +530,29 @@ void TopContainerView::DidChangeThemeCol
  }
  
  void TopContainerView::OnBackgroundColorChanged() {
@@ -1007,7 +1007,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
    OnPageColorMaybeChanged();
  }
  
-@@ -304,7 +594,11 @@
+@@ -304,7 +594,11 @@ void TopContainerView::OnVisibilityChang
    // so the sample taken at switch time was dropped. This is the retry.
    if (visibility == content::Visibility::VISIBLE) {
      SyncFrameMetadataObservation();
@@ -1020,7 +1020,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
    }
  }
  
-@@ -320,6 +614,60 @@
+@@ -320,6 +614,60 @@ void TopContainerView::OnRenderFrameMeta
    // closed, and awaiting_first_frame_ keeps it to the first frame after a
    // commit. Re-sampling on every frame would also make the band follow
    // scrolling, which this shell has already ruled out.
@@ -1081,7 +1081,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
    if (resample_on_next_frame_) {
      // helium-fork: the appearance changed, and this is the first frame the
      // renderer has produced since. Now -- and not a guessed number of
-@@ -335,7 +683,17 @@
+@@ -335,7 +683,17 @@ void TopContainerView::OnRenderFrameMeta
  }
  
  void TopContainerView::OnRenderFrameMetadataChangedAfterActivation(
@@ -1100,7 +1100,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  
  void TopContainerView::OnRenderFrameSubmission() {}
  
-@@ -365,7 +723,17 @@
+@@ -365,7 +723,17 @@ void TopContainerView::SyncFrameMetadata
    }
    observed_widget_ = widget;
    widget->AddObserver(this);
@@ -1118,7 +1118,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  }
  
  void TopContainerView::StopObservingFrameMetadata() {
-@@ -376,6 +744,7 @@
+@@ -376,6 +744,7 @@ void TopContainerView::StopObservingFram
            observed_widget_->GetRenderFrameMetadataProvider()) {
      provider->RemoveObserver(this);
    }
@@ -1126,7 +1126,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
    observed_widget_->RemoveObserver(this);
    observed_widget_ = nullptr;
  }
-@@ -387,6 +756,14 @@
+@@ -387,6 +756,14 @@ void TopContainerView::DocumentOnLoadCom
    // that case; for a document with content it lands at or after the first
    // paint, so it changes nothing there.
    ReleasePagePaintGate();
@@ -1141,7 +1141,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  }
  
  void TopContainerView::DidFinishNavigation(
-@@ -404,6 +781,8 @@
+@@ -404,6 +781,8 @@ void TopContainerView::DidFinishNavigati
      // A new document owns the band's color only once it is the one on screen.
      page_painted_ = false;
      awaiting_first_frame_ = true;
@@ -1150,7 +1150,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
      // The sample belongs to the document that was just replaced. The
      // generation counter stops an *in-flight* readback from landing on the new
      // page, but the value already stored is just as wrong, and it now sits at
-@@ -413,8 +792,53 @@
+@@ -413,8 +792,53 @@ void TopContainerView::DidFinishNavigati
      // document's own declared colors instead. (This does not flash the band
      // back to the toolbar look: the page_painted_ gate above holds the previous
      // tint until the new page is actually on screen.)
@@ -1206,7 +1206,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
      SyncFrameMetadataObservation();
      // Backstop, in case neither signal arrives. It is blink's own paint-holding
      // deadline on purpose: that is exactly how long the previous page's pixels
-@@ -437,35 +861,206 @@
+@@ -437,35 +861,206 @@ void TopContainerView::ReleasePagePaintG
      return;
    }
    page_painted_ = true;
@@ -1418,7 +1418,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
      return;
    }
    const gfx::Size viewport = view->GetVisibleViewportSize();
-@@ -476,12 +1071,26 @@
+@@ -476,12 +1071,26 @@ void TopContainerView::SamplePageTopColo
        0, 0, viewport.width(),
        std::min(kSampleStripHeight, viewport.height()));
    constexpr base::TimeDelta kSampleTimeout = base::Milliseconds(500);
@@ -1448,7 +1448,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
  }
  
  // static
-@@ -490,11 +1099,11 @@
+@@ -490,11 +1099,11 @@ void TopContainerView::OnPageTopColorSam
      base::WeakPtr<content::WebContents> contents,
      int generation,
      bool dark_at_request,
@@ -1462,7 +1462,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.cc
      return;
    }
    PageTint& tint = EnsurePageTint(contents.get());
-@@ -502,32 +1111,167 @@
+@@ -502,32 +1111,167 @@ void TopContainerView::OnPageTopColorSam
    if (generation != tint.sample_generation) {
      return;
    }
@@ -1663,7 +1663,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.h
  #include "content/public/browser/render_widget_host_observer.h"
  #include "content/public/browser/render_widget_host_view.h"
  #include "content/public/browser/web_contents_observer.h"
-@@ -31,7 +33,11 @@
+@@ -31,7 +33,11 @@ class BrowserView;
  class TopContainerView : public views::View,
                           public content::WebContentsObserver,
                           public content::RenderFrameMetadataProvider::Observer,
@@ -1676,7 +1676,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.h
    METADATA_HEADER(TopContainerView, views::View)
  
   public:
-@@ -97,6 +103,45 @@
+@@ -97,6 +103,45 @@ class TopContainerView : public views::V
    // together.
    bool page_painted() const { return page_painted_; }
  
@@ -1722,7 +1722,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.h
    // views::View:
    // helium-fork: a macOS appearance change re-renders every page. The active
    // tab is re-read here; hidden ones retire their own samples.
-@@ -145,6 +190,17 @@
+@@ -145,6 +190,17 @@ class TopContainerView : public views::V
    void RenderWidgetHostDestroyed(content::RenderWidgetHost* widget_host)
        override;
  
@@ -1740,7 +1740,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.h
   private:
    // helium-fork: the band's tint is resolved during layout, so a page color
    // change has to ask for one.
-@@ -154,8 +210,14 @@
+@@ -154,8 +210,14 @@ class TopContainerView : public views::V
    // is what a cached sample has to still agree with to be usable.
    bool PageColorSchemeIsDark() const;
  
@@ -1756,7 +1756,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.h
    static void OnPageTopColorSampled(
        base::WeakPtr<TopContainerView> self,
        base::WeakPtr<content::WebContents> contents,
-@@ -163,8 +225,29 @@
+@@ -163,8 +225,29 @@ class TopContainerView : public views::V
        // The appearance the readback was requested under; the result is
        // discarded if it no longer matches (see the .cc).
        bool dark_at_request,
@@ -1786,7 +1786,7 @@ Index: src/chrome/browser/ui/views/frame/top_container_view.h
    // helium-fork: releases the page_painted() gate. Called from the frame
    // metadata signal, and from the two WebContentsObserver signals that mean
    // "the new document is what the user is looking at now".
-@@ -195,7 +278,15 @@
+@@ -195,7 +278,15 @@ class TopContainerView : public views::V
    // Only the *first* frame after a commit opens the gate; metadata arrives for
    // every frame the renderer submits, including the old document's.
    bool awaiting_first_frame_ = false;
@@ -1806,7 +1806,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -179,6 +179,7 @@
+@@ -178,6 +178,7 @@
  #include "ui/views/property_effects.h"
  #include "ui/views/style/typography.h"
  #include "ui/views/style/typography_provider.h"
@@ -1814,7 +1814,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  #include "ui/views/view.h"
  #include "ui/views/view_class_properties.h"
  #include "ui/views/view_utils.h"
-@@ -338,6 +339,16 @@
+@@ -352,6 +353,16 @@ void LocationBarView::Init() {
    // (NotifyEnterExitOfDescendant breaks on `p->Contains(sibling)`), so this
    // costs nothing on icon-to-icon moves.
    SetNotifyEnterExitOnChild(true);
@@ -1831,7 +1831,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  
    // Note that children with layers are *not* clipped, because focus rings have
    // to draw outside the parent's bounds.
-@@ -1276,6 +1287,31 @@
+@@ -1283,6 +1294,31 @@ void LocationBarView::OnThemeChanged() {
    RefreshClearAllButtonIcon();
  }
  
@@ -1862,8 +1862,8 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +
  void LocationBarView::RefreshPushedIconColors() {
    // RefreshBackground() runs once from Init(), before the children this pushes
-   // into exist -- page_action_icon_controller_ is still null there, and
-@@ -2475,6 +2511,13 @@
+   // into exist. Same guard OnThemeChanged() has always had; the first real
+@@ -2393,6 +2429,13 @@ void LocationBarView::OnMouseExited(cons
    OnOmniboxHovered(false);
  }
  
@@ -1877,7 +1877,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  void LocationBarView::ShowContextMenu(const gfx::Point& p,
                                        ui::mojom::MenuSourceType source_type) {
    omnibox_view_->ShowContextMenu(p, source_type);
-@@ -2788,6 +2831,11 @@
+@@ -2738,6 +2781,11 @@ void LocationBarView::OnOmniboxHovered(b
      if (!omnibox_view_->HasFocus()) {
        hover_animation_.Show();
      }
@@ -1893,7 +1893,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.h
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.h
-@@ -44,6 +44,7 @@
+@@ -43,6 +43,7 @@
  #include "ui/gfx/geometry/rect.h"
  #include "ui/gfx/image/image.h"
  #include "ui/views/animation/animation_delegate_views.h"
@@ -1901,7 +1901,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
  #include "ui/views/context_menu_controller.h"
  #include "ui/views/controls/focus_ring.h"
  #include "ui/views/drag_controller.h"
-@@ -118,6 +119,7 @@
+@@ -105,6 +106,7 @@ class LocationBarView
        public views::FocusChangeListener,
        public views::DragController,
        public views::AnimationDelegateViews,
@@ -1909,7 +1909,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
        public IconLabelBubbleView::Delegate,
        public LocationIconView::Delegate,
        public ContentSettingImageViewDelegate,
-@@ -219,6 +221,25 @@
+@@ -201,6 +203,25 @@ class LocationBarView
  
    OmniboxViewViews* omnibox_view() { return omnibox_view_; }
  
@@ -1935,7 +1935,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    const OmniboxController* GetOmniboxController() const;
  
  
-@@ -587,6 +608,9 @@
+@@ -568,6 +589,9 @@ class LocationBarView
    // event the field itself sees -- OnMouseMoved goes to the icon.
    void OnMouseEntered(const ui::MouseEvent& event) override;
    void OnMouseExited(const ui::MouseEvent& event) override;
@@ -1945,7 +1945,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    void ShowContextMenu(const gfx::Point& p,
                         ui::mojom::MenuSourceType source_type) override;
  
-@@ -750,6 +774,9 @@
+@@ -722,6 +746,9 @@ class LocationBarView
    // 200ms after the transition, and the swap must happen exactly once, on the
    // frame the pointer crosses the boundary.
    bool arc_hovered_ = false;
@@ -1959,7 +1959,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_icon_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_icon_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_icon_view.cc
-@@ -357,6 +357,33 @@
+@@ -357,6 +357,33 @@ void LocationIconView::SetArcPlainIcon(b
    UpdateIcon();
  }
  
@@ -1997,7 +1997,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_icon_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_icon_view.h
 +++ src/chrome/browser/ui/views/location_bar/location_icon_view.h
-@@ -130,6 +130,12 @@
+@@ -130,6 +130,12 @@ class LocationIconView : public IconLabe
    // update.
    void SetArcPlainIcon(bool plain);
  
@@ -2014,7 +2014,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_button.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_button.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_button.cc
-@@ -458,6 +458,15 @@
+@@ -458,6 +458,15 @@ void ToolbarButton::OnBoundsChanged(cons
    LabelButton::OnBoundsChanged(previous_bounds);
  }
  
@@ -2034,7 +2034,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_button.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_button.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_button.h
-@@ -117,6 +117,11 @@
+@@ -117,6 +117,11 @@ class ToolbarButton : public views::Labe
    // icon state changes, e.g. in response to theme or touch mode changes.
    virtual void UpdateIcon();
  
@@ -2050,7 +2050,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -61,6 +61,7 @@
+@@ -63,6 +63,7 @@
  #include "chrome/browser/ui/global_error/global_error_service_factory.h"
  #include "chrome/browser/ui/global_media_controls/media_toolbar_button_controller.h"
  #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
@@ -2058,7 +2058,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  #include "chrome/browser/ui/helium/arc_toolbar_host.h"
  #include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
  #include "content/public/browser/navigation_controller.h"
-@@ -2343,6 +2344,22 @@
+@@ -2486,6 +2487,22 @@ class LiteralCascadingColor : public vie
    const SkColor color_;
  };
  
@@ -2081,7 +2081,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  }  // namespace
  
  void ToolbarView::SetBandTint(std::optional<SkColor> tint) {
-@@ -2358,6 +2375,22 @@
+@@ -2501,6 +2518,22 @@ void ToolbarView::SetBandTint(std::optio
      views::SetCascadingColorProviderColor(
          this, views::kCascadingBackgroundColor, kColorToolbar);
    }
@@ -2104,7 +2104,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  }
  
  bool ToolbarView::IsArcBandHosted() const {
-@@ -2711,9 +2744,16 @@
+@@ -2854,9 +2887,16 @@ void ToolbarView::OnPaintBackground(gfx:
    }
    cc::PaintFlags flags;
    flags.setAntiAlias(true);

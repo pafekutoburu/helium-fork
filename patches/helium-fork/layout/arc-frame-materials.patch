@@ -1,6 +1,8 @@
---- a/chrome/browser/ui/browser_ui_prefs.cc
-+++ b/chrome/browser/ui/browser_ui_prefs.cc
-@@ -132,7 +132,7 @@ void RegisterBrowserUserPrefs(user_prefs
+Index: src/chrome/browser/ui/browser_ui_prefs.cc
+===================================================================
+--- src.orig/chrome/browser/ui/browser_ui_prefs.cc
++++ src/chrome/browser/ui/browser_ui_prefs.cc
+@@ -138,7 +138,7 @@ void RegisterBrowserUserPrefs(user_prefs
  
    registry->RegisterBooleanPref(prefs::kHeliumRoundedFrame, true);
  
@@ -9,20 +11,24 @@
  
    // helium-fork: the Arc shell's address bar shows a domain-only label, and
    // it is LEFT aligned -- centering was a misread of the design and the user
---- a/chrome/browser/ui/ui_features.cc
-+++ b/chrome/browser/ui/ui_features.cc
-@@ -39,7 +39,7 @@ bool HeliumUseCompactLocationWidth() {
-   return base::FeatureList::IsEnabled(kHeliumCompactLocationWidth);
- }
+Index: src/chrome/browser/ui/ui_features.cc
+===================================================================
+--- src.orig/chrome/browser/ui/ui_features.cc
++++ src/chrome/browser/ui/ui_features.cc
+@@ -35,7 +35,7 @@ BASE_FEATURE(kBookmarkOpenAllConfirmatio
+ // Enables the migration of browser commands to Action API.
+ BASE_FEATURE(kUseActionsForBrowserCommands, base::FEATURE_DISABLED_BY_DEFAULT);
  
 -BASE_FEATURE(kHeliumNativeFrameMaterials, base::FEATURE_DISABLED_BY_DEFAULT);
 +BASE_FEATURE(kHeliumNativeFrameMaterials, base::FEATURE_ENABLED_BY_DEFAULT);
  
- bool HeliumNativeFrameAvailable() {
- #if BUILDFLAG(IS_MAC)
---- a/chrome/browser/ui/views/frame/browser_view.cc
-+++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -177,6 +177,7 @@
+ BASE_FEATURE(kHeliumHidePageActions, base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -189,6 +189,7 @@
  #include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
  #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
@@ -30,7 +36,7 @@
  #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
  #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
  #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
-@@ -2844,6 +2845,12 @@ void BrowserView::UpdateArcAddressBarPla
+@@ -2903,6 +2904,12 @@ void BrowserView::UpdateArcAddressBarPla
                ? toolbar_->background()->AsA<CustomCornersBackground>()
                : nullptr) {
      toolbar_background->SetVisible(host == helium::ArcToolbarHost::kBand);
@@ -43,7 +49,7 @@
    }
    toolbar_->SetArcSidebarHosted(sidebar_bound);
    toolbar_->UpdateToolbarLayout();
-@@ -7933,7 +7940,15 @@ void BrowserView::FrameColorsChanged() {
+@@ -8093,7 +8100,15 @@ void BrowserView::FrameColorsChanged() {
      web_app_window_title_->SetBackgroundColor(frame_color);
      web_app_window_title_->SetEnabledColor(caption_color);
    }
@@ -60,9 +66,11 @@
  }
  
  void BrowserView::UpdateAccessibleNameForAllTabs() {
---- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-+++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -1918,6 +1918,10 @@ void BrowserViewTabbedLayoutImpl::Config
+Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -1985,6 +1985,10 @@ void BrowserViewTabbedLayoutImpl::Config
    } else {
      background->SetVisible(true);
    }
@@ -73,7 +81,7 @@
  
    // helium-fork: in the Arc shell the band is the top strip of the contents
    // card, not a separate bar above it -- rounded where it meets the window,
-@@ -1955,6 +1959,15 @@ void BrowserViewTabbedLayoutImpl::Config
+@@ -2022,6 +2026,15 @@ void BrowserViewTabbedLayoutImpl::Config
      background->SetVisible(true);
      background->SetCorners(corners);
      background->SetPrimaryColor(color);
@@ -89,7 +97,7 @@
      // The toolbar carries its own CustomCornersBackground and covers the top
      // container completely, so tinting only the container underneath paints
      // nothing visible. Give the toolbar the same treatment -- it is the view
-@@ -1970,6 +1983,7 @@ void BrowserViewTabbedLayoutImpl::Config
+@@ -2037,6 +2050,7 @@ void BrowserViewTabbedLayoutImpl::Config
          toolbar_background->SetVisible(true);
          toolbar_background->SetCorners(corners);
          toolbar_background->SetPrimaryColor(color);
@@ -97,10 +105,12 @@
        }
      }
      return;
---- a/chrome/browser/ui/views/frame/multi_contents_background_view.cc
-+++ b/chrome/browser/ui/views/frame/multi_contents_background_view.cc
+Index: src/chrome/browser/ui/views/frame/multi_contents_background_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/multi_contents_background_view.cc
++++ src/chrome/browser/ui/views/frame/multi_contents_background_view.cc
 @@ -10,11 +10,25 @@
- #include "ui/compositor/layer.h"
+ #include "ui/compositor/layer_solid_color.h"
  #include "ui/gfx/geometry/rounded_corners_f.h"
  
 +namespace {
@@ -129,23 +139,25 @@
 @@ -49,7 +63,7 @@ void MultiContentsBackgroundView::OnThem
  
  void MultiContentsBackgroundView::OnPaint(gfx::Canvas* canvas) {
-   CHECK_EQ(layer()->type(), ui::LAYER_TEXTURED);
+   CHECK(layer()->AsTextured());
 -  if (helium::ShouldUseNativeFrameMaterials(browser_view_)) {
 +  if (ShouldShowFrameMaterialThrough(browser_view_)) {
      return;
    }
    ThemedBackground::PaintBackground(canvas, this, browser_view_);
-@@ -57,7 +71,7 @@ void MultiContentsBackgroundView::OnPain
- 
- ui::LayerType MultiContentsBackgroundView::CalculateLayerType() const {
+@@ -59,7 +73,7 @@ ui::LayerType MultiContentsBackgroundVie
+   const bool has_custom_image =
+       !ThemedBackground::GetBackgroundColor(this, browser_view_).has_value();
    const bool use_native_materials =
 -      helium::ShouldUseNativeFrameMaterials(browser_view_);
 +      ShouldShowFrameMaterialThrough(browser_view_);
-   const bool has_custom_image =
-       !ThemedBackground::GetBackgroundColor(this, browser_view_).has_value();
- 
---- a/chrome/browser/ui/views/helium/native_frame_materials.cc
-+++ b/chrome/browser/ui/views/helium/native_frame_materials.cc
+   return has_custom_image || use_native_materials ? ui::LAYER_TEXTURED
+                                                  : ui::LAYER_SOLID_COLOR;
+ }
+Index: src/chrome/browser/ui/views/helium/native_frame_materials.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/helium/native_frame_materials.cc
++++ src/chrome/browser/ui/views/helium/native_frame_materials.cc
 @@ -16,6 +16,17 @@
  
  namespace helium {
@@ -189,8 +201,10 @@
  }
  
  }  // namespace helium
---- a/chrome/browser/ui/views/helium/native_frame_materials.h
-+++ b/chrome/browser/ui/views/helium/native_frame_materials.h
+Index: src/chrome/browser/ui/views/helium/native_frame_materials.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/helium/native_frame_materials.h
++++ src/chrome/browser/ui/views/helium/native_frame_materials.h
 @@ -18,6 +18,23 @@ bool ShouldUseNativeFrameMaterials(const
  bool ShouldUseNativeFrameMaterials(const BrowserWindowInterface* browser);
  bool ShouldUseNativeFrameMaterials(const views::View* view);
@@ -215,9 +229,11 @@
  }  // namespace helium
  
  #endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_NATIVE_FRAME_MATERIALS_H_
---- a/chrome/browser/ui/views/helium/native_frame_materials_mac.mm
-+++ b/chrome/browser/ui/views/helium/native_frame_materials_mac.mm
-@@ -7,8 +7,30 @@
+Index: src/chrome/browser/ui/views/helium/native_frame_materials_mac.mm
+===================================================================
+--- src.orig/chrome/browser/ui/views/helium/native_frame_materials_mac.mm
++++ src/chrome/browser/ui/views/helium/native_frame_materials_mac.mm
+@@ -9,8 +9,30 @@
  namespace helium {
  namespace {
  
@@ -250,7 +266,7 @@
  
  // Menu material is slightly brighter and more translucent in light mode,
  // so we use it for the light theme instead of Sidebar.
-@@ -17,10 +39,9 @@ NSVisualEffectMaterial GetFrameMaterial(
+@@ -19,10 +41,9 @@ NSVisualEffectMaterial GetFrameMaterial(
                   : NSVisualEffectMaterialMenu;
  }
  
@@ -263,7 +279,7 @@
  }
  
  NSColor* GetFrameMaterialNeutralOverlayColor(bool is_dark) {
-@@ -28,7 +49,9 @@ NSColor* GetFrameMaterialNeutralOverlayC
+@@ -30,7 +51,9 @@ NSColor* GetFrameMaterialNeutralOverlayC
    return [NSColor colorWithSRGBRed:component
                               green:component
                                blue:component
@@ -274,9 +290,11 @@
  }
  
  // Applies the browser theme color over the black/white neutral overlay while
---- a/chrome/browser/ui/views/infobars/infobar_container_view.cc
-+++ b/chrome/browser/ui/views/infobars/infobar_container_view.cc
-@@ -258,7 +258,12 @@ void InfoBarContainerView::PlatformSpeci
+Index: src/chrome/browser/ui/views/infobars/infobar_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/infobars/infobar_container_view.cc
++++ src/chrome/browser/ui/views/infobars/infobar_container_view.cc
+@@ -261,7 +261,12 @@ void InfoBarContainerView::PlatformSpeci
  void InfoBarContainerView::UpdateBackground() {
    const ui::ColorId color_id =
        rounded_frame_enabled_ ? kColorToolbar : kColorInfoBarContentAreaSeparator;
@@ -290,9 +308,11 @@
      SetBackground(nullptr);
      return;
    }
---- a/chrome/browser/ui/views/infobars/infobar_view.cc
-+++ b/chrome/browser/ui/views/infobars/infobar_view.cc
-@@ -292,8 +292,11 @@ gfx::Size InfoBarView::CalculatePreferre
+Index: src/chrome/browser/ui/views/infobars/infobar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/infobars/infobar_view.cc
++++ src/chrome/browser/ui/views/infobars/infobar_view.cc
+@@ -278,8 +278,11 @@ gfx::Size InfoBarView::CalculatePreferre
  void InfoBarView::OnThemeChanged() {
    views::View::OnThemeChanged();
    const auto* cp = GetColorProvider();

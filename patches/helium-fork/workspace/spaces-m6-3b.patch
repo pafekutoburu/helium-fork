@@ -2,7 +2,7 @@ Index: src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 ===================================================================
 --- src.orig/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 +++ src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
-@@ -634,8 +634,13 @@
+@@ -642,8 +642,13 @@ ChromeAutocompleteProviderClient::GetHel
        service->entries();
    for (const helium_workspace::WorkspaceOmniboxMatch& hit :
         helium_workspace::MatchWorkspaceEntries(entries, input_text)) {
@@ -22,7 +22,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -5874,6 +5874,8 @@
+@@ -4328,6 +4328,8 @@ test("helium_workspace_unittests") {
      "helium/arc_card_layout_unittest.cc",
      "helium/arc_composer.h",
      "helium/arc_composer_unittest.cc",
@@ -194,7 +194,7 @@ Index: src/chrome/browser/ui/helium/arc_entry_menu.h
  //
  // Header-only and free of //ui/views and grit on purpose, like every other
  // arc_*.h: asserted in helium_workspace_unittests. The views side
-@@ -156,7 +157,11 @@
+@@ -156,7 +157,11 @@ inline std::vector<EntryMenuItem> BuildE
    const size_t second_group = items.size();
    if (s.include_3b) {
      add(EntryMenuItemId::kChangeIcon, EntryMenuLabel::kChangeIcon);
@@ -211,7 +211,7 @@ Index: src/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
 +++ src/chrome/browser/ui/helium/arc_entry_menu_unittest.cc
-@@ -191,6 +191,19 @@
+@@ -191,6 +191,19 @@ TEST(ArcEntryMenuTest, ThreeBSlotsOpenTh
    EXPECT_FALSE(menu[3].separator_before);
  }
  
@@ -235,7 +235,7 @@ Index: src/chrome/browser/ui/helium/arc_space_icon_picker.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/arc_space_icon_picker.h
 +++ src/chrome/browser/ui/helium/arc_space_icon_picker.h
-@@ -71,6 +71,10 @@
+@@ -71,6 +71,10 @@ inline constexpr int kSpaceIconPickerLef
  inline constexpr int kSpaceIconPickerGapBelowHeadRow = 17;
  inline constexpr int kSpaceIconPickerGapBelowFormRow = 5;
  inline constexpr int kSpaceIconPickerGapAboveBarSlot = 12;
@@ -250,7 +250,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_entry.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_entry.cc
-@@ -21,6 +21,8 @@
+@@ -21,6 +21,8 @@ constexpr char kKeyPosition[] = "positio
  constexpr char kKeyFolderId[] = "folder_id";
  constexpr char kKeyCollapsed[] = "collapsed";
  constexpr char kKeyFavicon[] = "favicon";
@@ -259,7 +259,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
  constexpr char kKeyVersion[] = "version";
  
  }  // namespace
-@@ -52,6 +54,13 @@
+@@ -52,6 +54,13 @@ base::DictValue WorkspaceEntry::ToValue(
    if (!favicon_png.empty()) {
      dict.Set(kKeyFavicon, base::Base64Encode(favicon_png));
    }
@@ -273,7 +273,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.cc
    dict.Set(kKeyVersion, version);
    return dict;
  }
-@@ -128,6 +137,17 @@
+@@ -128,6 +137,17 @@ std::optional<WorkspaceEntry> WorkspaceE
        entry.favicon_png.assign(bytes->begin(), bytes->end());
      }
    }
@@ -295,7 +295,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_entry.h
 +++ src/chrome/browser/ui/helium_workspace/workspace_entry.h
-@@ -42,8 +42,10 @@
+@@ -42,8 +42,10 @@ struct WorkspaceEntry {
    ~WorkspaceEntry();
  
    // Serialization schema version this code writes. v2 added |favicon_png|;
@@ -308,7 +308,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry.h
  
    base::DictValue ToValue() const;
  
-@@ -75,6 +77,17 @@
+@@ -75,6 +77,17 @@ struct WorkspaceEntry {
    // start would show nothing but placeholders until something is clicked.
    // Empty means "fall back to the favicon service, then to the default".
    std::string favicon_png;
@@ -330,7 +330,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_entry_unittest.cc
-@@ -212,6 +212,65 @@
+@@ -212,6 +212,65 @@ TEST(WorkspaceEntryTest, UnknownKindReje
    EXPECT_FALSE(WorkspaceEntry::FromValue(site).has_value());
  }
  
@@ -400,7 +400,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
 +++ src/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
-@@ -27,8 +27,9 @@
+@@ -27,8 +27,9 @@ namespace helium_workspace {
  // dependency-free so helium_workspace_unittests can pin the rule.
  //
  // Rule: split the input on whitespace and fold case; every term must be a
@@ -412,7 +412,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_omnibox_match.h
  // normalised the same way the haystack is -- a leading "http://", "https://"
  // or "www." is dropped -- so typing the URL the way the omnibox shows it
  // ("www.you", "https://you") still finds the entry. Output keeps the order of
-@@ -92,10 +93,20 @@
+@@ -92,10 +93,20 @@ inline std::vector<WorkspaceOmniboxMatch
        continue;
      }
      const std::u16string haystack = WorkspaceUrlHaystack(entry.url);
@@ -438,7 +438,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_omnibox_match_unittest.c
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_omnibox_match_unittest.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_omnibox_match_unittest.cc
-@@ -168,5 +168,31 @@
+@@ -168,5 +168,31 @@ TEST(WorkspaceOmniboxMatchTest, Haystack
    EXPECT_EQ(WorkspaceUrlHaystack(GURL("not a url")), u"");
  }
  
@@ -474,7 +474,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_service.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_service.cc
-@@ -184,6 +184,46 @@
+@@ -184,6 +184,46 @@ bool WorkspaceService::SetEntryFavicon(c
    return false;
  }
  
@@ -525,7 +525,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_service.h
 +++ src/chrome/browser/ui/helium_workspace/workspace_service.h
-@@ -126,6 +126,14 @@
+@@ -126,6 +126,14 @@ class WorkspaceService : public KeyedSer
    // Raw PNG bytes; empty clears the icon. Persisted so a cold start can draw
    // entries that have no tab.
    bool SetEntryFavicon(const std::string& id, std::string png_bytes);
@@ -544,7 +544,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
 +++ src/chrome/browser/ui/helium_workspace/workspace_service_unittest.cc
-@@ -1284,6 +1284,58 @@
+@@ -1284,6 +1284,58 @@ TEST_F(WorkspaceServiceTest, DuplicateSu
    reloaded.Shutdown();
  }
  
@@ -607,15 +607,15 @@ Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 +++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-@@ -77,6 +77,7 @@
- #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
- #include "chrome/browser/ui/omnibox/omnibox_tab_helper.h"
+@@ -83,6 +83,7 @@
  #include "chrome/browser/ui/views/frame/browser_view.h"
-+#include "chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h"
- #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
  #include "chrome/browser/ui/views/omnibox/omnibox_popup_closer.h"
  #include "chrome/browser/ui/views/search_engines/dse_reset_dialog.h"
-@@ -128,6 +129,7 @@
++#include "chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h"
+ #include "chrome/common/channel_info.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/bookmarks/browser/bookmark_model.h"
+@@ -132,6 +133,7 @@
  #include "ui/gfx/image/image_skia_operations.h"
  #include "ui/gfx/paint_vector_icon.h"
  #include "ui/gfx/vector_icon_types.h"
@@ -623,7 +623,7 @@ Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
  #include "url/gurl.h"
  
  #if BUILDFLAG(ENABLE_EXTENSIONS)
-@@ -748,8 +750,51 @@
+@@ -817,8 +819,51 @@ gfx::Image ChromeOmniboxClient::GetFavic
    // factory returns null for incognito / guest profiles.
    if (helium_workspace::WorkspaceService* service =
            helium_workspace::WorkspaceServiceFactory::GetForProfile(profile_)) {
@@ -680,7 +680,7 @@ Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.h
 ===================================================================
 --- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.h
 +++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.h
-@@ -188,6 +188,10 @@
+@@ -188,6 +188,10 @@ class ChromeOmniboxClient final : public
    // helium-fork r8③: decoded sidebar-entry favicons, keyed by entry id and
    // validated by the PNG's byte length so a re-captured icon is re-decoded.
    std::map<std::string, std::pair<size_t, gfx::Image>> workspace_favicons_;
@@ -695,7 +695,7 @@ Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/helium_space_icon_picker_view.cc
 +++ src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.cc
-@@ -341,6 +341,13 @@
+@@ -341,6 +341,13 @@ void HeliumSpaceIconPickerView::Show(con
    body_edge_in_parent_ = body_edge_in_parent;
    left_in_parent_ = left_in_parent;
    current_icon_ = current_icon;
@@ -709,7 +709,7 @@ Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.cc
    on_picked_ = std::move(on_picked);
    on_closed_ = std::move(on_closed);
    recent_ = ReadRecent();
-@@ -702,6 +709,17 @@
+@@ -702,6 +709,17 @@ void HeliumSpaceIconPickerView::OnThemeC
  
  bool HeliumSpaceIconPickerView::AcceleratorPressed(
      const ui::Accelerator& accelerator) {
@@ -727,7 +727,7 @@ Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.cc
    Hide();
    return true;
  }
-@@ -949,18 +967,63 @@
+@@ -949,18 +967,63 @@ void HeliumSpaceIconPickerView::Finish(c
    if (!icon.empty() && !helium_workspace::IsVectorIconRef(icon)) {
      RecordRecent(icon);
    }
@@ -802,7 +802,7 @@ Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
 +++ src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
-@@ -49,9 +49,13 @@
+@@ -49,9 +49,13 @@ class Textfield;
  // (2a-r3, user 2026-09-05: Frequently Used first -- blank until something
  // has been used, and where the picker always opens -- then Arc's eight
  // groups; the category bar switches pages, a search shows its hits flat);
@@ -819,7 +819,7 @@ Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
  //
  // ⛔ The focus never leaves the picker while it is up: hiding the focused
  // search field advanced the focus into the page and lit the page's
-@@ -83,8 +87,10 @@
+@@ -83,8 +87,10 @@ class HeliumSpaceIconPickerView : public
    // card's top lands (kBelowAnchor) or its bottom (kAboveAnchor);
    // |left_in_parent| the sidebar's left edge (the card sits
    // kSpaceIconPickerLeftInset right of it); all in the parent's
@@ -832,7 +832,7 @@ Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
    void Show(const gfx::Rect& anchor_in_parent,
              helium::SpaceIconPickerPlacement placement,
              int body_edge_in_parent,
-@@ -131,6 +137,9 @@
+@@ -131,6 +137,9 @@ class HeliumSpaceIconPickerView : public
    void OnEmojiPicked(size_t index);
    void OnIconPicked(size_t index);
    void OnTrashPressed();
@@ -842,7 +842,7 @@ Index: src/chrome/browser/ui/views/frame/helium_space_icon_picker_view.h
    void OnClearSearch();
    void OnRecentPressed();
    void OnCategoryPressed(int group);
-@@ -154,6 +163,8 @@
+@@ -154,6 +163,8 @@ class HeliumSpaceIconPickerView : public
    int body_edge_in_parent_ = 0;
    int left_in_parent_ = 0;
    std::string current_icon_;
@@ -855,7 +855,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -1318,9 +1318,10 @@
+@@ -1326,9 +1326,10 @@ void VerticalTabStripRegionView::OnManag
  }
  
  void VerticalTabStripRegionView::OnManageSheetPickerClosed() {
@@ -869,7 +869,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (manage_view_) {
      manage_view_->RequestFocus();
    }
-@@ -1352,8 +1353,8 @@
+@@ -1360,8 +1361,8 @@ void VerticalTabStripRegionView::OnCreat
  }
  
  void VerticalTabStripRegionView::OnCreateFormPickerClosed() {
@@ -880,7 +880,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (create_form_) {
      create_form_->FocusNameField();
    }
-@@ -1362,10 +1363,10 @@
+@@ -1370,10 +1371,10 @@ void VerticalTabStripRegionView::OnCreat
  void VerticalTabStripRegionView::OnCreateFormIconPicked(const std::string& icon) {
    if (create_form_) {
      create_form_->SetIcon(icon);
@@ -966,7 +966,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
  
  // Row metrics. The capsule/row heights and radii are the ones the tab strip
  // already uses for pinned vertical tabs, so an entry row lines up with a
-@@ -259,6 +288,20 @@
+@@ -259,6 +288,20 @@ WorkspaceEntryView::WorkspaceEntryView(D
  
    title_label_ = AddChildView(std::make_unique<TabTitle>());
  
@@ -987,7 +987,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
    // helium-fork M3.10: "Back to Pinned URL", one size down from the title;
    // app copy, so secondary (the sidebar's rule for everything that is not a
    // user's own tab title, user 2026-08-21).
-@@ -321,25 +364,31 @@
+@@ -321,25 +364,31 @@ void WorkspaceEntryView::SetEntry(
    // bind (user 2026-09-03 recording; probe: a fresh profile's seeded row).
    const bool icon_changed = !icon_resolved_ ||
                              favicon_png_ != entry.favicon_png ||
@@ -1022,7 +1022,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
      UpdateCloseButton();
      UpdateAlertIndicator();
      UpdateDriftMarks();
-@@ -475,6 +524,11 @@
+@@ -475,6 +524,11 @@ void WorkspaceEntryView::Layout(PassKey)
        (row_height - title_height) / 2 -
        base::ClampRound(helium::kSidebarHintTitleRise * HintProgress());
    title_label_->SetBounds(text_x, title_y, text_width, title_height);
@@ -1034,7 +1034,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
    if (HintVisible()) {
      // Placed by baseline rather than by stacking preferred heights: two label
      // boxes add up to more than the 34pt row, and what Dia actually spaces is
-@@ -732,7 +786,9 @@
+@@ -732,7 +786,9 @@ void WorkspaceEntryView::OnMouseReleased
  }
  
  void WorkspaceEntryView::OnMouseMoved(const ui::MouseEvent& event) {
@@ -1045,7 +1045,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
                   icon_->bounds().Contains(event.location()));
  }
  
-@@ -779,7 +835,12 @@
+@@ -779,7 +835,12 @@ void WorkspaceEntryView::OnDragDone() {
  }
  
  std::u16string WorkspaceEntryView::drag_title() const {
@@ -1059,7 +1059,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
  }
  
  SkColor WorkspaceEntryView::drag_surface_color() const {
-@@ -800,6 +861,11 @@
+@@ -800,6 +861,11 @@ SkColor WorkspaceEntryView::drag_text_co
  
  void WorkspaceEntryView::OnThemeChanged() {
    views::View::OnThemeChanged();
@@ -1071,7 +1071,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
    UpdateTitleColor();
    UpdateCloseButtonColors();
    alert_indicator_->OnParentTabButtonColorChanged();
-@@ -830,9 +896,8 @@
+@@ -830,9 +896,8 @@ void WorkspaceEntryView::SetLiveState(co
  
  void WorkspaceEntryView::UpdateTitleText() {
    // A bound tab that has no title yet (still loading) keeps the entry's own
@@ -1083,7 +1083,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
    if (title_label_->GetText() != text) {
      title_label_->SetText(text);
    }
-@@ -840,6 +905,8 @@
+@@ -840,6 +905,8 @@ void WorkspaceEntryView::UpdateTitleText
  
  void WorkspaceEntryView::UpdateTitleColor() {
    if (const ui::ColorProvider* const colors = GetColorProvider()) {
@@ -1092,7 +1092,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
      title_label_->SetEnabledColor(helium::GetSidebarRowTitleColor(
          colors->GetColor(kColorToolbar), active_));
    }
-@@ -848,7 +915,10 @@
+@@ -848,7 +915,10 @@ void WorkspaceEntryView::UpdateTitleColo
  void WorkspaceEntryView::UpdateCloseButton() {
    // Only a row with a page to close, and only under the pointer (user
    // 2026-08-23: 「只有被打开的标签才有这个 X」).
@@ -1104,7 +1104,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
    if (close_button_->GetVisible() != show) {
      close_button_->SetVisible(show);
      // The title gives up its right end to the button.
-@@ -1023,6 +1093,9 @@
+@@ -1023,6 +1093,9 @@ void WorkspaceEntryView::ShowContextMenu
      state.space_ids.push_back(space.id);
    }
    state.owner_space_id = context.owner_space_id;
@@ -1114,7 +1114,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
  
    // Unretained: |menu_model_| is ours and dies with us.
    menu_model_ = std::make_unique<WorkspaceEntryMenuModel>(
-@@ -1082,8 +1155,14 @@
+@@ -1082,8 +1155,14 @@ void WorkspaceEntryView::OnMenuCommand(h
        // Leaves any open tab alone; it simply becomes an ordinary tab again.
        delegate_->OnEntryRemoved(entry_id_);
        break;
@@ -1130,7 +1130,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
        break;
    }
  }
-@@ -1091,6 +1170,21 @@
+@@ -1091,6 +1170,21 @@ void WorkspaceEntryView::OnMenuCommand(h
  void WorkspaceEntryView::ResolveIcon() {
    favicon_tracker_.TryCancelAll();
  
@@ -1152,7 +1152,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
    // 1. The live tab, but only once it has a favicon the site actually
    // served. A tab still loading reports the placeholder globe, and taking it
    // here would blank out an entry that already has a perfectly good icon --
-@@ -1213,7 +1307,7 @@
+@@ -1213,7 +1307,7 @@ void WorkspaceEntryView::ApplyIcon(const
    UpdateAccentSource(favicon.IsImage() ? favicon.GetImage().AsImageSkia()
                                         : gfx::ImageSkia());
    tabs::TabData data;
@@ -1161,7 +1161,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
    data.favicon = favicon;
    data.should_display_favicon = true;
    data.network_state = tabs::TabNetworkState::kNone;
-@@ -1224,13 +1318,133 @@
+@@ -1224,13 +1318,133 @@ void WorkspaceEntryView::ApplyIcon(const
  }
  
  void WorkspaceEntryView::UpdateAccessibleState() {
@@ -1310,7 +1310,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
  #include "ui/views/view.h"
  
  class Profile;
-@@ -46,6 +47,7 @@
+@@ -46,6 +47,7 @@ class Event;
  namespace views {
  class Label;
  class MenuRunner;
@@ -1318,7 +1318,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
  }  // namespace views
  
  // One row of the workspace sidebar. Unlike a TabView this renders a
-@@ -68,9 +70,15 @@
+@@ -68,9 +70,15 @@ class MenuRunner;
  // 180ms -- the title rises, the hint and the favicon's fill come in, the "/"
  // goes out, all on one tween (arc_sidebar_surface.h) -- while the row's
  // height never changes. The capsule fill underneath still snaps.
@@ -1334,7 +1334,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
                             public AlertIndicatorButton::Delegate {
    METADATA_HEADER(WorkspaceEntryView, views::View)
  
-@@ -109,6 +117,12 @@
+@@ -109,6 +117,12 @@ class WorkspaceEntryView : public views:
      // "Replace Pinned URL with Current" and "Edit...".
      virtual void OnEntryReplaceUrlRequested(const std::string& entry_id) = 0;
      virtual void OnEntryEditUrlRequested(const std::string& entry_id) = 0;
@@ -1347,7 +1347,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
  
     protected:
      virtual ~Delegate() = default;
-@@ -202,6 +216,23 @@
+@@ -202,6 +216,23 @@ class WorkspaceEntryView : public views:
    // The menu's chosen item. May delete |this| (Remove, Move to).
    void OnMenuCommand(helium::EntryMenuItemId id, const std::string& space_id);
  
@@ -1371,7 +1371,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
    // AlertIndicatorButton::Delegate (2a-r3: the speaker a Today row wears,
    // on a bound row -- user 2026-09-05 #7).
    bool ShouldEnableMuteToggle(int required_width) override;
-@@ -210,8 +241,9 @@
+@@ -210,8 +241,9 @@ class WorkspaceEntryView : public views:
    void AlertStateChanged() override;
  
   private:
@@ -1383,7 +1383,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
    void ResolveIcon();
    // Whether the stored PNG is the sharper picture of the same page than the
    // live tab's favicon: the tab is at the pinned URL, its favicon has no
-@@ -221,9 +253,15 @@
+@@ -221,9 +253,15 @@ class WorkspaceEntryView : public views:
    void ApplyIcon(const ui::ImageModel& favicon);
    void UpdateAccessibleState();
  
@@ -1401,7 +1401,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
    // 3a-r7: the title's ink -- the active row's, or the resting grey every
    // other title in the sidebar wears (arc_sidebar_surface.h).
    void UpdateTitleColor();
-@@ -270,6 +308,9 @@
+@@ -270,6 +308,9 @@ class WorkspaceEntryView : public views:
    GURL url_;
    std::u16string title_;
    std::string favicon_png_;
@@ -1411,7 +1411,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
    // M6-r4: SetEntry() has run ResolveIcon() at least once.
    bool icon_resolved_ = false;
    helium_workspace::WorkspaceEntry::Section section_ =
-@@ -303,6 +344,12 @@
+@@ -303,6 +344,12 @@ class WorkspaceEntryView : public views:
    raw_ptr<TabIcon> icon_ = nullptr;
    raw_ptr<views::Label> slash_label_ = nullptr;
    raw_ptr<TabTitle> title_label_ = nullptr;
@@ -1436,7 +1436,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
  #include "cc/paint/paint_flags.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
  #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
-@@ -348,9 +349,31 @@
+@@ -348,9 +349,31 @@ bool WorkspaceFolderRowView::HandleKeyEv
  }
  
  void WorkspaceFolderRowView::OnRenameFieldBlurred() {
@@ -1482,7 +1482,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
  #include "chrome/browser/ui/helium/arc_entry_menu.h"
  #include "chrome/browser/ui/helium_workspace/workspace_entry.h"
  #include "chrome/browser/ui/helium_workspace/workspace_space.h"
-@@ -185,6 +186,8 @@
+@@ -185,6 +186,8 @@ class WorkspaceFolderRowView : public vi
    ui::ImageModel current_icon_;
    std::unique_ptr<WorkspaceEntryMenuModel> menu_model_;
    std::unique_ptr<views::MenuRunner> menu_runner_;
@@ -1495,7 +1495,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
-@@ -2762,6 +2762,58 @@
+@@ -2762,6 +2762,58 @@ void WorkspaceSidebarView::OnEntryEditUr
                                         GetWidget()->GetNativeWindow());
  }
  
@@ -1558,7 +1558,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-@@ -274,6 +274,9 @@
+@@ -274,6 +274,9 @@ class WorkspaceSidebarView : public view
                                     const std::string& space_id) override;
    void OnEntryReplaceUrlRequested(const std::string& entry_id) override;
    void OnEntryEditUrlRequested(const std::string& entry_id) override;
@@ -1568,7 +1568,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
    // WorkspaceFolderRowView::Delegate (M3.13):
    void OnFolderToggled(const std::string& folder_id) override;
-@@ -315,6 +318,11 @@
+@@ -315,6 +318,11 @@ class WorkspaceSidebarView : public view
   private:
    void OpenSpaceIconPicker(int attempt);
    void OnSpaceIconPicked(const std::string& space_id, const std::string& icon);
@@ -1607,7 +1607,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_space_icon_set.cc
  #include "ui/gfx/vector_icon_types.h"
  #include "ui/views/vector_icons.h"
  
-@@ -153,3 +164,53 @@
+@@ -153,3 +164,53 @@ std::string_view SpaceIconPickerCategory
  const gfx::VectorIcon& SpaceFormPlusIcon() {
    return vector_icons::kAddOldIcon;
  }
@@ -1678,7 +1678,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_space_icon_set.h
  
  namespace gfx {
  struct VectorIcon;
-@@ -44,4 +47,14 @@
+@@ -44,4 +47,14 @@ inline constexpr std::string_view kSpace
  // The "+" inside the Create a Space form's dashed button.
  const gfx::VectorIcon& SpaceFormPlusIcon();
  
@@ -1697,7 +1697,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
 +++ src/chrome/browser/ui/views/tabs/vertical/helium_space_manage_view.cc
-@@ -686,7 +686,9 @@
+@@ -686,7 +686,9 @@ void HeliumSpaceManageView::OnIconPicked
    if (service_) {
      service_->SetSpaceIcon(space_id, icon);
    }

@@ -2,22 +2,25 @@ Index: src/chrome/browser/prefs/browser_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/prefs/browser_prefs.cc
 +++ src/chrome/browser/prefs/browser_prefs.cc
-@@ -2726,6 +2726,10 @@ void MigrateObsoleteProfilePrefs(PrefSer
- #if !BUILDFLAG(IS_ANDROID)
-   // Added 07/2026.
-   tabs::MigrateEverythingMenuPinnedToTabstripPref(profile_prefs);
-+
-+  // helium-fork: pin the profile to the Arc shell and carry zen mode over to
-+  // the address bar mode.
-+  tabs::ApplyArcShellLayoutPrefs(profile_prefs);
- #endif
+@@ -2808,6 +2808,13 @@ void MigrateObsoleteProfilePrefs(PrefSer
+   // Added 08/2026.
+   profile_prefs->ClearPref(kSigninInterceptionIDPCookiesUrl);
  
-   // Added 07/2026.
++#if !BUILDFLAG(IS_ANDROID)
++  // helium-fork: pin the profile to the Arc shell and carry zen mode over to
++  // the address bar mode. (Until Chromium 154 this sat next to
++  // tabs::MigrateEverythingMenuPinnedToTabstripPref, which 154 retired.)
++  tabs::ApplyArcShellLayoutPrefs(profile_prefs);
++#endif
++
+   // Please don't delete the following line. It is used by PRESUBMIT.py.
+   // END_MIGRATE_OBSOLETE_PROFILE_PREFS
+ 
 Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -1495,17 +1495,10 @@ void BrowserCommandController::HandleCom
+@@ -1509,17 +1509,10 @@ void BrowserCommandController::HandleCom
        break;
      }
      case IDC_CTRL_S_SHORTCUT: {
@@ -42,7 +45,7 @@ Index: src/chrome/browser/ui/browser_ui_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_ui_prefs.cc
 +++ src/chrome/browser/ui/browser_ui_prefs.cc
-@@ -134,9 +134,15 @@ void RegisterBrowserUserPrefs(user_prefs
+@@ -140,9 +140,15 @@ void RegisterBrowserUserPrefs(user_prefs
  
    registry->RegisterBooleanPref(prefs::kHeliumNativeFrameMaterials, false);
  
@@ -57,13 +60,13 @@ Index: src/chrome/browser/ui/browser_ui_prefs.cc
 -  registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, false);
 +  registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, true);
  
-   registry->RegisterBooleanPref(prefs::kHomePageIsNewTabPage, true,
-                                 pref_registration_flags);
+   registry->RegisterBooleanPref(prefs::kHeliumShowProgressBar, true);
+ 
 Index: src/chrome/browser/ui/helium/helium_layout_state_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/helium_layout_state_controller.cc
 +++ src/chrome/browser/ui/helium/helium_layout_state_controller.cc
-@@ -20,7 +20,9 @@ HeliumLayoutStateController::HeliumLayou
+@@ -22,7 +22,9 @@ HeliumLayoutStateController::HeliumLayou
    pref_change_registrar_.Init(pref_service_);
  
    pref_change_registrar_.AddMultiple(
@@ -74,7 +77,7 @@ Index: src/chrome/browser/ui/helium/helium_layout_state_controller.cc
        base::BindRepeating(&HeliumLayoutStateController::NotifyStateChanged,
                            base::Unretained(this)));
  }
-@@ -50,7 +52,28 @@ bool HeliumLayoutStateController::IsDyna
+@@ -52,7 +54,28 @@ bool HeliumLayoutStateController::IsDyna
  }
  
  bool HeliumLayoutStateController::IsZenModeEnabled() const {
@@ -153,7 +156,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc
 +++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc
-@@ -35,6 +35,11 @@ void RegisterProfilePrefs(user_prefs::Pr
+@@ -33,6 +33,11 @@ void RegisterProfilePrefs(user_prefs::Pr
                                  std::to_underlying(HeliumLayoutType::kClassic));
    registry->RegisterBooleanPref(prefs::kHeliumVerticalRightAligned, false);
    registry->RegisterBooleanPref(prefs::kHeliumZenMode, false);
@@ -164,9 +167,9 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
 +  registry->RegisterBooleanPref(prefs::kHeliumArcShellMigrated, false);
    registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, false);
    registry->RegisterBooleanPref(prefs::kHeliumZenModeTopChromePinned, false);
- 
-@@ -78,6 +83,38 @@ void MigrateEverythingMenuPinnedToTabstr
-       prefs::kEverythingMenuPinnedToTabstripMigrationComplete, true);
+ }
+@@ -49,6 +54,39 @@ void MigrateHoverCardMemoryPref(PrefServ
+                           true);
  }
  
 +void ApplyArcShellLayoutPrefs(PrefService* profile_prefs) {
@@ -181,9 +184,10 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
 +    return;
 +  }
 +
-+  if (IsVerticalTabsFeatureEnabled() &&
-+      profile_prefs->GetInteger(prefs::kHeliumLayout) !=
-+          std::to_underlying(HeliumLayoutType::kVertical)) {
++  // Chromium 154 launched vertical tabs: there is no feature gate to ask
++  // any more (tabs::IsVerticalTabsFeatureEnabled is gone).
++  if (profile_prefs->GetInteger(prefs::kHeliumLayout) !=
++      std::to_underlying(HeliumLayoutType::kVertical)) {
 +    profile_prefs->SetInteger(prefs::kHeliumLayout,
 +                              std::to_underlying(HeliumLayoutType::kVertical));
 +  }
@@ -208,9 +212,9 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.h
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.h
 +++ src/chrome/browser/ui/tabs/tab_strip_prefs.h
-@@ -33,6 +33,10 @@ void MigrateHoverCardMemoryPref(PrefServ
- // Migrates kEverythingMenuPinnedToTabstrip once per profile.
- void MigrateEverythingMenuPinnedToTabstripPref(PrefService* profile_prefs);
+@@ -30,6 +30,10 @@ void RegisterProfilePrefs(user_prefs::Pr
+ // it was disabled before.
+ void MigrateHoverCardMemoryPref(PrefService* local_prefs);
  
 +// helium-fork: pins the profile to the Arc shell (vertical layout) and, once
 +// per profile, carries an old zen-mode boolean over to the address bar mode.
@@ -223,7 +227,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -1684,8 +1684,11 @@ float BrowserView::GetSideChromeRevealRa
+@@ -1719,8 +1719,11 @@ float BrowserView::GetSideChromeRevealRa
  }
  
  bool BrowserView::IsZenModeSideChromePinned() const {
@@ -237,7 +241,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  }
  
  bool BrowserView::IsZenModeTopChromePinned() const {
-@@ -1843,22 +1846,13 @@ void BrowserView::OnZenModeTopChromePinn
+@@ -1881,22 +1884,13 @@ void BrowserView::OnZenModeTopChromePinn
    InvalidateLayout();
  }
  
@@ -267,7 +271,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  
  void BrowserView::UpdateZenModeState() {
    const bool zen_mode_enabled = IsZenModeEnabled();
-@@ -2101,11 +2095,12 @@ bool BrowserView::IsZenModeEnabled() con
+@@ -2144,11 +2138,12 @@ bool BrowserView::IsZenModeEnabled() con
  }
  
  bool BrowserView::IsSidebarHiddenModeActive() const {
@@ -285,7 +289,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
        !ShouldDrawVerticalTabStrip()) {
      return false;
    }
-@@ -2117,12 +2112,11 @@ bool BrowserView::IsSidebarHiddenModeAct
+@@ -2160,12 +2155,11 @@ bool BrowserView::IsSidebarHiddenModeAct
  void BrowserView::OnSidebarCollapseStateChanged(
      tabs::VerticalTabStripCollapseState state) {
    // helium-fork: keep the reveal ratio in step with the collapse state so the
@@ -303,7 +307,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
    if (state == tabs::VerticalTabStripCollapseState::kExpanded) {
-@@ -2141,10 +2135,11 @@ void BrowserView::OnSidebarCollapseState
+@@ -2184,10 +2178,11 @@ void BrowserView::OnSidebarCollapseState
  
  bool BrowserView::MaybeHandleSidebarCollapseRequest(bool collapse) {
    // helium-fork: choreographs the hidden-sidebar toggle. Returns false to let
@@ -323,7 +327,7 @@ Index: src/chrome/common/pref_names.h
 ===================================================================
 --- src.orig/chrome/common/pref_names.h
 +++ src/chrome/common/pref_names.h
-@@ -639,8 +639,20 @@ inline constexpr char kHeliumVerticalRig
+@@ -642,8 +642,20 @@ inline constexpr char kHeliumVerticalRig
      "helium.browser.vertical_right_aligned";
  
  // A boolean pref set to true if zen mode is enabled.
@@ -348,7 +352,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
-@@ -242,6 +242,11 @@ OmniboxViewViews::OmniboxViewViews(bool
+@@ -241,6 +241,11 @@ OmniboxViewViews::OmniboxViewViews(bool
      pref_change_registrar_.Add(
          prefs::kHeliumMinimalLocationBar,
          base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
@@ -360,7 +364,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
      pref_change_registrar_.Add(
          omnibox::kPreventUrlElisionsInOmnibox,
          base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
-@@ -891,8 +896,13 @@ void OmniboxViewViews::UpdateSteadyState
+@@ -959,8 +964,13 @@ void OmniboxViewViews::UpdateSteadyState
    if (controller()->edit_model()->focus_state() == OMNIBOX_FOCUS_NONE &&
        !controller()->edit_model()->user_input_in_progress() &&
        location_bar_view_ && location_bar_view_->GetProfile()) {

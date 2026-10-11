@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -420,7 +420,9 @@ static_library("ui") {
+@@ -623,7 +623,9 @@ static_library("ui") {
      "helium/helium_tab_switcher_controller.h",
      "helium_workspace/workspace_entry.cc",
      "helium_workspace/workspace_entry.h",
@@ -12,7 +12,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium_workspace/workspace_prefs.cc",
      "helium_workspace/workspace_prefs.h",
      "helium_workspace/workspace_service.cc",
-@@ -5848,6 +5850,8 @@ test("helium_workspace_unittests") {
+@@ -4302,6 +4304,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_entry.h",
      "helium_workspace/workspace_entry_unittest.cc",
      "helium_workspace/workspace_grid_math.h",
@@ -21,7 +21,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium_workspace/workspace_prefs.cc",
      "helium_workspace/workspace_prefs.h",
      "helium_workspace/workspace_service.cc",
-@@ -5856,6 +5860,9 @@ test("helium_workspace_unittests") {
+@@ -4310,6 +4314,9 @@ test("helium_workspace_unittests") {
    ]
    deps = [
      "//base",
@@ -46,7 +46,7 @@ Index: src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/omnibox_pedal_implementations.h"
-@@ -615,6 +619,27 @@ const TabMatcher& ChromeAutocompleteProv
+@@ -623,6 +627,27 @@ const TabMatcher& ChromeAutocompleteProv
    return tab_matcher_;
  }
  
@@ -442,9 +442,9 @@ Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 +++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-@@ -62,6 +62,10 @@
- #include "chrome/browser/ui/browser_window.h"
+@@ -65,6 +65,10 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/hats/hats_service.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_favicon_image.h"
@@ -453,7 +453,7 @@ Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
  #include "chrome/browser/ui/hats/hats_service_factory.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/lens/lens_search_controller.h"
-@@ -738,6 +742,33 @@ void ChromeOmniboxClient::OnResultChange
+@@ -807,6 +811,33 @@ void ChromeOmniboxClient::OnResultChange
  gfx::Image ChromeOmniboxClient::GetFaviconForPageUrl(
      const GURL& page_url,
      FaviconFetchedCallback on_favicon_fetched) {
@@ -616,7 +616,7 @@ Index: src/components/omnibox/browser/autocomplete_controller.cc
      if (!flag_value.contains("bookmarks"))
        config_.provider_types &= ~AutocompleteProvider::TYPE_BOOKMARK;
      if (!flag_value.contains("chrome"))
-@@ -1470,6 +1473,11 @@ void AutocompleteController::InitializeS
+@@ -1471,6 +1474,11 @@ void AutocompleteController::InitializeS
      open_tab_provider_ = open_tab_provider.get();
      providers_.push_back(std::move(open_tab_provider));
    }
@@ -632,7 +632,7 @@ Index: src/components/omnibox/browser/autocomplete_match.cc
 ===================================================================
 --- src.orig/components/omnibox/browser/autocomplete_match.cc
 +++ src/components/omnibox/browser/autocomplete_match.cc
-@@ -124,6 +124,9 @@ int GetDeduplicationProviderPreferenceSc
+@@ -122,6 +122,9 @@ int GetDeduplicationProviderPreferenceSc
            // last access date.
            {AutocompleteProvider::TYPE_DOCUMENT, 2},
            {AutocompleteProvider::TYPE_ENTERPRISE_SEARCH_AGGREGATOR, 2},
@@ -642,7 +642,7 @@ Index: src/components/omnibox/browser/autocomplete_match.cc
            // Prefer bookmark suggestions, as:
            // 1) Their titles may be explicitly set.
            // 2) They may display enhanced information such as the bookmark
-@@ -1721,6 +1724,14 @@ int AutocompleteMatch::GetSortingOrder()
+@@ -1688,6 +1691,14 @@ int AutocompleteMatch::GetSortingOrder()
        return 7;
    }
  
@@ -661,7 +661,7 @@ Index: src/components/omnibox/browser/autocomplete_provider.cc
 ===================================================================
 --- src.orig/components/omnibox/browser/autocomplete_provider.cc
 +++ src/components/omnibox/browser/autocomplete_provider.cc
-@@ -93,6 +93,8 @@ const char* AutocompleteProvider::TypeTo
+@@ -95,6 +95,8 @@ const char* AutocompleteProvider::TypeTo
        return "TabGroup";
      case TYPE_CROSS_DEVICE_TAB:
        return "CrossDeviceTab";
@@ -670,7 +670,7 @@ Index: src/components/omnibox/browser/autocomplete_provider.cc
      default:
        DUMP_WILL_BE_NOTREACHED()
            << "Unhandled AutocompleteProvider::Type " << type;
-@@ -208,6 +210,9 @@ AutocompleteProvider::AsOmniboxEventProv
+@@ -213,6 +215,9 @@ AutocompleteProvider::AsOmniboxEventProv
        return metrics::OmniboxEventProto::TAB_GROUP_PROVIDER;
      case TYPE_CROSS_DEVICE_TAB:
        return metrics::OmniboxEventProto::CROSS_DEVICE_TAB;

@@ -49,7 +49,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
-@@ -57,6 +57,12 @@ class BrowserViewLayoutDelegate {
+@@ -61,6 +61,12 @@ class BrowserViewLayoutDelegate {
    virtual float GetSideChromeRevealRatio() const { return 1.f; }
    virtual bool IsZenModeSideChromePinned() const { return false; }
    virtual bool IsZenModeTopChromePinned() const { return false; }
@@ -66,22 +66,23 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
-@@ -8,12 +8,14 @@
- #include "build/build_config.h"
+@@ -10,6 +10,7 @@
  #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 +#include "chrome/browser/ui/color/chrome_color_id.h"
  #include "chrome/browser/ui/find_bar/find_bar.h"
  #include "chrome/browser/ui/find_bar/find_bar_controller.h"
  #include "chrome/browser/ui/tabs/features.h"
+@@ -18,6 +19,7 @@
  #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
  #include "chrome/browser/ui/views/frame/browser_frame_view.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/frame/top_container_view.h"
  #include "chrome/browser/ui/views/frame/browser_widget.h"
+ #include "chrome/browser/ui/views/frame/glass_frame_service.h"
  #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
- #include "chrome/browser/ui/views/tabs/organizer/organizer_panel_utils.h"
-@@ -21,6 +23,9 @@
+@@ -26,6 +28,9 @@
  #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
  #include "chrome/common/buildflags.h"
  #include "chrome/common/pref_names.h"
@@ -91,7 +92,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
  #include "ui/gfx/geometry/rect.h"
  #include "ui/views/view.h"
  
-@@ -263,6 +268,54 @@ bool BrowserViewLayoutDelegateImpl::IsZe
+@@ -281,6 +286,54 @@ bool BrowserViewLayoutDelegateImpl::IsZe
    return browser_view_->IsZenModeSideChromePinned();
  }
  
@@ -150,7 +151,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h
-@@ -48,6 +48,7 @@ class BrowserViewLayoutDelegateImpl : pu
+@@ -49,6 +49,7 @@ class BrowserViewLayoutDelegateImpl : pu
    float GetSideChromeRevealRatio() const override;
    bool IsZenModeSideChromePinned() const override;
    bool IsZenModeTopChromePinned() const override;
@@ -162,7 +163,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -33,6 +33,7 @@
+@@ -36,6 +36,7 @@
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl.h"
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view.h"
@@ -170,7 +171,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
  #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
  #include "chrome/browser/ui/views/frame/vertical_tab_strip_background_blur_backdrop.h"
-@@ -1818,6 +1819,62 @@ void BrowserViewTabbedLayoutImpl::Config
+@@ -1875,6 +1876,62 @@ void BrowserViewTabbedLayoutImpl::Config
      background->SetVisible(true);
    }
  
@@ -792,7 +793,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -2985,6 +2985,15 @@ void BrowserView::OnActiveTabChanged(con
+@@ -3033,6 +3033,15 @@ void BrowserView::OnActiveTabChanged(con
                                       int reason) {
    DCHECK(new_contents);
    TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");
@@ -812,7 +813,7 @@ Index: src/chrome/browser/ui/views/frame/multi_contents_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/multi_contents_view.cc
 +++ src/chrome/browser/ui/views/frame/multi_contents_view.cc
-@@ -968,7 +968,20 @@ void MultiContentsView::UpdateContentsBo
+@@ -993,7 +993,20 @@ void MultiContentsView::UpdateContentsBo
          use_system_top_left_radius && is_first_view,
          use_system_top_right_radius && is_last_view,
          use_system_bottom_left_radius && is_first_view,
@@ -846,7 +847,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
  #include "content/public/browser/web_contents.h"
  #include "ui/accessibility/accessibility_features.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
-@@ -200,7 +201,9 @@ void ContentsContainerView::UpdateBorder
+@@ -198,7 +199,9 @@ void ContentsContainerView::UpdateBorder
                                                     bool round_top_left,
                                                     bool round_top_right,
                                                     bool round_bottom_left,
@@ -857,18 +858,45 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
    const bool split_changed = is_in_split != is_in_split_;
    const bool rounded_contents_changed =
        should_round_contents != should_round_contents_;
-@@ -208,7 +211,9 @@ void ContentsContainerView::UpdateBorder
+@@ -206,7 +209,12 @@ void ContentsContainerView::UpdateBorder
        round_top_left_window_corner_ != round_top_left ||
        round_top_right_window_corner_ != round_top_right ||
        round_bottom_left_window_corner_ != round_bottom_left ||
 -      round_bottom_right_window_corner_ != round_bottom_right;
 +      round_bottom_right_window_corner_ != round_bottom_right ||
 +      fuse_top_edge_ != fuse_top_edge;
++  const bool outline_suppression_changed =
++      suppress_outline != suppress_outline_;
 +  fuse_top_edge_ = fuse_top_edge;
++  suppress_outline_ = suppress_outline;
    is_in_split_ = is_in_split;
    should_round_contents_ = should_round_contents;
    round_top_left_window_corner_ = round_top_left;
-@@ -240,10 +245,14 @@ void ContentsContainerView::UpdateBorder
+@@ -225,25 +233,36 @@ void ContentsContainerView::UpdateBorder
+       }
+     }
+   } else {
+-    if (split_changed || rounded_contents_changed) {
++    if (split_changed || rounded_contents_changed ||
++        outline_suppression_changed) {
+       if (is_in_split) {
+         SetBorder(views::CreateEmptyBorder(gfx::Insets(
+             kSplitViewContentPadding + ContentsContainerOutline::kThickness)));
++      } else if (suppress_outline) {
++        // helium-fork: no stroke to make room for -- the page meets the card's
++        // edge, as before Chromium 154 reserved one. Kept, the empty inset
++        // showed the container as a 1 DIP grey ring inside the card.
++        SetBorder(nullptr);
+       } else {
+         // Reserve the stroke inside the container's existing outer margin.
+         SetBorder(views::CreateEmptyBorder(
+             gfx::Insets(ContentsContainerOutline::kThickness)));
+       }
+     }
+-    if (split_changed || rounded_contents_changed || corner_state_changed) {
++    if (split_changed || rounded_contents_changed || corner_state_changed ||
++        outline_suppression_changed) {
+       UpdateBorderRoundedCorners();
      }
  
      if (is_in_split) {
@@ -884,7 +912,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
        container_outline_->SetVisible(false);
      }
      if (capture_contents_border_view_) {
-@@ -343,10 +352,20 @@ void ContentsContainerView::UpdateBorder
+@@ -343,16 +362,28 @@ void ContentsContainerView::UpdateBorder
        round_bottom_left_window_corner_ ? frame_radius : generic_radius;
    const int lower_right_radius =
        round_bottom_right_window_corner_ ? frame_radius : generic_radius;
@@ -907,7 +935,16 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
  
    const gfx::RoundedCornersF container_rounded_corners(
        upper_left_radius, upper_right_radius, lower_right_radius,
-@@ -487,6 +506,30 @@ void ContentsContainerView::SetTargetCon
+       lower_left_radius);
+   const int inner_padding = is_in_split_ ? kSplitViewContentPadding
+-                                         : ContentsContainerOutline::kThickness;
++                            : suppress_outline_
++                                ? 0
++                                : ContentsContainerOutline::kThickness;
+   const gfx::RoundedCornersF inner_rounded_corners(
+       upper_left_radius - inner_padding, upper_right_radius - inner_padding,
+       lower_right_radius - inner_padding, lower_left_radius - inner_padding);
+@@ -488,6 +519,30 @@ void ContentsContainerView::SetTargetCon
  
    target_content_bounds_ = target_content_bounds;
    InvalidateLayout(/*avoid_propagate_during_layout=*/true);
@@ -963,7 +1000,15 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.h
  
    void ShowCaptureContentsBorder();
    void HideCaptureContentsBorder();
-@@ -174,6 +186,10 @@ class ContentsContainerView : public vie
+@@ -169,11 +181,18 @@ class ContentsContainerView : public vie
+       const views::SizeBounds& size_bounds) const override;
+ 
+   bool is_in_split_ = false;
++  // helium-fork: the Arc card draws no outline (UpdateBorderAndOverlay), so
++  // neither the stroke's inset nor its inner radius step is reserved.
++  bool suppress_outline_ = false;
+   bool should_round_contents_ = false;
+   bool round_top_left_window_corner_ = false;
    bool round_top_right_window_corner_ = false;
    bool round_bottom_left_window_corner_ = false;
    bool round_bottom_right_window_corner_ = false;

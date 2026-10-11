@@ -32,15 +32,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -400,6 +400,7 @@ source_set("view_ids") {
+@@ -605,6 +605,7 @@ source_set("tab_dialogs") {
+ # circular includes from each other.
  static_library("ui") {
    sources = [
-     "crypto_module_password_dialog.h",
 +    "helium/arc_address_bar_mode.h",
      "helium/arc_band_colors.h",
      "helium/arc_band_tint_store.cc",
      "helium/arc_band_tint_store.h",
-@@ -5794,6 +5795,8 @@ source_set("storage_pressure_bubble") {
+@@ -4248,6 +4249,8 @@ if (is_mac) {
  # tabs, and a window is only ever compared by pointer.
  test("helium_workspace_unittests") {
    sources = [
@@ -53,7 +53,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -1848,7 +1848,10 @@ void BrowserCommandController::InitComma
+@@ -1867,7 +1867,10 @@ void BrowserCommandController::InitComma
                                           true);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_DOCKED, true);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_HIDDEN, true);
@@ -64,7 +64,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 +  command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_AUTO, false);
  
    // Window management commands
-   command_updater_->UpdateCommandEnabled(IDC_FORCE_PASTE, true);
+   command_updater_->UpdateCommandEnabled(IDC_CLOSE_WINDOW, true);
 Index: src/chrome/browser/ui/helium/arc_address_bar_mode.h
 ===================================================================
 --- /dev/null
@@ -140,15 +140,11 @@ Index: src/chrome/browser/ui/helium/helium_layout_state_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/helium_layout_state_controller.cc
 +++ src/chrome/browser/ui/helium/helium_layout_state_controller.cc
-@@ -4,13 +4,26 @@
+@@ -8,11 +8,22 @@
  
- #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
- 
-+#include <utility>
-+
+ #include "base/functional/bind.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium/arc_address_bar_mode.h"
- #include "chrome/browser/ui/tabs/features.h"
  #include "chrome/common/pref_names.h"
  #include "components/prefs/pref_service.h"
  
@@ -167,7 +163,7 @@ Index: src/chrome/browser/ui/helium/helium_layout_state_controller.cc
  HeliumLayoutStateController::HeliumLayoutStateController(
      BrowserWindowInterface* browser_window,
      PrefService* pref_service)
-@@ -58,12 +71,11 @@ bool HeliumLayoutStateController::IsZenM
+@@ -60,12 +71,11 @@ bool HeliumLayoutStateController::IsZenM
  }
  
  HeliumAddressBarMode HeliumLayoutStateController::GetAddressBarMode() const {
@@ -218,7 +214,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc
 +++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc
-@@ -102,16 +102,22 @@ void ApplyArcShellLayoutPrefs(PrefServic
+@@ -73,16 +73,22 @@ void ApplyArcShellLayoutPrefs(PrefServic
                                std::to_underlying(HeliumLayoutType::kVertical));
    }
  
@@ -252,7 +248,7 @@ Index: src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/system_menu_model_builder.cc
 +++ src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
-@@ -161,19 +161,19 @@ void SystemMenuModelBuilder::BuildSystem
+@@ -171,19 +171,19 @@ void SystemMenuModelBuilder::BuildSystem
      model->AddSeparator(ui::NORMAL_SEPARATOR);
  
      // helium-fork: the layout submenu offers the Arc shell's real layout

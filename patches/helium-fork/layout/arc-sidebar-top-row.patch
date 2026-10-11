@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -218,6 +218,7 @@
+@@ -224,6 +224,7 @@
  #include "chrome/browser/ui/views/tabs/tab.h"
  #include "chrome/browser/ui/views/tabs/tab/tab_accessibility.h"
  #include "chrome/browser/ui/views/tabs/tab_strip.h"
@@ -10,7 +10,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h"
  #include "chrome/browser/ui/views/theme_copying_widget.h"
  #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
-@@ -1764,6 +1765,10 @@ void BrowserView::OnVerticalTabStripMode
+@@ -1801,6 +1802,10 @@ void BrowserView::OnVerticalTabStripMode
      horizontal_tab_strip_region_view_->InitializeTabStrip();
    }
  
@@ -21,8 +21,8 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // helium-fork: the hidden sidebar mode's hover monitor follows the
    // vertical-vs-horizontal switch.
    UpdateZenModeEventMonitor();
-@@ -1791,6 +1796,10 @@ void BrowserView::OnToolbarTabStripState
-     }
+@@ -1829,6 +1834,10 @@ void BrowserView::OnToolbarTabStripState
+     horizontal_tab_strip_region_view_->DestroyLayer();
    }
  
 +  // helium-fork: keep the collapse button's home in sync on the
@@ -32,7 +32,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    if (toolbar_) {
      toolbar_->UpdateToolbarLayout();
    }
-@@ -2109,6 +2118,46 @@ bool BrowserView::IsSidebarHiddenModeAct
+@@ -2152,6 +2161,46 @@ bool BrowserView::IsSidebarHiddenModeAct
                             tabs::VerticalTabStripCollapseState::kExpanded;
  }
  
@@ -79,7 +79,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::OnSidebarCollapseStateChanged(
      tabs::VerticalTabStripCollapseState state) {
    // helium-fork: keep the reveal ratio in step with the collapse state so the
-@@ -5962,6 +6011,9 @@ void BrowserView::AddedToWidget() {
+@@ -6054,6 +6103,9 @@ void BrowserView::AddedToWidget() {
      }
    }
  
@@ -93,7 +93,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -962,6 +962,10 @@ class BrowserView : public BrowserWindow
+@@ -964,6 +964,10 @@ class BrowserView : public BrowserWindow
    // helium-fork: true when the vertical tab strip is collapsed outside zen
    // mode -- the fully-hidden floating sidebar state (Arc behavior).
    bool IsSidebarHiddenModeActive() const;
@@ -104,7 +104,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    // helium-fork: keeps the zen side-chrome reveal ratio in step with the
    // collapse state while the hidden sidebar mode is in charge of it.
    void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
-@@ -1259,6 +1263,11 @@ class BrowserView : public BrowserWindow
+@@ -1265,6 +1269,11 @@ class BrowserView : public BrowserWindow
    // view tree. This is used to correctly reparent the tabstrip when exiting
    // fullscreen mode. See BrowserView::ReparentTopContainerForEndOfImmersive.
    std::optional<size_t> horizontal_tab_strip_region_insertion_index_;
@@ -120,7 +120,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -1502,6 +1502,42 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1537,6 +1537,42 @@ BrowserViewTabbedLayoutImpl::CalculatePr
          has_leading_exclusion);
      views().vertical_tab_strip_region_view->SetZenModeFloatingStyleForLayout(
          zen.floating_vertical_tab_strip);
@@ -162,20 +162,20 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 +    }
    }
  
-   return layout;
+   if (IsParentedTo(views().side_panel_content_transition_scrim,
 Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -46,6 +46,7 @@
+@@ -48,6 +48,7 @@
  #include "chrome/browser/ui/views/tabs/common/tab_view.h"
  #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
  #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
 +#include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
- #include "chrome/grit/generated_resources.h"
-@@ -79,6 +80,8 @@ constexpr int kCollapsedResizeAreaWidth
+@@ -82,6 +83,8 @@ constexpr int kCollapsedResizeAreaWidth
  constexpr int kKeyboardResizeWidth = 50;
  constexpr int kSnapDistance = 15;
  constexpr int kBottomContainerGap = 2;
@@ -184,7 +184,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  constexpr int kDefaultWidthSnapDistance = 6;
  
  // Shadow is used in expand-on-hover mode. Shadow radius and opacity are dynamic
-@@ -120,6 +123,15 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -123,6 +126,15 @@ VerticalTabStripRegionView::VerticalTabS
                                     views::MinimumFlexSizeRule::kPreferred,
                                     views::MaximumFlexSizeRule::kPreferred));
  
@@ -200,7 +200,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    bottom_button_container_ =
        AddChildView(std::make_unique<VerticalTabStripBottomContainer>(
            state_controller_, root_action_item, browser_view->browser(),
-@@ -261,6 +273,15 @@ bool VerticalTabStripRegionView::IsPosit
+@@ -269,6 +281,15 @@ bool VerticalTabStripRegionView::IsPosit
      return bottom_button_container_->IsPositionInWindowCaption(point_in_child);
    }
  
@@ -216,7 +216,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // For any of the other children, absorb the click as non window caption.
    for (views::View* child : children()) {
      if (!child->GetVisible()) {
-@@ -287,6 +308,38 @@ void VerticalTabStripRegionView::SetHasL
+@@ -295,6 +316,38 @@ void VerticalTabStripRegionView::SetHasL
    UpdateInteriorMargin();
  }
  
@@ -255,7 +255,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  void VerticalTabStripRegionView::SetZenModeFloatingStyleForLayout(
      bool floating) {
    if (zen_mode_floating_style_ == floating) {
-@@ -313,14 +366,13 @@ void VerticalTabStripRegionView::SetZenM
+@@ -321,14 +374,13 @@ void VerticalTabStripRegionView::SetZenM
      corners[CornerOrientation::kTopTrailing] = rounded_corner;
      corners[CornerOrientation::kBottomLeading] = rounded_corner;
      corners[CornerOrientation::kBottomTrailing] = rounded_corner;
@@ -275,7 +275,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    background->SetCorners(corners);
    background->SetOutline(outline);
    background->SetPaintWithNativeFrameMaterials(floating);
-@@ -767,22 +819,17 @@ void VerticalTabStripRegionView::OnTabSt
+@@ -772,22 +824,17 @@ void VerticalTabStripRegionView::OnTabSt
  void VerticalTabStripRegionView::UpdateInteriorMargin() {
    const int padding = GetLayoutConstant(
        LayoutConstant::kVerticalTabStripUncollapsedVerticalPadding);
@@ -319,8 +319,8 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +class ArcSidebarTopContainer;
  class BrowserView;
  class VerticalTabStripBottomContainer;
- class ShadowFrameView;
-@@ -82,9 +83,21 @@ class VerticalTabStripRegionView final
+ class VerticalTabStripFocusSwipeController;
+@@ -83,9 +84,21 @@ class VerticalTabStripRegionView final
      return bottom_button_container_;
    }
  
@@ -342,7 +342,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    void SetZenModeFloatingStyleForLayout(bool floating);
  
    void UpdateInteriorMargin();
-@@ -235,6 +248,7 @@ class VerticalTabStripRegionView final
+@@ -238,6 +251,7 @@ class VerticalTabStripRegionView final
    bool has_leading_exclusion_ = false;
    bool zen_mode_floating_style_ = false;
  
@@ -362,7 +362,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/BUILD.gn
      "top_container_button.h",
      "vertical_new_tab_button.h",
      "vertical_tab_strip_bottom_container.h",
-@@ -36,6 +37,7 @@ source_set("vertical") {
+@@ -37,6 +38,7 @@ source_set("vertical") {
  
  source_set("impl") {
    sources = [
@@ -511,10 +511,10 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -1883,16 +1883,21 @@ void ToolbarView::LayoutCommon() {
+@@ -2034,16 +2034,21 @@ void ToolbarView::LayoutCommon() {
        browser_->GetWindow() && (browser_->GetWindow()->IsMaximized() ||
                                  browser_->GetWindow()->IsFullscreen());
-   const int margin = extend_buttons_to_edge ? interior_margin.left() : 0;
+ 
 -  const bool collapse_button_on_trailing_edge =
 +  // helium-fork: while the button lives in the sidebar top row it takes no
 +  // part in this toolbar's edge margins.
@@ -533,19 +533,10 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  
 -  if (vertical_tabs_collapse_button_) {
 +  if (collapse_button_in_toolbar) {
+     const gfx::Insets button_margin =
+         GetLayoutInsets(LayoutInset::TOOLBAR_INTERIOR_MARGIN);
      vertical_tabs_collapse_button_->SetLeadingMargin(
-         collapse_button_on_leading_edge ? margin : 0);
-   }
-@@ -1907,7 +1912,7 @@ void ToolbarView::LayoutCommon() {
-       extend_buttons_to_edge && !collapse_button_on_trailing_edge
-           ? interior_margin.right()
-           : 0);
--  if (vertical_tabs_collapse_button_) {
-+  if (collapse_button_in_toolbar) {
-     vertical_tabs_collapse_button_->SetTrailingMargin(
-         extend_buttons_to_edge && collapse_button_on_trailing_edge
-             ? interior_margin.right()
-@@ -1971,7 +1976,10 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -2114,7 +2119,10 @@ void ToolbarView::UpdateToolbarLayout()
    UpdateVerticalTabsCollapseButton();
    UpdateDynamicNewTabButton();
  
@@ -561,7 +552,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -194,6 +194,11 @@ class ToolbarView : public views::Access
+@@ -198,6 +198,11 @@ class ToolbarView : public views::Access
      return extensions_container_;
    }
    ToolbarButton* forward_button() const { return forward_; }
