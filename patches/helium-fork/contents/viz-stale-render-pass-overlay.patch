@@ -1,0 +1,37 @@
+Index: src/components/viz/service/display/skia_renderer.cc
+===================================================================
+--- src.orig/components/viz/service/display/skia_renderer.cc
++++ src/components/viz/service/display/skia_renderer.cc
+@@ -1527,6 +1527,32 @@
+                                 : skgpu::Mipmapped::kNo,
+         backing.scanout_dcomp_surface, RenderPassBackingColorSpace(backing),
+         /*is_overlay=*/backing.is_scanout, backing.mailbox);
++#if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_OZONE) || BUILDFLAG(IS_WIN)
++    // helium-fork r1017: the pass is being redrawn, so every render pass
++    // overlay backing made from its earlier content is out of date.
++    // CanSkipRenderPassOverlay() only asks whether the pass was skipped in
++    // *this* frame; when the frames in between redrew the pass without
++    // promoting it (macOS: frames that fell back from CoreAnimation layers to
++    // the root buffer), the next skipped frame was handed the overlay made
++    // before them, and the old content stayed on screen until that backing
++    // was released -- a band showing the state it had while the Cmd+L box
++    // was up, field gone and trailing icons shifted (user recordings
++    // 2026-10-09 05:27, 2026-10-10 05:14 / 06:46; gone with either
++    // CoreAnimationRenderer or AllowUndamagedNonrootRenderPassToSkip off).
++    // Dropping the association keeps the backings and their in-flight refs
++    // (tracked by mailbox) and only stops their reuse as this pass's image;
++    // GetOrCreateRenderPassOverlayBacking() still recycles the memory.
++    for (auto& overlay : in_flight_render_pass_overlay_backings_) {
++      if (overlay.render_pass_id == render_pass->id) {
++        overlay.render_pass_id = AggregatedRenderPassId();
++      }
++    }
++    for (auto& overlay : available_render_pass_overlay_backings_) {
++      if (overlay.render_pass_id == render_pass->id) {
++        overlay.render_pass_id = AggregatedRenderPassId();
++      }
++    }
++#endif  // BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_OZONE) || BUILDFLAG(IS_WIN)
+   }
+ 
+   if (is_root && debug_settings_->show_overdraw_feedback) {

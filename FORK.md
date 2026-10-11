@@ -21,11 +21,14 @@ Today section, real folders). Not affiliated with the upstream project.
 - `patches/series`：末段的 helium-fork 行。
 - `resources/favicons/favicon_ntp_{16,32}.png`、`AGENTS.md`、本文件、`fork_sync.sh`。
 - helium-macos 侧：gitlink、`.gitmodules`（URL→我们的 fork）、`flags.macos.gn`（PCH 关闭 4 行）、
-  `patches/helium/macos/helium-immersive-fullscreen.patch` 里的 6 个 hunk（2026-10-04 起，152→154 同步时改）。
+  `patches/helium/macos/helium-immersive-fullscreen.patch` 里的 7 个 hunk（2026-10-04 起，152→154 同步时改 6 个；
+  2026-10-10 第四十一次再改 1 个）。
   这个平台补丁排在我们的补丁段之后，会碰到我们改过的 Zen 判断、BrowserView 成员区和 mac 源列表，
-  所以其中 5 个 hunk 改成按我们的代码打；第 6 个是全屏过渡结束、解除暂停时，对隐藏侧栏补一次按光标判断。
+  所以其中 5 个 hunk 改成按我们的代码打；第 6 个是全屏过渡结束、解除暂停时，对隐藏侧栏补一次按光标判断；
+  第 7 个（`FullscreenStateChanging` 里插悬停暂停的那段）只改首行上下文：`return;` → `EndArcComposerEdit();`——
+  layout/arc-visual-r1005-r1017 在同一位置（`IsClosed()` 早退之后）先结束带子的 ⌘L 编辑。
   上游再改这个补丁时 merge 会在这里冲突：取上游新版，再照 `tasks/evidence/sync154/port-log.md`
-  的「macOS 块 #448」重做这 6 处。
+  的「macOS 块 #448」重做前 6 处、照 `tools/fold_backup_r10/scripts/step1b_adapt_immersive.py` 重做第 7 处。
 
 ## 红线
 
