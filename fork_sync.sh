@@ -10,10 +10,10 @@
 set -u
 
 # ── 每月参数区（改这里） ────────────────────────────────────────────────
-TARGET_TAG="0.18.3"            # 本仓要合的上游 release tag
-MACOS_SHA="95911fb3741773327e60b054cc6463b58ed203aa"  # macos 仓要合的上游 commit（无 tag 时钉 SHA）
+TARGET_TAG="0.20.2"            # 本仓要合的上游 release tag
+MACOS_SHA="2db58634c5490cea7ce85260367cec2dabfa0e01"  # macos 仓要合的上游 commit（无 tag 时钉 SHA）
 ARCHIVE_REF="archive/pre-${TARGET_TAG}"               # 备份 ref 名
-EXPECTED_FORK=81               # 我们的补丁数（series 末段）
+EXPECTED_FORK=85               # 我们的补丁数（series 末段）
 # EXPECTED_MERGED 不硬编码：stage2 从 series.merged 现算并打印，人工核对。
 # ───────────────────────────────────────────────────────────────────────
 
