@@ -173,7 +173,7 @@
        fetch->oauth2_attempt_count++;
 --- a/extensions/common/extension_urls.cc
 +++ b/extensions/common/extension_urls.cc
-@@ -83,8 +83,6 @@ GURL AppendUtmSource(const GURL& url, st
+@@ -86,8 +86,6 @@ GURL AppendUtmSource(const GURL& url, st
  
  GURL GetWebstoreExtensionsCategoryURL() {
    GURL base_url = GetNewWebstoreLaunchURL();

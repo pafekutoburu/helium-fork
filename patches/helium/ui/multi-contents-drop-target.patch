@@ -280,7 +280,7 @@
 --- a/chrome/browser/ui/views/frame/multi_contents_view.cc
 +++ b/chrome/browser/ui/views/frame/multi_contents_view.cc
 @@ -646,19 +646,47 @@ gfx::Rect MultiContentsView::CalculateDr
-     std::vector<views::ChildLayout>& child_layouts) const {
+     views::ProposedLayout::ChildLayoutList& child_layouts) const {
    CHECK(IsDragAndDropEnabled());
    if (!drop_target_view_->GetVisible()) {
 +    UpdateContentsBorderAndOverlay();
@@ -351,7 +351,7 @@
    child_layouts.emplace_back(drop_target_view_.get(), true, drop_target_bounds);
    return remaining_space;
  }
-@@ -807,23 +848,35 @@ bool MultiContentsView::ShouldUseRounded
+@@ -807,7 +848,7 @@ bool MultiContentsView::ShouldUseRounded
           !is_fullscreen;
  }
  
@@ -360,6 +360,8 @@
    const views::Widget* widget = browser_view_->GetWidget();
    const bool is_fullscreen = widget && widget->IsFullscreen();
    const bool is_in_split = IsInSplitView();
+@@ -815,17 +856,29 @@ void MultiContentsView::UpdateContentsBo
+       GetSplitLayout() == split_tabs::SplitTabLayout::kSideBySide;
    const bool should_round_single_contents =
        !is_in_split && ShouldUseRoundedFrame();
 -  const bool should_show_leading =
@@ -405,7 +407,7 @@
                                        double total_size) const;
 --- a/chrome/browser/ui/ui_features.cc
 +++ b/chrome/browser/ui/ui_features.cc
-@@ -204,19 +204,19 @@ BASE_FEATURE_PARAM(base::TimeDelta,
+@@ -234,19 +234,19 @@ BASE_FEATURE_PARAM(base::TimeDelta,
                     kShowDropTargetForTabDelay,
                     &kSplitViewTabDraggingUpdates,
                     "show_drop_target_for_tab_delay",

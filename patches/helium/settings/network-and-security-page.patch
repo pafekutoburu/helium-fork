@@ -1,6 +1,6 @@
 --- a/chrome/app/settings_strings.grdp
 +++ b/chrome/app/settings_strings.grdp
-@@ -1864,6 +1864,33 @@
+@@ -1895,6 +1895,33 @@
      <message name="IDS_SETTINGS_UNIVERSAL_OPT_OUT_SUB_LABEL" desc="Subtitle of a setting. It appears below the title: ‘Send an opt-out request to sites regarding use of your data’. Users choose whether they want to send a request to sites about how to treat their user data. This string explains that sites may not respond to the user’s request even when this toggle is on; and, even when they do respond, sites may handle opt-out requests differently based on regional laws. On desktop computers, this string appears in the ‘Site requests’ section of the ‘Third-party cookies and site data’ page. On mobile devices, this string appears on its own subpage. The tone should be informative.">
        The sites you visit, including Google, are responsible for determining how they respond to this request. Depending on the laws in your region, sites may respond by limiting the sale and sharing of your data or its use for personalized ads.
      </message>
@@ -34,7 +34,7 @@
      <message name="IDS_SETTINGS_PERMISSIONS_DESCRIPTION" desc="Description of the controls available on the permissions and site content settings page">
        Controls what information sites can use and show (location, camera, pop-ups, and more)
      </message>
-@@ -2037,13 +2064,13 @@
+@@ -2068,13 +2095,13 @@
        Don't see any warnings before going to insecure sites
      </message>
      <message name="IDS_SETTINGS_HTTPS_FIRST_MODE_ENABLED_STRICT_LABEL" desc="Label for radio button to enable the stricter form of HTTPS-First Mode">
@@ -52,7 +52,7 @@
        Doesn’t warn you for private sites, such as your company’s intranet
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -2535,14 +2535,20 @@ void AddPrivacyStrings(content::WebUIDat
+@@ -2608,14 +2608,20 @@ void AddPrivacyStrings(content::WebUIDat
        {"newBadgeLabel", IDS_NEW_BADGE},
        {"privacyPageTitle", IDS_SETTINGS_PRIVACY},
        {"privacyPageMore", IDS_SETTINGS_PRIVACY_MORE},
@@ -95,7 +95,7 @@
      #defaultHeader {
        padding-top: 0;
        padding-bottom: 6px;
-@@ -60,9 +54,6 @@
+@@ -79,9 +73,6 @@
        search-label="$i18n{siteSettingsAllSitesFilter}"
        search-icon="settings20:filter-list"
        search-term="{{searchTerm}}" route-path$="[[routePath]]">
@@ -105,9 +105,9 @@
      <div id="explanationText" class="secondary">
        $i18n{thirdPartyCookiesPageDescription}
      </div>
-@@ -137,26 +128,6 @@
-         </settings-collapse-radio-button>
-       </settings-radio-group>
+@@ -207,28 +198,6 @@
+         </settings-radio-group>
+       </template>
      </div>
 -    <template is="dom-if" if="[[showUniversalOptOutSettings_]]">
 -      <h2 id="siteRequestsHeader">
@@ -119,14 +119,16 @@
 -        $i18n{trackingProtectionAdvancedLabel}
 -      </h2>
 -    </template>
--    <settings-do-not-track-toggle id="doNotTrack" prefs="{{prefs}}">
+-    <settings-do-not-track-toggle id="doNotTrack">
 -    </settings-do-not-track-toggle>
 -    <template is="dom-if" if="[[showUniversalOptOutSettings_]]" restamp>
 -      <settings-toggle-button id="universalOptOutToggle" class="toggle"
 -          label="$i18n{universalOptOutLabel}"
 -          pref="{{prefs.universal_optout.enabled}}"
+-          on-settings-boolean-control-change="onUniversalOptOutToggleChange_"
 -          icon="settings20:front-hand"
--          sub-label="$i18n{universalOptOutSubLabel}">
+-          sub-label="$i18n{universalOptOutSubLabel}"
+-          learn-more-url="$i18n{universalOptOutLearnMoreURL}">
 -      </settings-toggle-button>
 -    </template>
      <cr-link-row id="siteDataTrigger" class="hr"
@@ -134,7 +136,7 @@
          role-description="$i18n{subpageArrowRoleDescription}">
 --- a/chrome/browser/resources/settings/privacy_page/cookies_page.ts
 +++ b/chrome/browser/resources/settings/privacy_page/cookies_page.ts
-@@ -21,7 +21,6 @@ import '../privacy_icons.html.js';
+@@ -22,7 +22,6 @@ import '../privacy_icons.html.js';
  import '../settings_page/settings_subpage.js';
  import '../settings_shared.css.js';
  import '../site_settings/site_list.js';
@@ -142,55 +144,60 @@
  
  import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
  import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
---- a/chrome/browser/resources/settings/privacy_page/do_not_track_toggle.html
-+++ b/chrome/browser/resources/settings/privacy_page/do_not_track_toggle.html
-@@ -1,39 +1,7 @@
--    <style include="settings-shared">
--      .toggle {
--        padding: 0 var(--cr-section-padding);
--        margin-bottom: var(--cr-section-vertical-padding);
--      }
--    </style>
--    <settings-toggle-button id="toggle" class="toggle"
-+    <style include="settings-shared"></style>
-+    <settings-toggle-button id="toggle" class="hr"
-       label="$i18n{doNotTrack}"
-       pref="{{prefs.enable_do_not_track}}"
--      on-settings-boolean-control-change="onToggleChange_"
--      sub-label="[[doNotTrackSublabel_]]"
--      icon="settings:forward"
--      no-set-pref>
-+      on-change="onToggleChange_"
-+      sub-label="$i18n{doNotTrackDescription}">
-     </settings-toggle-button>
--    <template is="dom-if" if="[[showDialog_]]"
--        on-dom-change="onDomChange_" restamp>
--      <cr-dialog id="confirmDialog"
--          close-text="$i18n{close}" on-cancel="onDialogCancel_"
--          on-close="onDialogClosed_">
--        <div slot="title">$i18n{doNotTrackDialogTitle}</div>
--        <div slot="body">$i18n{doNotTrackDialogMessage}
--          <a href="$i18nRaw{doNotTrackLearnMoreURL}" target="_blank"
--              aria-description="$i18n{opensInNewTab}"
--              aria-label="$i18n{doNotTrackDialogLearnMoreA11yLabel}">
--            $i18n{learnMore}
--          </a>
--        </div>
--        <div slot="button-container">
--          <cr-button class="cancel-button"
--              on-click="onDialogCancel_">
--            $i18n{cancel}
--          </cr-button>
--          <cr-button class="action-button"
--              on-click="onDialogConfirm_">
--            $i18n{confirm}
--          </cr-button>
--        </div>
--      </cr-dialog>
--    </template>
+--- a/chrome/browser/resources/settings/privacy_page/do_not_track_toggle.css
++++ b/chrome/browser/resources/settings/privacy_page/do_not_track_toggle.css
+@@ -7,8 +7,3 @@
+  * #import=../settings_shared_lit.css.js
+  * #include=settings-shared-lit
+  * #css_wrapper_metadata_end */
+-
+-.toggle {
+-  padding: 0 var(--cr-section-padding);
+-  margin-bottom: var(--cr-section-vertical-padding);
+-}
+--- a/chrome/browser/resources/settings/privacy_page/do_not_track_toggle.html.ts
++++ b/chrome/browser/resources/settings/privacy_page/do_not_track_toggle.html.ts
+@@ -8,34 +8,11 @@ import type {SettingsDoNotTrackToggleEle
+ 
+ export function getHtml(this: SettingsDoNotTrackToggleElement) {
+   return html`<!--_html_template_start_-->
+-<settings-toggle-button id="toggle" class="toggle"
++<settings-toggle-button id="toggle" class="hr"
+     label="$i18n{doNotTrack}"
+     pref-key="enable_do_not_track"
+-    @settings-boolean-control-change="${this.onSettingsBooleanControlChange_}"
+-    sub-label="${this.doNotTrackSublabel_}"
+-    icon="settings:forward"
+-    no-set-pref>
++    @change="${this.onToggleChange_}"
++    sub-label="$i18n{doNotTrackDescription}">
+ </settings-toggle-button>
+-${this.showDialog_ ? html`
+-  <cr-dialog id="confirmDialog"
+-      close-text="$i18n{close}" @cancel="${this.onDialogCancel_}"
+-      @close="${this.onDialogClose_}" show-on-attach>
+-    <div slot="title">$i18n{doNotTrackDialogTitle}</div>
+-    <div slot="body">$i18n{doNotTrackDialogMessage}
+-      <a href="$i18nRaw{doNotTrackLearnMoreURL}" target="_blank"
+-          aria-description="$i18n{opensInNewTab}"
+-          aria-label="$i18n{doNotTrackDialogLearnMoreA11yLabel}">
+-        $i18n{learnMore}
+-      </a>
+-    </div>
+-    <div slot="button-container">
+-      <cr-button class="cancel-button" @click="${this.onCancelClick_}">
+-        $i18n{cancel}
+-      </cr-button>
+-      <cr-button class="action-button" @click="${this.onConfirmClick_}">
+-        $i18n{confirm}
+-      </cr-button>
+-    </div>
+-  </cr-dialog>` : ''}
+ <!--_html_template_end_-->`;
+ }
 --- a/chrome/browser/resources/settings/privacy_page/do_not_track_toggle.ts
 +++ b/chrome/browser/resources/settings/privacy_page/do_not_track_toggle.ts
-@@ -2,32 +2,16 @@
+@@ -2,33 +2,16 @@
  // Use of this source code is governed by a BSD-style license that can be
  // found in the LICENSE file.
  
@@ -198,17 +205,18 @@
 -import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
  import '../controls/settings_toggle_button.js';
 -import '../icons.html.js';
- import '../settings_shared.css.js';
  
--import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
+-import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
 -import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
- import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+-import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
  
 -import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 -import {loadTimeData} from '../i18n_setup.js';
  import {MetricsBrowserProxyImpl, PrivacyElementInteractions} from '../metrics_browser_proxy.js';
  
- import {getTemplate} from './do_not_track_toggle.html.js';
+ import {getCss} from './do_not_track_toggle.css.js';
+ import {getHtml} from './do_not_track_toggle.html.js';
  
 -export interface SettingsDoNotTrackToggleElement {
 -  $: {
@@ -216,54 +224,47 @@
 -  };
 -}
 -
--const SettingsDoNotTrackToggleElementBase = I18nMixin(PolymerElement);
+-const SettingsDoNotTrackToggleElementBase = I18nMixinLit(CrLitElement);
 -
 -export class SettingsDoNotTrackToggleElement extends
 -    SettingsDoNotTrackToggleElementBase {
-+export class SettingsDoNotTrackToggleElement extends PolymerElement {
++export class SettingsDoNotTrackToggleElement extends CrLitElement {
    static get is() {
      return 'settings-do-not-track-toggle';
    }
-@@ -45,89 +29,14 @@ export class SettingsDoNotTrackToggleEle
-         type: Object,
-         notify: true,
-       },
--
--      showDialog_: {
--        type: Boolean,
--        value: false,
--      },
--
--      showUniversalOptOutSettings_: {
--        type: Boolean,
--        value: () => loadTimeData.getBoolean('showUniversalOptOutSettings'),
--      },
--
--      doNotTrackSublabel_: {
--        type: String,
--        computed:
--            'computeDoNotTrackToggleSubLabel_(showUniversalOptOutSettings_)',
--      },
-     };
+@@ -41,83 +24,9 @@ export class SettingsDoNotTrackToggleEle
+     return getHtml.bind(this)();
    }
  
-   declare prefs: {enable_do_not_track: chrome.settingsPrivate.PrefObject};
--  declare private showDialog_: boolean;
--  declare private showUniversalOptOutSettings_: boolean;
--  declare private doNotTrackSublabel_: string;
+-  static override get properties() {
+-    return {
+-      showDialog_: {type: Boolean},
+-      showUniversalOptOutSettings_: {type: Boolean},
+-      doNotTrackSublabel_: {type: String},
+-    };
+-  }
 -
--  private onDomChange_() {
--    if (this.showDialog_) {
--      this.shadowRoot!.querySelector('cr-dialog')!.showModal();
+-  protected accessor showDialog_: boolean = false;
+-  protected accessor showUniversalOptOutSettings_: boolean =
+-      loadTimeData.getBoolean('showUniversalOptOutSettings');
+-  protected accessor doNotTrackSublabel_: string = '';
+-
+-  override willUpdate(changedProperties: PropertyValues<this>) {
+-    super.willUpdate(changedProperties);
+-
+-    const changedPrivateProperties =
+-        changedProperties as Map<PropertyKey, unknown>;
+-    if (changedPrivateProperties.has('showUniversalOptOutSettings_')) {
+-      this.doNotTrackSublabel_ = this.computeDoNotTrackToggleSubLabel_();
 -    }
 -  }
- 
+-
 -  /**
 -   * Handles the change event for the do-not-track toggle. Shows a
 -   * confirmation dialog when enabling the setting.
 -   */
--  private onToggleChange_(event: Event) {
-+  private onToggleChange_() {
+-  protected onSettingsBooleanControlChange_(event: Event) {
++  protected onToggleChange_() {
      MetricsBrowserProxyImpl.getInstance().recordSettingsPageHistogram(
          PrivacyElementInteractions.DO_NOT_TRACK);
 -    const target = event.target as SettingsToggleButtonElement;
@@ -277,29 +278,35 @@
 -  }
 -
 -  private closeDialog_() {
--    this.shadowRoot!.querySelector('cr-dialog')!.close();
+-    this.shadowRoot.querySelector('cr-dialog')!.close();
 -    this.showDialog_ = false;
 -  }
 -
--  private onDialogClosed_() {
--    focusWithoutInk(this.toggle_);
+-  protected onDialogClose_() {
+-    focusWithoutInk(this.$.toggle);
 -  }
 -
 -  /**
 -   * Handles the shared proxy confirmation dialog 'Confirm' button.
 -   */
--  private onDialogConfirm_() {
--    this.toggle_.sendPrefChange();
+-  protected onConfirmClick_() {
+-    this.$.toggle.sendPrefChange();
 -    this.closeDialog_();
 -  }
 -
 -  /**
--   * Handles the shared proxy confirmation dialog 'Cancel' button or a cancel
--   * event.
+-   * Handles the shared proxy confirmation dialog 'Cancel' button.
 -   */
--  private onDialogCancel_() {
--    this.toggle_.resetToPrefValue();
+-  protected onCancelClick_() {
+-    this.$.toggle.resetToPrefValue();
 -    this.closeDialog_();
+-  }
+-
+-  /**
+-   * Handles the shared proxy confirmation dialog cancel event.
+-   */
+-  protected onDialogCancel_() {
+-    this.onCancelClick_();
 -  }
 -
 -  private computeDoNotTrackToggleSubLabel_(): string {
@@ -307,11 +314,6 @@
 -        this.showUniversalOptOutSettings_ ?
 -            'trackingProtectionDoNotTrackDisclaimerToggleSubLabel' :
 -            'trackingProtectionDoNotTrackToggleSubLabel');
--  }
--
--  private get toggle_(): SettingsToggleButtonElement {
--    return this.shadowRoot!.querySelector<SettingsToggleButtonElement>(
--        '#toggle')!;
    }
  }
  
@@ -351,7 +353,7 @@
  import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 --- a/chrome/browser/resources/settings/privacy_page/security/security_page.html
 +++ b/chrome/browser/resources/settings/privacy_page/security/security_page.html
-@@ -43,17 +43,27 @@
+@@ -49,17 +49,27 @@
            var(--cr-radio-button-checked-ripple-color);
      }
  
@@ -383,7 +385,7 @@
      }
  
      #httpsFirstModeRadioGroup {
-@@ -73,10 +83,12 @@
+@@ -79,10 +89,12 @@
    <settings-subpage page-title="$i18n{securityPageTitle}"
        learn-more-url="$i18n{safeBrowsingHelpCenterURL}"
        route-path$="[[routePath]]">
@@ -398,7 +400,7 @@
              pref="{{prefs.generated.https_first_mode_enabled}}"
              label="$i18n{httpsOnlyModeTitle}"
              sub-label="[[getHttpsFirstModeSubLabel_(
-@@ -103,20 +115,14 @@
+@@ -109,20 +121,14 @@
                    pref="[[prefs.generated.https_first_mode_enabled]]"
                    label="$i18n{httpsFirstModeEnabledStrictLabel}"
                    class="list-item">
@@ -420,17 +422,16 @@
            pref="{{prefs.generated.https_first_mode_enabled}}"
            label="$i18n{httpsOnlyModeTitle}"
            sub-label="[[getHttpsFirstModeSubLabel_(
-@@ -124,7 +130,8 @@
+@@ -130,7 +136,7 @@
            numeric-checked-value="[[httpsFirstModeSettingEnum_.ENABLED_FULL]]">
        </settings-toggle-button>
        <template is="dom-if" if="[[showSecureDnsSetting_]]">
--        <settings-secure-dns prefs="{{prefs}}" id="secureDnsSettingOld">
-+        <settings-secure-dns prefs="{{prefs}}" id="secureDnsSettingOld"
-+            class="hr">
+-        <settings-secure-dns id="secureDnsSettingOld">
++        <settings-secure-dns id="secureDnsSettingOld" class="hr">
          </settings-secure-dns>
        </template>
      </template>
-@@ -137,12 +144,28 @@
+@@ -142,12 +148,28 @@
      </template>
  <if expr="is_chromeos">
      <template is="dom-if" if="[[showSecureDnsSettingLink_]]">
@@ -452,7 +453,7 @@
 +        label="$i18n{globalPrivacyControl}"
 +        sub-label="$i18n{globalPrivacyControlDescription}">
 +    </settings-toggle-button>
-+    <settings-do-not-track-toggle id="doNotTrack" prefs="{{prefs}}">
++    <settings-do-not-track-toggle id="doNotTrack">
 +    </settings-do-not-track-toggle>
 +    <div class="cr-row">
 +      <h2 class="cr-title-text">$i18n{securitySectionTitle}</h2>

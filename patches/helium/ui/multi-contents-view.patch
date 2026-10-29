@@ -23,7 +23,15 @@
      return contents_container_views_;
 --- a/chrome/browser/ui/views/frame/multi_contents_view.cc
 +++ b/chrome/browser/ui/views/frame/multi_contents_view.cc
-@@ -442,6 +442,10 @@ void MultiContentsView::OnThemeChanged()
+@@ -350,6 +350,7 @@ void MultiContentsView::UpdateSplitVisua
+ 
+   visual_data_ = visual_data;
+   resize_area_->SetLayout(visual_data.split_layout());
++  UpdateContentsBorderAndOverlay();
+   InvalidateLayout();
+ }
+ 
+@@ -441,6 +442,10 @@ void MultiContentsView::OnThemeChanged()
    UpdateContentsBorderAndOverlay();
  }
  
@@ -34,13 +42,15 @@
  int MultiContentsView::GetInactiveIndex() const {
    return active_index_ == 0 ? 1 : 0;
  }
-@@ -796,16 +800,34 @@ int MultiContentsView::GetMinViewSize(gf
+@@ -795,16 +800,37 @@ int MultiContentsView::GetMinViewSize(gf
  }
  
  void MultiContentsView::UpdateContentsBorderAndOverlay() {
 +  const views::Widget* widget = browser_view_->GetWidget();
 +  const bool is_fullscreen = widget && widget->IsFullscreen();
    const bool is_in_split = IsInSplitView();
++  const bool is_side_by_side =
++      GetSplitLayout() == split_tabs::SplitTabLayout::kSideBySide;
 +  const bool should_show_leading =
 +      drop_target_view_->side() == MultiContentsDropTargetView::DropSide::START;
 +  const bool should_show_trailing =
@@ -69,12 +79,13 @@
      contents_container_view->UpdateBorderAndOverlay(
 -        is_in_split, is_active, is_active && active_contents_view_highlighted_);
 +        is_in_split, is_active, is_active && active_contents_view_highlighted_,
-+        use_system_bottom_left_radius && is_first_view,
++        use_system_bottom_left_radius &&
++            (is_side_by_side ? is_first_view : is_last_view),
 +        use_system_bottom_right_radius && is_last_view);
    }
  }
  
-@@ -848,6 +870,9 @@ void MultiContentsView::SetShouldShowTop
+@@ -847,6 +873,9 @@ void MultiContentsView::SetShouldShowTop
      return;
    }
    contents_separators_.should_show_top = should_show;
@@ -84,7 +95,7 @@
    // This can be called during BrowserView layout, so protect against creating a
    // layout loop.
    InvalidateLayout(/*avoid_propagate_during_layout=*/true);
-@@ -858,6 +883,9 @@ void MultiContentsView::SetSplitViewInse
+@@ -857,6 +886,9 @@ void MultiContentsView::SetSplitViewInse
      return;
    }
    split_view_insets_ = insets;
@@ -96,7 +107,7 @@
    InvalidateLayout(/*avoid_propagate_during_layout=*/true);
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -2383,6 +2383,8 @@ void BrowserView::FullscreenStateChanged
+@@ -2394,6 +2394,8 @@ void BrowserView::FullscreenStateChanged
        ->fullscreen_controller()
        ->WindowFullscreenStateChanged();
  
@@ -165,7 +176,7 @@
  
    auto devtools_web_view =
        std::make_unique<views::WebView>(browser_view->GetProfile());
-@@ -192,9 +193,16 @@ std::vector<views::View*> ContentsContai
+@@ -194,9 +195,16 @@ std::vector<views::View*> ContentsContai
  
  void ContentsContainerView::UpdateBorderAndOverlay(bool is_in_split,
                                                     bool is_active,
@@ -183,7 +194,7 @@
  
    if (!is_in_split) {
      if (split_changed) {
-@@ -210,6 +218,8 @@ void ContentsContainerView::UpdateBorder
+@@ -212,6 +220,8 @@ void ContentsContainerView::UpdateBorder
      if (split_changed) {
        SetBorder(views::CreateEmptyBorder(gfx::Insets(
            kSplitViewContentPadding + ContentsContainerOutline::kThickness)));
@@ -192,7 +203,7 @@
        UpdateBorderRoundedCorners();
      }
  
-@@ -299,7 +309,32 @@ void ContentsContainerView::SetBorderRou
+@@ -301,7 +311,32 @@ void ContentsContainerView::SetBorderRou
  }
  
  void ContentsContainerView::UpdateBorderRoundedCorners() {
@@ -434,7 +445,7 @@
  #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
  #include "chrome/browser/ui/webui/webui_embedding_context.h"
  #include "chrome/common/pref_names.h"
-@@ -903,7 +904,7 @@ void OverlayBaseController::SetOverlayRo
+@@ -904,7 +905,7 @@ void OverlayBaseController::SetOverlayRo
    }
    const bool right_aligned = is_right_aligned != base::i18n::IsRTL();
    const gfx::RoundedCornersF radii =

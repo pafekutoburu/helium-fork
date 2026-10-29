@@ -31,6 +31,9 @@ CONTINGENT_PATHS = (
     'third_party/cpython3/',
     'third_party/dawn/third_party/ninja/',
     'third_party/dawn/tools/golang/',
+    'third_party/depot_tools/.cipd_bin/',
+    'third_party/depot_tools/.cipd_client',
+    'third_party/depot_tools/.cipd_client_cache/',
     'third_party/devtools-frontend/src/third_party/esbuild/',
     'third_party/devtools-frontend/src/third_party/rollup_libs/',
     'third_party/enterprise_companion/chromium_linux64/cipd/',
@@ -56,6 +59,7 @@ CONTINGENT_PATHS = (
     # GCS sources
     'buildtools/linux64-format/',
     'third_party/blink/renderer/core/css/perftest_data/',
+    'third_party/chromium-bidi/node_modules/',
     'third_party/js_code_coverage/',
     'third_party/llvm-libclang/',
     'third_party/openscreen/src/buildtools/linux64-format/',
@@ -105,6 +109,7 @@ CONTINGENT_PATHS = (
     'third_party/catapult/tracing/test_data/',
     'third_party/dawn/test/',
     'third_party/devtools-frontend/src/front_end/panels/timeline/fixtures/',
+    'third_party/dom_distiller_js/dist/test/data/out/',
     'third_party/expat/src/testdata/',
     'third_party/glslang/src/Test/',
     'third_party/harfbuzz-ng/src/test/',
@@ -122,6 +127,7 @@ CONTINGENT_PATHS = (
     'third_party/swiftshader/tests/regres/',
     'third_party/test_fonts/test_fonts/',
     'tools/perf/testdata/',
+    'tools/binary_size/libsupersize/testdata/mock_source_directory/out/',
     # lite tarball paths:
     # https://source.chromium.org/chromium/chromium/tools/build/+/main:recipes/recipes/publish_tarball.py
     'android_webview/',
@@ -150,6 +156,29 @@ CONTINGENT_PATHS = (
     'third_party/webgl/',
 )
 
+# path prefixes needed to build with the chromium toolchain
+BUILD_DEPENDENCY_PATHS = (
+    'build/linux/',
+    'buildtools/linux64/',
+    'buildtools/linux64-format/',
+    'buildtools/reclient/',
+    'buildtools/third_party/mold/cipd/',
+    'third_party/cpython3/',
+    'third_party/dawn/tools/golang/',
+    'third_party/devtools-frontend/src/third_party/esbuild/',
+    'third_party/devtools-frontend/src/third_party/rollup_libs/',
+    'third_party/gperf/cipd/',
+    'third_party/llvm-build/',
+    'third_party/llvm-libclang/',
+    'third_party/ninja/',
+    'third_party/node/linux/',
+    'third_party/rust/chromium_crates_io/vendor/windows_aarch64_msvc-',
+    'third_party/rust/chromium_crates_io/vendor/windows_x86_64_msvc-',
+    'third_party/rust-toolchain/',
+    'third_party/siso/cipd/',
+    'third_party/typescript/',
+)
+
 # Files that should be excluded when pruning contingent paths.
 KEEP_FILES = (
     'chrome/test/data/webui/i18n_process_css_test.html',
@@ -161,15 +190,19 @@ KEEP_FILES = (
 KEEP_SUFFIXES = ('.gn', '.gni', '.grd', '.grdp', '.isolate', '.pydeps')
 
 
-def prune_files(unpack_root, prune_list):
+def prune_files(unpack_root, prune_list, keep_build_dependencies=False):
     """
     Delete files under unpack_root listed in prune_list. Returns an iterable of unremovable files.
 
     unpack_root is a pathlib.Path to the directory to be pruned
     prune_list is an iterable of files to be removed.
+    keep_build_dependencies preserves build dependencies listed in prune_list.
     """
     unremovable_files = set()
     for relative_file in prune_list:
+        if keep_build_dependencies and Path(relative_file).as_posix().startswith(
+                BUILD_DEPENDENCY_PATHS):
+            continue
         file_path = unpack_root / relative_file
         try:
             file_path.unlink()
@@ -187,12 +220,17 @@ def _prune_path(path, unpack_root=None):
     """
     Delete files and directories in path.
 
-    path is a pathlib.Path to the directory to be pruned
+    path is a pathlib.Path to the file or directory to be pruned
     unpack_root is a pathlib.Path to the source tree
     """
-    for node in sorted(path.rglob('*'), key=lambda l: len(str(l)), reverse=True):
+    if path.is_file() or path.is_symlink():
+        nodes = [path]
+    else:
+        nodes = sorted(path.rglob('*'), key=lambda l: len(str(l)), reverse=True)
+
+    for node in nodes:
         if unpack_root is not None and (node.suffix in KEEP_SUFFIXES
-                                        or str(node.relative_to(unpack_root)) in KEEP_FILES):
+                                        or node.relative_to(unpack_root).as_posix() in KEEP_FILES):
             continue
         if node.is_file() or node.is_symlink():
             try:
@@ -208,13 +246,14 @@ def _prune_path(path, unpack_root=None):
                 node.rmdir()
 
 
-def prune_dirs(unpack_root, keep_contingent_paths, sysroot):
+def prune_dirs(unpack_root, keep_contingent_paths, sysroot, keep_build_dependencies=False):
     """
     Delete all files and directories in pycache and CONTINGENT_PATHS directories.
 
     unpack_root is a pathlib.Path to the source tree
     keep_contingent_paths is a boolean that determines if the contingent paths should be pruned
     sysroot is a string that optionally defines a sysroot to exempt from pruning
+    keep_build_dependencies preserves build tools and sysroots among contingent paths
     """
     for pycache in unpack_root.rglob('__pycache__'):
         _prune_path(pycache)
@@ -223,6 +262,9 @@ def prune_dirs(unpack_root, keep_contingent_paths, sysroot):
     else:
         get_logger().info('Removing Contingent Paths')
         for cpath in CONTINGENT_PATHS:
+            if keep_build_dependencies and cpath.startswith(BUILD_DEPENDENCY_PATHS):
+                get_logger().info('%s: %s', 'Exempt', cpath)
+                continue
             if sysroot and f'{sysroot}-sysroot' in cpath:
                 get_logger().info('%s: %s', 'Exempt', cpath)
                 continue
@@ -236,9 +278,10 @@ def _callback(args):
         sys.exit(1)
     if not args.pruning_list.exists():
         get_logger().error('Could not find the pruning list: %s', args.pruning_list)
-    prune_dirs(args.directory, args.keep_contingent_paths, args.sysroot)
+    prune_dirs(args.directory, args.keep_contingent_paths, args.sysroot,
+               args.keep_build_dependencies)
     prune_list = tuple(filter(len, args.pruning_list.read_text(encoding=ENCODING).splitlines()))
-    unremovable_files = prune_files(args.directory, prune_list)
+    unremovable_files = prune_files(args.directory, prune_list, args.keep_build_dependencies)
     if unremovable_files:
         file_list = '\n'.join(f for f in itertools.islice(unremovable_files, 5))
         if len(unremovable_files) > 5:
@@ -254,10 +297,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('directory', type=Path, help='The directory to apply binary pruning.')
     parser.add_argument('pruning_list', type=Path, help='Path to pruning.list')
-    parser.add_argument('--keep-contingent-paths',
-                        action='store_true',
-                        help=('Skip pruning the contingent paths. '
-                              'Useful when building with the Google tooling is desired.'))
+    keep_options = parser.add_mutually_exclusive_group()
+    keep_options.add_argument('--keep-contingent-paths',
+                              action='store_true',
+                              help=('Skip pruning the contingent paths. '
+                                    'Useful when building with the Google tooling is desired.'))
+    keep_options.add_argument(
+        '--keep-build-dependencies',
+        action='store_true',
+        help='Keep build dependencies, but prune other binaries and contingent paths.')
     parser.add_argument('--sysroot',
                         choices=('amd64', 'i386'),
                         help=('Skip pruning the sysroot for the specified architecture. '

@@ -1,6 +1,6 @@
 --- a/chrome/browser/ui/views/frame/browser_frame_view.h
 +++ b/chrome/browser/ui/views/frame/browser_frame_view.h
-@@ -156,6 +156,11 @@ class BrowserFrameView : public views::F
+@@ -158,6 +158,11 @@ class BrowserFrameView : public views::F
    // frame. Mainly used by special browsers such as PWAs.
    virtual void UpdateThrobber(bool running) = 0;
  
@@ -24,7 +24,7 @@
    gfx::Size GetMinimumSize() const override;
 --- a/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
 +++ b/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
-@@ -364,6 +364,18 @@ gfx::RoundedCornersF BrowserFrameViewMac
+@@ -362,6 +362,18 @@ gfx::RoundedCornersF BrowserFrameViewMac
    return gfx::RoundedCornersF();
  }
  
@@ -84,7 +84,7 @@
  }
 --- a/chrome/browser/ui/views/frame/opaque_browser_frame_view.h
 +++ b/chrome/browser/ui/views/frame/opaque_browser_frame_view.h
-@@ -63,6 +63,7 @@ class OpaqueBrowserFrameView : public Br
+@@ -64,6 +64,7 @@ class OpaqueBrowserFrameView : public Br
    int GetTopInset(bool restored) const override;
    void UpdateThrobber(bool running) override;
    void WindowControlsOverlayEnabledChanged() override;
@@ -135,7 +135,7 @@
   private:
 --- a/chrome/browser/ui/views/frame/browser_frame_view_win.cc
 +++ b/chrome/browser/ui/views/frame/browser_frame_view_win.cc
-@@ -406,6 +406,12 @@ void BrowserFrameViewWin::UpdateWindowTi
+@@ -408,6 +408,12 @@ void BrowserFrameViewWin::UpdateWindowTi
    }
  }
  

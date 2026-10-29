@@ -56,20 +56,20 @@
 +}
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -2342,6 +2342,7 @@ static_library("ui") {
-       "views/frame/immersive_mode_controller_mac.mm",
-       "views/frame/immersive_mode_overlay_views_mac.h",
-       "views/frame/immersive_mode_overlay_views_mac.mm",
+@@ -3355,6 +3355,7 @@ static_library("ui") {
+     sources += [
+       "browser_shortcuts/browser_shortcut_platform_mac.h",
+       "browser_shortcuts/browser_shortcut_platform_mac.mm",
 +      "views/helium/frame_corner_radius_mac.mm",
      ]
  
      deps += [
-@@ -2604,6 +2605,8 @@ static_library("ui") {
-       "views/frame/vertical_tab_strip_background_blur_backdrop.h",
+@@ -3551,6 +3552,8 @@ static_library("ui") {
+       "views/frame/horizontal_tab_strip_region_view.h",
        "views/frame/vertical_tab_strip_region_view.cc",
        "views/frame/vertical_tab_strip_region_view.h",
 +      "views/helium/frame_corner_radius.cc",
 +      "views/helium/frame_corner_radius.h",
-       "views/idle_bubble.cc",
-       "views/intent_picker_bubble_view.cc",
-       "views/intent_picker_bubble_view.h",
+     ]
+ 
+     sources += get_target_outputs(":webui_name_variants")

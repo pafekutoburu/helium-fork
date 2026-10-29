@@ -256,11 +256,6 @@
     "message": "Dodaj kao podrazumijevani"
   },
   {
-    "name": "IDS_POLICY_SOURCE_HOP",
-    "source": "Helium defaults",
-    "message": "Helium podrazumijevane postavke"
-  },
-  {
     "name": "IDS_ACCNAME_APP_MENU",
     "source": "Main Menu",
     "message": "Glavni meni"
@@ -1076,16 +1071,6 @@
     "message": "Za sada samo isprobavam Helium."
   },
   {
-    "name": "IDS_HELIUM_ONBOARDING_DATA_IMPORT_TITLE",
-    "source": "Take your stuff with you",
-    "message": "Ponesite svoje stvari sa sobom"
-  },
-  {
-    "name": "IDS_HELIUM_ONBOARDING_DATA_IMPORT_SUBTITLE",
-    "source": "Transfer your most important bookmarks, history, and extensions from other browsers.",
-    "message": "Prenesite svoje najvažnije oznake, historiju i ekstenzije iz drugih preglednika."
-  },
-  {
     "name": "IDS_HELIUM_ONBOARDING_PASSWORD_TITLE",
     "source": "Password manager",
     "message": "Upravitelj lozinki"
@@ -1409,5 +1394,20 @@
     "name": "IDS_HELIUM_ONBOARDING_PASSWORD_MANAGERS_KEE_PASS_XC",
     "source": "Free, local, and open-source password manager for advanced users. Requires technical knowledge to set up and use. Cannot sync without extra software.",
     "message": "Besplatan, lokalni upravitelj lozinki otvorenog koda za napredne korisnike. Za postavljanje i korištenje potrebno je tehničko znanje. Ne može sinhronizovati podatke bez dodatnog softvera."
+  },
+  {
+    "name": "IDS_HELIUM_ONBOARDING_DATA_IMPORT_ALLOW",
+    "source": "Allow",
+    "message": "Dozvoli"
+  },
+  {
+    "name": "IDS_HELIUM_ONBOARDING_DATA_IMPORT_REFRESH",
+    "source": "Refresh",
+    "message": "Osvježi"
+  },
+  {
+    "name": "IDS_SETTINGS_LAYOUT",
+    "source": "Layout",
+    "message": "Raspored"
   }
 ]

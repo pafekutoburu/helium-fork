@@ -143,7 +143,7 @@
    },
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
-@@ -636,6 +636,7 @@ source_set("extensions") {
+@@ -638,6 +638,7 @@ source_set("extensions") {
      "//net:extras",
      "//services/metrics/public/cpp:ukm_builders",
      "//storage/browser",
@@ -161,7 +161,7 @@
        "$root_gen_dir/ui/resources/ui_lottie_resources.pak",
        "$root_gen_dir/ui/webui/resources/webui_resources.pak",
      ]
-@@ -179,6 +180,7 @@ template("chrome_extra_paks") {
+@@ -185,6 +186,7 @@ template("chrome_extra_paks") {
        "//third_party/blink/public:devtools_inspector_resources",
        "//third_party/blink/public:resources",
        "//third_party/blink/public/strings:permission_element_generated_strings",
@@ -171,7 +171,7 @@
      ]
 --- a/chrome/browser/extensions/chrome_component_extension_resource_manager.cc
 +++ b/chrome/browser/extensions/chrome_component_extension_resource_manager.cc
-@@ -36,6 +36,7 @@
+@@ -32,6 +32,7 @@
  #include "extensions/common/extension_id.h"
  #include "pdf/buildflags.h"
  #include "ui/base/resource/resource_bundle.h"
@@ -179,7 +179,7 @@
  
  #if BUILDFLAG(IS_CHROMEOS)
  #include "ash/keyboard/ui/resources/keyboard_resource_util.h"
-@@ -130,6 +131,7 @@ ChromeComponentExtensionResourceManager:
+@@ -127,6 +128,7 @@ ChromeComponentExtensionResourceManager:
            extensions_features::kApiContextualTasksPrivate)) {
      AddComponentResourceEntries(kContextualTasksExtensionResources);
    }

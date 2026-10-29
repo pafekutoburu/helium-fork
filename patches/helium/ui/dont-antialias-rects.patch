@@ -22,7 +22,7 @@
  
 --- a/chrome/browser/ui/views/frame/custom_corners_background.cc
 +++ b/chrome/browser/ui/views/frame/custom_corners_background.cc
-@@ -344,8 +344,13 @@ void CustomCornersBackground::Paint(gfx:
+@@ -389,8 +389,13 @@ void CustomCornersBackground::Paint(gfx:
  
    // Draw solid rect/rrect background:
    CornerRadii radii;

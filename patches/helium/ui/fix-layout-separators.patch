@@ -1,6 +1,6 @@
 --- a/chrome/browser/ui/views/frame/multi_contents_view.cc
 +++ b/chrome/browser/ui/views/frame/multi_contents_view.cc
-@@ -22,7 +22,6 @@
+@@ -23,7 +23,6 @@
  #include "chrome/browser/ui/views/frame/contents_container_view.h"
  #include "chrome/browser/ui/views/frame/contents_separator.h"
  #include "chrome/browser/ui/views/frame/contents_web_view.h"
@@ -8,7 +8,7 @@
  #include "chrome/browser/ui/views/frame/multi_contents_background_view.h"
  #include "chrome/browser/ui/views/frame/multi_contents_drop_target_view.h"
  #include "chrome/browser/ui/views/frame/multi_contents_resize_area.h"
-@@ -62,7 +61,6 @@ void MultiContentsView::ContentsSeparato
+@@ -64,7 +63,6 @@ void MultiContentsView::ContentsSeparato
    top_separator = nullptr;
    leading_separator = nullptr;
    trailing_separator = nullptr;
@@ -16,7 +16,7 @@
    leading_side_chrome_attached = false;
    trailing_side_chrome_attached = false;
  }
-@@ -118,15 +116,6 @@ MultiContentsView::MultiContentsView(
+@@ -120,15 +118,6 @@ MultiContentsView::MultiContentsView(
    contents_separators_.trailing_separator->SetProperty(
        views::kElementIdentifierKey, kContentsSeparatorTrailingEdgeElementId);
  
@@ -105,7 +105,7 @@
      bool leading_side_chrome_attached = false;
 --- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -970,6 +970,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -998,6 +998,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
  
    // Lay out toolbar-height side panel.
    bool side_panel_leading = false;
@@ -114,7 +114,7 @@
    const double side_panel_reveal_amount =
        horizontal_layout.has_side_panel()
            ? views().side_panel->GetAnimationValue()
-@@ -978,6 +980,13 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1006,6 +1008,13 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    if (horizontal_layout.has_side_panel()) {
      const SidePanel* const side_panel = views().side_panel;
      side_panel_leading = side_panel->IsRightAligned() == base::i18n::IsRTL();
@@ -128,7 +128,7 @@
  
      if (side_panel_reveal_amount < 1.0) {
        clip_content_for_animation = true;
-@@ -1123,6 +1132,9 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1151,6 +1160,9 @@ BrowserViewTabbedLayoutImpl::CalculatePr
      views().multi_contents_view->SetSplitViewInsets(contents_insets);
    }
  
