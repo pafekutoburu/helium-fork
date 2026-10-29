@@ -20,6 +20,9 @@ Today section, real folders). Not affiliated with the upstream project.
   ——月度同步时按名定位，序号每轮都会漂。
 - `patches/series`：末段的 helium-fork 行。
 - `resources/favicons/favicon_ntp_{16,32}.png`、`AGENTS.md`、本文件、`fork_sync.sh`。
+- `CLAUDE.md` → `AGENTS.md` 符号链接：上游 0.20 删了它（1fe0fe98「claude code reads AGENTS.md now」），
+  但 Claude Code 默认只在工作目录及以上**没有** `CLAUDE.md` 时才读 `AGENTS.md`；工作区根有自己的
+  `CLAUDE.md`，删了链接本仓的红线就不进上下文了（2026-10-29 核文档）。合并时它被静默删掉、不报冲突。
 - helium-macos 侧：gitlink、`.gitmodules`（URL→我们的 fork）、`flags.macos.gn`（PCH 关闭 4 行）、
   `patches/helium/macos/helium-immersive-fullscreen.patch` 里的 11 个 hunk（2026-10-04 起，152→154 同步时改 6 个；
   2026-10-10 第四十一次再改 1 个；2026-10-29 第四十二次再改 4 个、并把 mac 源列表那段的尾部上下文再改一次）。
