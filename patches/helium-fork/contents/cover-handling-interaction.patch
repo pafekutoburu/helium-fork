@@ -1,0 +1,205 @@
+Index: src/cc/BUILD.gn
+===================================================================
+--- src.orig/cc/BUILD.gn
++++ src/cc/BUILD.gn
+@@ -424,6 +424,8 @@
+     "trees/layer_tree_host.h",
+     "trees/layer_tree_host_delegate.cc",
+     "trees/layer_tree_host_delegate.h",
++    "trees/helium_handling_interaction.cc",
++    "trees/helium_handling_interaction.h",
+     "trees/layer_tree_host_impl.cc",
+     "trees/layer_tree_host_impl.h",
+     "trees/layer_tree_host_impl_delegate.h",
+Index: src/cc/trees/helium_handling_interaction.cc
+===================================================================
+--- /dev/null
++++ src/cc/trees/helium_handling_interaction.cc
+@@ -0,0 +1,57 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "cc/trees/helium_handling_interaction.h"
++
++#include <atomic>
++
++#include "base/containers/flat_set.h"
++#include "base/no_destructor.h"
++#include "base/synchronization/lock.h"
++#include "base/thread_annotations.h"
++
++namespace cc {
++
++namespace {
++
++struct Registry {
++  base::Lock lock;
++  base::flat_set<int> ids GUARDED_BY(lock);
++};
++
++Registry& GetRegistry() {
++  static base::NoDestructor<Registry> registry;
++  return *registry;
++}
++
++// How many hosts are registered: every LayerTreeHostImpl asks once a frame,
++// and in a renderer (or a browser window not animating) the answer is "none"
++// without taking the lock.
++std::atomic<int> g_registered{0};
++
++}  // namespace
++
++void SetLayerTreeHostHandlingInteraction(int layer_tree_host_id,
++                                         bool handling) {
++  Registry& registry = GetRegistry();
++  base::AutoLock auto_lock(registry.lock);
++  if (handling) {
++    if (registry.ids.insert(layer_tree_host_id).second) {
++      g_registered.fetch_add(1, std::memory_order_relaxed);
++    }
++  } else if (registry.ids.erase(layer_tree_host_id)) {
++    g_registered.fetch_sub(1, std::memory_order_relaxed);
++  }
++}
++
++bool IsLayerTreeHostHandlingInteraction(int layer_tree_host_id) {
++  if (g_registered.load(std::memory_order_relaxed) == 0) {
++    return false;
++  }
++  Registry& registry = GetRegistry();
++  base::AutoLock auto_lock(registry.lock);
++  return registry.ids.contains(layer_tree_host_id);
++}
++
++}  // namespace cc
+Index: src/cc/trees/helium_handling_interaction.h
+===================================================================
+--- /dev/null
++++ src/cc/trees/helium_handling_interaction.h
+@@ -0,0 +1,28 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CC_TREES_HELIUM_HANDLING_INTERACTION_H_
++#define CC_TREES_HELIUM_HANDLING_INTERACTION_H_
++
++#include "cc/cc_export.h"
++
++namespace cc {
++
++// helium-fork r1031: a LayerTreeHost whose own client is animating in answer
++// to the user -- the browser window's ui::Compositor while the sidebar's
++// Cmd+S cover runs -- can have its frames say they are handling an
++// interaction (CompositorFrameMetadata::is_handling_interaction), the way an
++// active scroll's do. viz then draws them as soon as they come rather than
++// waiting, up to the deadline, for embedded clients still expected to submit
++// (viz::DisplayScheduler: HasDamageDueToInteraction): on a page whose renderer
++// is busy re-laying out for the new width, that wait made a 60 Hz display
++// drop every second to fourth frame. Keyed by LayerTreeHost::GetId(); any
++// thread. Nothing registers in a renderer, so its frames are as upstream's.
++CC_EXPORT void SetLayerTreeHostHandlingInteraction(int layer_tree_host_id,
++                                                   bool handling);
++CC_EXPORT bool IsLayerTreeHostHandlingInteraction(int layer_tree_host_id);
++
++}  // namespace cc
++
++#endif  // CC_TREES_HELIUM_HANDLING_INTERACTION_H_
+Index: src/cc/trees/layer_tree_host_impl.cc
+===================================================================
+--- src.orig/cc/trees/layer_tree_host_impl.cc
++++ src/cc/trees/layer_tree_host_impl.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "cc/trees/layer_tree_host_impl.h"
+ 
++#include "cc/trees/helium_handling_interaction.h"
++
+ #include <stddef.h>
+ #include <stdint.h>
+ 
+@@ -4003,6 +4005,12 @@
+     return is_handling_interaction_from_client_;
+   }
+ 
++  // helium-fork r1031: a client animating its own content for the user
++  // (cc/trees/helium_handling_interaction.h).
++  if (IsLayerTreeHostHandlingInteraction(id_)) {
++    return true;
++  }
++
+   if (input_delegate_) {
+     return GetActivelyScrollingType() != ActivelyScrollingType::kNone ||
+            input_delegate_->IsHandlingTouchSequence();
+Index: src/components/viz/service/display/display_damage_tracker.cc
+===================================================================
+--- src.orig/components/viz/service/display/display_damage_tracker.cc
++++ src/components/viz/service/display/display_damage_tracker.cc
+@@ -96,8 +96,13 @@
+                "DisplayDamageTracker::SurfaceDamaged", "surface_id",
+                surface_id.ToString());
+ 
++  // helium-fork r1031: only a surface that damaged THIS display. The surface
++  // manager tells every display about every surface (SurfaceModified), so an
++  // interactive frame in one window -- a scroll upstream, the Cmd+S cover of
++  // the sidebar here -- made every other window's scheduler stop waiting for
++  // its own pending surfaces too (GPT r1031 brief 2).
+   has_surface_damage_due_to_interaction_ |=
+-      ShouldAccumulateInteraction(handle_interaction);
++      display_damaged && ShouldAccumulateInteraction(handle_interaction);
+ 
+   if (display_damaged) {
+     for (const auto& latency : latency_info) {
+Index: src/ui/compositor/compositor.cc
+===================================================================
+--- src.orig/ui/compositor/compositor.cc
++++ src/ui/compositor/compositor.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "ui/compositor/compositor.h"
+ 
++#include "cc/trees/helium_handling_interaction.h"
++
+ #include <stddef.h>
+ 
+ #include <algorithm>
+@@ -301,6 +303,8 @@
+ 
+ Compositor::~Compositor() {
+   TRACE_EVENT0("shutdown,viz", "Compositor::destructor");
++  // helium-fork r1031: never leave the registry naming a host that is gone.
++  SetIsHandlingInteraction(false);
+   if (auto* power_monitor = base::PowerMonitor::GetInstance();
+       power_monitor->IsInitialized()) {
+     power_monitor->RemovePowerSuspendObserver(this);
+@@ -411,6 +415,12 @@
+   observer_list_.Notify(&CompositorObserver::OnCompositingChildResizing, this);
+ }
+ 
++void Compositor::SetIsHandlingInteraction(bool handling) {
++  if (host_) {
++    cc::SetLayerTreeHostHandlingInteraction(host_->GetId(), handling);
++  }
++}
++
+ void Compositor::ScheduleDraw() {
+   host_->SetNeedsCommit();
+ }
+Index: src/ui/compositor/compositor.h
+===================================================================
+--- src.orig/ui/compositor/compositor.h
++++ src/ui/compositor/compositor.h
+@@ -470,6 +470,12 @@
+   }
+ 
+   const viz::FrameSinkId& frame_sink_id() const { return frame_sink_id_; }
++
++  // helium-fork r1031: while set, this compositor's frames say they are
++  // handling a user interaction, so viz draws them as soon as they come
++  // instead of waiting for slow embedded clients (cc/trees/
++  // helium_handling_interaction.h). Cleared when the compositor goes away.
++  void SetIsHandlingInteraction(bool handling);
+   float refresh_rate() const { return refresh_rate_; }
+ 
+   bool use_external_begin_frame_control() const {

@@ -21,14 +21,20 @@ Today section, real folders). Not affiliated with the upstream project.
 - `patches/series`：末段的 helium-fork 行。
 - `resources/favicons/favicon_ntp_{16,32}.png`、`AGENTS.md`、本文件、`fork_sync.sh`。
 - helium-macos 侧：gitlink、`.gitmodules`（URL→我们的 fork）、`flags.macos.gn`（PCH 关闭 4 行）、
-  `patches/helium/macos/helium-immersive-fullscreen.patch` 里的 7 个 hunk（2026-10-04 起，152→154 同步时改 6 个；
-  2026-10-10 第四十一次再改 1 个）。
+  `patches/helium/macos/helium-immersive-fullscreen.patch` 里的 11 个 hunk（2026-10-04 起，152→154 同步时改 6 个；
+  2026-10-10 第四十一次再改 1 个；2026-10-29 第四十二次再改 4 个、并把 mac 源列表那段的尾部上下文再改一次）。
   这个平台补丁排在我们的补丁段之后，会碰到我们改过的 Zen 判断、BrowserView 成员区和 mac 源列表，
   所以其中 5 个 hunk 改成按我们的代码打；第 6 个是全屏过渡结束、解除暂停时，对隐藏侧栏补一次按光标判断；
   第 7 个（`FullscreenStateChanging` 里插悬停暂停的那段）只改首行上下文：`return;` → `EndArcComposerEdit();`——
   layout/arc-visual-r1005-r1017 在同一位置（`IsClosed()` 早退之后）先结束带子的 ⌘L 编辑。
+  第 8–11 个只改上下文：layout/arc-visual-r1014b-r1032 在它的插入点旁边紧挨着加了自己的行——
+  `browser_frame_view_mac.h`（r1025 红绿灯内缩的声明）、`browser_frame_view_mac.mm`（一行 `#import`）、
+  `browser_native_widget_window_mac.{h,mm}`（`setTitlebarWidgetInset:`）；mac 源列表那段的尾部上下文
+  多了 `widget_mouse_events_mac.mm`。
   上游再改这个补丁时 merge 会在这里冲突：取上游新版，再照 `tasks/evidence/sync154/port-log.md`
-  的「macOS 块 #448」重做前 6 处、照 `tools/fold_backup_r10/scripts/step1b_adapt_immersive.py` 重做第 7 处。
+  的「macOS 块 #448」重做前 6 处、照 `tools/fold_backup_r10/scripts/step1b_adapt_immersive.py` 重做第 7 处；
+  第 8–11 处与源列表尾部可以整批机械重算：`tools/fold_backup_r1032/scripts/step1b_adapt_immersive.py`
+  （三方合并求「我们的树去掉平台补丁」，只重生成撞上的 hunk，正向重放逐字节回到原树）。
 
 ## 红线
 

@@ -451,3 +451,5 @@ helium-fork/workspace/spaces-m6-4a.patch
 helium-fork/workspace/spaces-m6-4b.patch
 helium-fork/layout/arc-visual-r1005-r1017.patch
 helium-fork/contents/viz-stale-render-pass-overlay.patch
+helium-fork/layout/arc-visual-r1014b-r1032.patch
+helium-fork/contents/cover-handling-interaction.patch
