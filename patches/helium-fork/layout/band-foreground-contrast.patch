@@ -10,7 +10,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/global_error/global_error.h"
  #include "chrome/browser/ui/global_error/global_error_service.h"
  #include "chrome/browser/ui/global_error/global_error_service_factory.h"
-@@ -2176,6 +2177,66 @@ bool BrowserView::IsSidebarHiddenModeAct
+@@ -2202,6 +2203,66 @@ bool BrowserView::IsSidebarHiddenModeAct
                             tabs::VerticalTabStripCollapseState::kExpanded;
  }
  
@@ -81,7 +81,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -445,6 +445,17 @@ class BrowserView : public BrowserWindow
+@@ -452,6 +452,17 @@ class BrowserView : public BrowserWindow
    // outside the Arc shell. See the definition for why it is not just the
    // toolbar height.
    int GetArcShellCaptionBandHeight() const;
@@ -99,7 +99,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    bool IsZenModeSideChromePinned() const;
    bool IsZenModeTopChromePinned() const;
  
-@@ -1295,6 +1306,16 @@ class BrowserView : public BrowserWindow
+@@ -1305,6 +1316,16 @@ class BrowserView : public BrowserWindow
    // leave the Arc shell sidebar top row (same pattern as the tab strip index
    // above).
    std::optional<size_t> arc_collapse_button_toolbar_index_;
@@ -120,7 +120,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.cc
-@@ -288,50 +288,7 @@ bool BrowserViewLayoutDelegateImpl::IsZe
+@@ -307,50 +307,7 @@ bool BrowserViewLayoutDelegateImpl::IsZe
  
  std::optional<SkColor> BrowserViewLayoutDelegateImpl::GetAddressBarBandTint()
      const {
@@ -397,7 +397,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -395,6 +395,9 @@ ToolbarView::ToolbarView(BrowserWindowIn
+@@ -403,6 +403,9 @@ ToolbarView::ToolbarView(BrowserWindowIn
    }
    views::SetCascadingColorProviderColor(this, views::kCascadingBackgroundColor,
                                          kColorToolbar);
@@ -407,7 +407,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
  
    mouse_watcher_ = std::make_unique<views::MouseWatcher>(
        std::make_unique<views::MouseWatcherViewHost>(this, gfx::Insets()), this);
-@@ -2207,6 +2210,51 @@ bool ToolbarView::ShouldShowToolbarNewTa
+@@ -2343,6 +2346,51 @@ bool ToolbarView::ShouldShowToolbarNewTa
    return IsDynamicLayout();
  }
  
@@ -463,7 +463,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -202,6 +202,23 @@ class ToolbarView : public views::Access
+@@ -207,6 +207,23 @@ class ToolbarView : public views::Access
    // toolbar and the Arc shell sidebar top row. (GetBackButton() exists but
    // is a private ToolbarButtonProvider override.)
    ToolbarButton* back_button() const { return back_; }
@@ -487,7 +487,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
    ToolbarButton* vertical_tabs_collapse_button() const {
      return vertical_tabs_collapse_button_;
    }
-@@ -493,6 +510,9 @@ class ToolbarView : public views::Access
+@@ -525,6 +542,9 @@ class ToolbarView : public views::Access
    const raw_ptr<BrowserView> browser_view_;
    base::WeakPtr<glic::GlicSplitButtonController> glic_split_button_controller_;
  
@@ -525,7 +525,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  #include "chrome/browser/ui/views/page_action/page_action_view_params.h"
  #include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
  #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
-@@ -142,6 +145,8 @@
+@@ -143,6 +146,8 @@
  #include "ui/events/event.h"
  #include "ui/gfx/animation/slide_animation.h"
  #include "ui/gfx/canvas.h"
@@ -534,7 +534,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  #include "ui/gfx/geometry/skia_conversions.h"
  #include "ui/gfx/image/image.h"
  #include "ui/gfx/paint_vector_icon.h"
-@@ -1065,14 +1070,48 @@ void LocationBarView::OnThemeChanged() {
+@@ -1103,14 +1108,48 @@ void LocationBarView::OnThemeChanged() {
      return;
    }
  
@@ -587,7 +587,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  }
  
  void LocationBarView::ChildPreferredSizeChanged(views::View* child) {
-@@ -1233,6 +1272,15 @@ SkColor LocationBarView::GetIconLabelBub
+@@ -1271,6 +1310,15 @@ SkColor LocationBarView::GetIconLabelBub
    const auto color_id = ShouldShowKeywordBubble()
                              ? kColorOmniboxKeywordSeparator
                              : kColorOmniboxActionIcon;
@@ -603,7 +603,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    return GetColorProvider()->GetColor(color_id);
  }
  
-@@ -1240,10 +1288,44 @@ SkAlpha LocationBarView::GetIconLabelBub
+@@ -1278,10 +1326,44 @@ SkAlpha LocationBarView::GetIconLabelBub
    return 0xFF;
  }
  
@@ -648,7 +648,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  bool LocationBarView::ShouldHideContentSettingImage() {
    return ShouldHidePageActionIcons();
  }
-@@ -1423,9 +1505,13 @@ void LocationBarView::RefreshBackground(
+@@ -1468,9 +1550,13 @@ void LocationBarView::RefreshBackground(
                               ui::NativeTheme::PreferredContrast::kMore;
  
    const auto* const color_provider = GetColorProvider();
@@ -664,7 +664,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  
    background_color_ = gfx::Tween::ColorValueBetween(opacity, normal, hovered);
    if (is_caret_visible) {
-@@ -1475,6 +1561,27 @@ void LocationBarView::RefreshBackground(
+@@ -1520,6 +1606,27 @@ void LocationBarView::RefreshBackground(
      permission_dashboard_view_->SetDividerBackgroundColor(background_color_);
    }
  
@@ -692,7 +692,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    SchedulePaint();
  }
  
-@@ -2198,6 +2305,14 @@ SkColor LocationBarView::GetSecurityChip
+@@ -2348,6 +2455,14 @@ SkColor LocationBarView::GetSecurityChip
      id = kColorOmniboxSecurityChipDangerous;
    }
  
@@ -734,7 +734,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    // ContentSettingImageViewDelegate:
    bool ShouldHideContentSettingImage() override;
    content::WebContents* GetContentSettingWebContents() override;
-@@ -354,6 +370,12 @@ class LocationBarView
+@@ -360,6 +376,12 @@ class LocationBarView
    // Updates the background on a theme change, or dropdown state change.
    void RefreshBackground();
  
@@ -747,7 +747,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    // Updates the visibility state of the content setting icons to reflect what
    // is blocked or actively in use on the current page. Returns true if the
    // visibility of at least one of the views in `content_setting_views_`
-@@ -609,6 +631,14 @@ class LocationBarView
+@@ -628,6 +650,14 @@ class LocationBarView
  
    SkColor background_color_ = gfx::kPlaceholderColor;
  
@@ -783,7 +783,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
  #include "chrome/browser/ui/views/omnibox/omnibox_placeholder_util.h"
  #include "chrome/browser/ui/views/omnibox/omnibox_popup_closer.h"
  #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
-@@ -1362,8 +1365,26 @@ int OmniboxViewViews::GetOmniboxTextLeng
+@@ -1409,8 +1412,26 @@ int OmniboxViewViews::GetOmniboxTextLeng
  }
  
  void OmniboxViewViews::SetEmphasis(bool emphasize, const gfx::Range& range) {
@@ -815,15 +815,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -605,6 +605,7 @@ source_set("tab_dialogs") {
- # circular includes from each other.
- static_library("ui") {
-   sources = [
-+    "helium/arc_band_colors.h",
-     "helium/helium_tab_switcher_controller.cc",
-     "helium/helium_tab_switcher_controller.h",
-     "helium_workspace/workspace_entry.cc",
-@@ -4240,6 +4241,8 @@ if (is_mac) {
+@@ -2315,6 +2315,7 @@ static_library("ui") {
+       "browser.h",
+       "browser_tabstrip.cc",
+       "browser_tabstrip.h",
++      "helium/arc_band_colors.h",
+       "helium/helium_tab_switcher_controller.cc",
+       "helium/helium_tab_switcher_controller.h",
+       "helium_workspace/workspace_entry.cc",
+@@ -5844,6 +5845,8 @@ if (is_mac) {
  # tabs, and a window is only ever compared by pointer.
  test("helium_workspace_unittests") {
    sources = [
@@ -832,7 +832,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium_workspace/workspace_blank_tab.h",
      "helium_workspace/workspace_blank_tab_unittest.cc",
      "helium_workspace/workspace_entry.cc",
-@@ -4268,6 +4271,11 @@ test("helium_workspace_unittests") {
+@@ -5872,6 +5875,11 @@ test("helium_workspace_unittests") {
      "//components/tabs:test_support",
      "//testing/gmock",
      "//testing/gtest",
@@ -1238,8 +1238,17 @@ Index: src/chrome/browser/ui/views/page_action/page_action_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/page_action/page_action_view.cc
 +++ src/chrome/browser/ui/views/page_action/page_action_view.cc
-@@ -745,6 +745,23 @@ SkColor PageActionView::GetBackgroundCol
-   return IconLabelBubbleView::GetBackgroundColor();
+@@ -751,9 +751,25 @@ SkColor PageActionView::GetForegroundCol
+     return GetColorProvider()->GetColor(
+         *observation_.GetSource()->GetOverrideForegroundColorId());
+   }
++  // helium-fork: on the band, the icon takes the colour derived from the page
++  // (SetHeliumBandIconColor). An action's own override above comes first: it
++  // pairs with its override background, which the band never replaces.
++  if (helium_band_icon_color_) {
++    return *helium_band_icon_color_;
++  }
+   return IconLabelBubbleView::GetForegroundColor();
  }
  
 +void PageActionView::SetHeliumBandIconColor(std::optional<SkColor> color) {
@@ -1252,13 +1261,6 @@ Index: src/chrome/browser/ui/views/page_action/page_action_view.cc
 +  UpdateLabelColors();
 +}
 +
-+SkColor PageActionView::GetForegroundColor() const {
-+  if (helium_band_icon_color_) {
-+    return *helium_band_icon_color_;
-+  }
-+  return IconLabelBubbleView::GetForegroundColor();
-+}
-+
  bool PageActionView::PaintedOnSolidBackground() const {
    return IconLabelBubbleView::PaintedOnSolidBackground() ||
           IsAnchoredMessageVisible();
@@ -1266,7 +1268,7 @@ Index: src/chrome/browser/ui/views/page_action/page_action_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/page_action/page_action_view.h
 +++ src/chrome/browser/ui/views/page_action/page_action_view.h
-@@ -143,6 +143,13 @@ class PageActionView : public IconLabelB
+@@ -142,6 +142,13 @@ class PageActionView : public IconLabelB
  
    actions::ActionId GetActionId() const;
  
@@ -1280,15 +1282,7 @@ Index: src/chrome/browser/ui/views/page_action/page_action_view.h
    views::View* GetLabelForTesting();
    gfx::SlideAnimation& GetSlideAnimationForTesting();
    AnchoredMessageBubbleView* GetAnchoredMessageForTesting();
-@@ -161,6 +168,7 @@ class PageActionView : public IconLabelB
-   // IconLabelBubbleView:
-   SkColor GetBackgroundColor() const override;
-   bool PaintedOnSolidBackground() const override;
-+  SkColor GetForegroundColor() const override;
- 
-  private:
-   // The image associated with the `action_item_` size may be different from the
-@@ -249,6 +257,9 @@ class PageActionView : public IconLabelB
+@@ -249,6 +256,9 @@ class PageActionView : public IconLabelB
    // If set, ensures this view is highlighted.
    std::optional<views::Button::ScopedAnchorHighlight> highlight_;
  

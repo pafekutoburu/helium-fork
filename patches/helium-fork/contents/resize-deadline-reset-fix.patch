@@ -2,9 +2,9 @@ Index: src/chrome/browser/ui/views/frame/contents_web_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/contents_web_view.cc
 +++ src/chrome/browser/ui/views/frame/contents_web_view.cc
-@@ -98,6 +98,17 @@ void ContentsWebView::SetIsAnimatingBoun
-         rwhv->SetShouldUseDefaultDeadlineOnResize(true);
-       }
+@@ -99,6 +99,17 @@ void ContentsWebView::SetIsAnimatingBoun
+                     SetShouldUseDefaultDeadlineOnResize,
+                 /*enable=*/true);
      }
 +  } else if (use_default_deadline_when_animating_ && web_contents()) {
 +    // helium-fork: also reset the deadline here. The reset below in

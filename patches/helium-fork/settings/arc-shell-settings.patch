@@ -2,8 +2,8 @@ Index: src/chrome/app/settings_strings.grdp
 ===================================================================
 --- src.orig/chrome/app/settings_strings.grdp
 +++ src/chrome/app/settings_strings.grdp
-@@ -301,6 +301,18 @@
-     <message name="IDS_SETTINGS_BROWSER_LAYOUT_VERTICAL" desc="Vertical option in the browser layout dropdown.">
+@@ -304,6 +304,18 @@
+     <message name="IDS_SETTINGS_BROWSER_LAYOUT_VERTICAL" desc="Vertical option in the browser layout picker.">
        Vertical
      </message>
 +    <message name="IDS_SETTINGS_ADDRESS_BAR_MODE" desc="Label for the dropdown that controls how the address bar is shown.">
@@ -25,7 +25,7 @@ Index: src/chrome/browser/extensions/api/settings_private/prefs_util.cc
 ===================================================================
 --- src.orig/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ src/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -230,6 +230,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+@@ -228,6 +228,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kHeliumShowProgressBar] =
        settings_api::PrefType::kBoolean;
@@ -36,159 +36,20 @@ Index: src/chrome/browser/extensions/api/settings_private/prefs_util.cc
    (*s_allowlist)[::prefs::kHeliumZenMode] = settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kHeliumZenModeSidebarPinned] =
        settings_api::PrefType::kBoolean;
-Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
-===================================================================
---- src.orig/chrome/browser/resources/settings/appearance_page/appearance_page.ts
-+++ src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
-@@ -81,13 +81,14 @@ export enum SystemTheme {
-   // </if>
- }
- 
--// This must be kept in sync with the HeliumLayoutType enum in
--// chrome/browser/ui/helium/helium_layout_state_controller.h.
--enum BrowserLayout {
--  CLASSIC = 0,
--  COMPACT = 1,
--  VERTICAL = 2,
--  DYNAMIC = 3,
-+// helium-fork: this must be kept in sync with the HeliumAddressBarMode enum
-+// in chrome/browser/ui/helium/helium_layout_state_controller.h. The browser
-+// layout itself is no longer a choice -- it is always the sidebar -- so the
-+// HeliumLayoutType mirror that used to live here is gone.
-+enum AddressBarMode {
-+  DOCKED = 0,
-+  HIDDEN = 1,
-+  AUTO = 2,
- }
- 
- function normalizePageVisibility(
-@@ -141,7 +142,6 @@ export class SettingsAppearancePageEleme
-       defaultZoom_: {type: Number},
- 
-       defaultFontSizePref_: {type: Object},
--      browserLayoutPref_: {type: Object},
-       homepageIsNewTabPagePref_: {type: Object},
-       homepagePref_: {type: Object},
-       pinContextualTaskButtonPref_: {type: Object},
-@@ -153,7 +153,6 @@ export class SettingsAppearancePageEleme
-       sidePanelIsRightAlignedPref_: {type: Object},
-       themeIdPref_: {type: Object},
-       themePolicyColorPref_: {type: Object},
--      zenModePref_: {type: Object},
- 
-       // <if expr="is_linux">
-       themeSystemThemePref_: {type: Object},
-@@ -174,7 +173,7 @@ export class SettingsAppearancePageEleme
-       showHoverCardImagesOption_: {type: Boolean},
-       showManagedThemeDialog_: {type: Boolean},
-       glassEffectOptions_: {type: Array},
--      browserLayoutOptions_: {type: Array},
-+      addressBarModeOptions_: {type: Array},
-       showNativeFrameMaterialsOption_: {type: Boolean},
-       showGlassEffectEnabled_: {type: Boolean},
-       ntpSimplificationBookmarksBarEnabled_: {type: Boolean},
-@@ -198,8 +197,6 @@ export class SettingsAppearancePageEleme
-   protected accessor defaultZoom_: number = 1.0;
- 
-   // Mirrored prefs.
--  protected accessor browserLayoutPref_: PrefObject<number>|undefined =
--      undefined;
-   protected accessor defaultFontSizePref_: PrefObject<number>|undefined =
-       undefined;
-   protected accessor homepageIsNewTabPagePref_: PrefObject<boolean>|undefined =
-@@ -222,7 +219,6 @@ export class SettingsAppearancePageEleme
-   protected accessor themeIdPref_: PrefObject<string>|undefined = undefined;
-   protected accessor themePolicyColorPref_: PrefObject<number>|undefined =
-       undefined;
--  protected accessor zenModePref_: PrefObject<boolean>|undefined = undefined;
- 
-   // <if expr="is_linux">
-   protected accessor themeSystemThemePref_: PrefObject<number>|undefined =
-@@ -264,22 +260,21 @@ export class SettingsAppearancePageEleme
-     {value: 'true', name: loadTimeData.getString('glassEffectModern')},
-  ];
- 
--  protected accessor browserLayoutOptions_: DropdownMenuOptionList = [
--    {
--      value: BrowserLayout.CLASSIC,
--      name: loadTimeData.getString('browserLayoutClassic'),
--    },
-+  // helium-fork: all three forms of the Arc shell. HIDDEN drops the band
-+  // entirely and moves the address entry into the sidebar, so it is only
-+  // offerable now that the sidebar has somewhere to put it.
-+  protected accessor addressBarModeOptions_: DropdownMenuOptionList = [
-     {
--      value: BrowserLayout.DYNAMIC,
--      name: loadTimeData.getString('browserLayoutDynamic'),
-+      value: AddressBarMode.DOCKED,
-+      name: loadTimeData.getString('addressBarModeDocked'),
-     },
-     {
--      value: BrowserLayout.COMPACT,
--      name: loadTimeData.getString('browserLayoutCompact'),
-+      value: AddressBarMode.HIDDEN,
-+      name: loadTimeData.getString('addressBarModeHidden'),
-     },
-     {
--      value: BrowserLayout.VERTICAL,
--      name: loadTimeData.getString('browserLayoutVertical'),
-+      value: AddressBarMode.AUTO,
-+      name: loadTimeData.getString('addressBarModeAuto'),
-     },
-   ];
- 
-@@ -353,7 +348,6 @@ export class SettingsAppearancePageEleme
- 
-     this.mirrorPrefs({
-       'autogenerated.theme.policy.color': 'themePolicyColorPref_',
--      'helium.browser.layout': 'browserLayoutPref_',
-       'browser.pin_contextual_task_button': 'pinContextualTaskButtonPref_',
-       'browser.pin_split_tab_button': 'pinSplitTabButtonPref_',
-       'browser.show_forward_button': 'showForwardButtonPref_',
-@@ -367,7 +361,6 @@ export class SettingsAppearancePageEleme
-       'side_panel.alignment_overrides': 'sidePanelAlignmentOverridesPref_',
-       'side_panel.is_right_aligned': 'sidePanelIsRightAlignedPref_',
-       'toolbar.pinned_actions': 'pinnedActionsPref_',
--      'helium.browser.zen_mode': 'zenModePref_',
-       'webkit.webprefs.default_font_size': 'defaultFontSizePref_',
-     });
- 
-@@ -713,16 +706,14 @@ export class SettingsAppearancePageEleme
-   }
- 
-   protected showVerticalTabsExpandOnHoverSetting_(): boolean {
--    return this.showVerticalTabsExpandOnHoverEnabled_ &&
--        this.browserLayoutPref_?.value === BrowserLayout.VERTICAL;
-+    // helium-fork: the layout is always the sidebar.
-+    return this.showVerticalTabsExpandOnHoverEnabled_;
-   }
- 
-   protected showVerticalSettings_(): boolean {
--    return this.browserLayoutPref_?.value === BrowserLayout.VERTICAL;
--  }
--
--  protected showCenteredLocationBarSetting_(): boolean {
--    return this.browserLayoutPref_?.value !== BrowserLayout.COMPACT;
-+    // helium-fork: the layout is always the sidebar (154 dropped the
-+    // vertical-tabs feature gate this used to read as well).
-+    return true;
-   }
- 
- 
 Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -600,11 +600,14 @@ void AddAppearanceStrings(content::WebUI
-       {"nativeFrameMaterials", IDS_SETTINGS_NATIVE_FRAME_MATERIALS},
+@@ -611,11 +611,14 @@ void AddAppearanceStrings(content::WebUI
        {"nativeFrameMaterialsDescription",
         IDS_SETTINGS_NATIVE_FRAME_MATERIALS_DESCRIPTION},
+       {"layoutPageTitle", IDS_SETTINGS_LAYOUT},
 -      {"browserLayout", IDS_SETTINGS_BROWSER_LAYOUT},
 -      {"browserLayoutClassic", IDS_SETTINGS_BROWSER_LAYOUT_CLASSIC},
 -      {"browserLayoutDynamic", IDS_SETTINGS_BROWSER_LAYOUT_DYNAMIC},
 -      {"browserLayoutCompact", IDS_SETTINGS_BROWSER_LAYOUT_COMPACT},
 -      {"browserLayoutVertical", IDS_SETTINGS_BROWSER_LAYOUT_VERTICAL},
-+      // helium-fork: the browser layout dropdown is gone -- there is one
++      // helium-fork: the browser layout picker is gone -- there is one
 +      // layout, and the address bar mode is the only thing left to pick.
 +      // The IDS_SETTINGS_BROWSER_LAYOUT* strings stay defined so the
 +      // upstream-facing resource file needs no edit.
@@ -199,63 +60,219 @@ Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.
        {"tabStripRightAlign", IDS_SETTINGS_TAB_STRIP_RIGHT_ALIGN},
        {"browserZenMode", IDS_SETTINGS_BROWSER_ZEN_MODE},
        {"browserZenModeDescription", IDS_SETTINGS_BROWSER_ZEN_MODE_DESCRIPTION},
-Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
+Index: src/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
 ===================================================================
---- src.orig/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
-+++ src/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
-@@ -63,14 +63,18 @@ export function getHtml(this: SettingsAp
-         </cr-button>
-       ` : ''}
-     </div>
-+    <!-- helium-fork: the browser has one layout - the sidebar - and the
-+         only choice left is how the address bar behaves. The old
-+         four-way layout dropdown and the separate frameless-mode toggle
-+         (with its two pinning sub-toggles) collapsed into this. -->
-     <div class="cr-row">
-       <div class="flex cr-padded-text" aria-hidden="true">
--        $i18n{browserLayout}
-+        $i18n{addressBarMode}
-       </div>
--      <settings-dropdown-menu id="browserLayout"
--          label="$i18n{browserLayout}"
--          pref-key="helium.browser.layout"
--          .menuOptions="${this.browserLayoutOptions_}">
-+      <settings-dropdown-menu id="addressBarMode"
-+          label="$i18n{addressBarMode}"
-+          pref-key="helium.browser.address_bar_mode"
-+          .menuOptions="${this.addressBarModeOptions_}">
-       </settings-dropdown-menu>
-     </div>
-     <div class="list-frame indented-toggles">
-@@ -80,7 +84,6 @@ export function getHtml(this: SettingsAp
-           label="$i18n{tabStripRightAlign}">
-       </settings-toggle-button>
-       <settings-toggle-button class="hr"
--          ?hidden="${!this.showCenteredLocationBarSetting_()}"
-           pref-key="helium.browser.centered_location_bar"
-           label="$i18n{centeredLocationBar}">
-       </settings-toggle-button>
-@@ -93,23 +96,6 @@ export function getHtml(this: SettingsAp
-           label="$i18n{showProgressBar}">
-       </settings-toggle-button>
-     </div>
+--- src.orig/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
++++ src/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
+@@ -10,23 +10,20 @@ export function getHtml(this: SettingsAp
+   // clang-format off
+   return html`<!--_html_template_start_-->
+ <settings-section page-title="$i18n{layoutPageTitle}">
+-  <settings-radio-group id="browserLayout" is-horizontal
+-      pref-key="helium.browser.layout"
+-      group-aria-label="$i18n{browserLayout}">
+-    ${this.browserLayoutOptions_.map(item => html`
+-      <controlled-radio-button class="browser-layout-option"
+-          name="${item.value}" pref-key="helium.browser.layout"
+-          label="${item.name}" hide-label-text no-extension-indicator>
+-        <div class="browser-layout-preview ${item.preview}"
+-            aria-hidden="true">
+-          <div class="preview-tabs"><div></div><div></div><div></div></div>
+-          <div class="preview-toolbar"></div>
+-          <div class="preview-content"></div>
+-        </div>
+-        <div aria-hidden="true">${item.name}</div>
+-      </controlled-radio-button>
+-    `)}
+-  </settings-radio-group>
++  <!-- helium-fork: the browser has one layout - the sidebar - and the
++       only choice left is how the address bar behaves. The old
++       four-way layout picker and the separate frameless-mode toggle
++       (with its two pinning sub-toggles) collapsed into this. -->
++  <div class="cr-row first">
++    <div class="flex cr-padded-text" aria-hidden="true">
++      $i18n{addressBarMode}
++    </div>
++    <settings-dropdown-menu id="addressBarMode"
++        label="$i18n{addressBarMode}"
++        pref-key="helium.browser.address_bar_mode"
++        .menuOptions="${this.addressBarModeOptions_}">
++    </settings-dropdown-menu>
++  </div>
+   <settings-toggle-button class="hr"
+       ?hidden="${!this.showVerticalSettings_()}"
+       pref-key="helium.browser.vertical_right_aligned"
+@@ -45,7 +42,6 @@ export function getHtml(this: SettingsAp
+       label="$i18n{showVerticalTabsExpandOnHover}">
+   </settings-toggle-button>
+   <settings-toggle-button class="hr"
+-      ?hidden="${!this.showCenteredLocationBarSetting_()}"
+       pref-key="helium.browser.centered_location_bar"
+       label="$i18n{centeredLocationBar}">
+   </settings-toggle-button>
+@@ -57,23 +53,6 @@ export function getHtml(this: SettingsAp
+       pref-key="helium.browser.show_progress_bar"
+       label="$i18n{showProgressBar}">
+   </settings-toggle-button>
+-  <settings-toggle-button class="hr"
+-      pref-key="helium.browser.zen_mode"
+-      label="$i18n{browserZenMode}"
+-      sub-label="$i18n{browserZenModeDescription}">
+-  </settings-toggle-button>
+-  <div class="list-frame indented-toggles"
+-      ?hidden="${!this.zenModePref_?.value}">
 -    <settings-toggle-button class="hr"
--        pref-key="helium.browser.zen_mode"
--        label="$i18n{browserZenMode}"
--        sub-label="$i18n{browserZenModeDescription}">
+-        pref-key="helium.browser.zen_mode_sidebar_pinned"
+-        ?hidden="${!this.showVerticalSettings_()}"
+-        label="$i18n{zenModePinSidebar}">
 -    </settings-toggle-button>
--    <div class="list-frame indented-toggles"
--        ?hidden="${!this.zenModePref_?.value}">
--      <settings-toggle-button class="hr"
--          pref-key="helium.browser.zen_mode_sidebar_pinned"
--          ?hidden="${!this.showVerticalSettings_()}"
--          label="$i18n{zenModePinSidebar}">
--      </settings-toggle-button>
--      <settings-toggle-button class="hr"
--          pref-key="helium.browser.zen_mode_top_chrome_pinned"
--          label="$i18n{zenModePinToolbar}">
--      </settings-toggle-button>
--    </div>
-     <div class="hr" ?hidden="${!this.showHr_(
-         this.pageVisibility_.setTheme, this.pageVisibility_.homeButton)}">
-     </div>
+-    <settings-toggle-button class="hr"
+-        pref-key="helium.browser.zen_mode_top_chrome_pinned"
+-        label="$i18n{zenModePinToolbar}">
+-    </settings-toggle-button>
+-  </div>
+ </settings-section>
+ <!--_html_template_end_-->`;
+   // clang-format on
+Index: src/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
+===================================================================
+--- src.orig/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
++++ src/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
+@@ -3,6 +3,7 @@
+ // the terms of the GPL-3.0 license that can be found in the LICENSE file.
+ 
+ import '../controls/controlled_radio_button.js';
++import '../controls/settings_dropdown_menu.js';
+ import '../controls/settings_radio_group.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+@@ -10,6 +11,7 @@ import '../settings_page/settings_sectio
+ import {PrefServiceObserverMixinLit} from '/shared/settings/prefs2/pref_service_observer_mixin_lit.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ 
++import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
+ import {loadTimeData} from '../i18n_setup.js';
+ 
+ import {getCss} from './appearance_layout_page.css.js';
+@@ -19,17 +21,14 @@ type PrefObject<T> = chrome.settingsPriv
+ 
+ // This must be kept in sync with the HeliumLayoutType enum in
+ // chrome/browser/ui/helium/helium_layout_state_controller.h.
+-enum BrowserLayout {
+-  CLASSIC = 0,
+-  COMPACT = 1,
+-  VERTICAL = 2,
+-  DYNAMIC = 3,
+-}
+-
+-interface BrowserLayoutOption {
+-  value: BrowserLayout;
+-  name: string;
+-  preview: string;
++// helium-fork: this must be kept in sync with the HeliumAddressBarMode enum
++// in chrome/browser/ui/helium/helium_layout_state_controller.h. The browser
++// layout itself is no longer a choice -- it is always the sidebar -- so the
++// HeliumLayoutType mirror that used to live here is gone.
++enum AddressBarMode {
++  DOCKED = 0,
++  HIDDEN = 1,
++  AUTO = 2,
+ }
+ 
+ const SettingsAppearanceLayoutPageElementBase =
+@@ -51,8 +50,7 @@ export class SettingsAppearanceLayoutPag
+ 
+   static override get properties() {
+     return {
+-      browserLayoutPref_: {type: Object},
+-      browserLayoutOptions_: {type: Array},
++      addressBarModeOptions_: {type: Array},
+       showVerticalTabsExpandOnHoverEnabled_: {type: Boolean},
+       zenModePref_: {type: Object},
+       zenModeSidebarPinnedPref_: {type: Object},
+@@ -60,8 +58,6 @@ export class SettingsAppearanceLayoutPag
+     };
+   }
+ 
+-  protected accessor browserLayoutPref_: PrefObject<number>|undefined =
+-      undefined;
+   protected accessor zenModePref_: PrefObject<boolean>|undefined = undefined;
+   protected accessor zenModeSidebarPinnedPref_: PrefObject<boolean>|undefined =
+       undefined;
+@@ -71,26 +67,21 @@ export class SettingsAppearanceLayoutPag
+     value: true,
+   };
+ 
+-  protected accessor browserLayoutOptions_: BrowserLayoutOption[] = [
++  // helium-fork: all three forms of the Arc shell. HIDDEN drops the band
++  // entirely and moves the address entry into the sidebar, so it is only
++  // offerable now that the sidebar has somewhere to put it.
++  protected accessor addressBarModeOptions_: DropdownMenuOptionList = [
+     {
+-      value: BrowserLayout.CLASSIC,
+-      name: loadTimeData.getString('browserLayoutClassic'),
+-      preview: 'classic',
++      value: AddressBarMode.DOCKED,
++      name: loadTimeData.getString('addressBarModeDocked'),
+     },
+     {
+-      value: BrowserLayout.DYNAMIC,
+-      name: loadTimeData.getString('browserLayoutDynamic'),
+-      preview: 'dynamic',
++      value: AddressBarMode.HIDDEN,
++      name: loadTimeData.getString('addressBarModeHidden'),
+     },
+     {
+-      value: BrowserLayout.COMPACT,
+-      name: loadTimeData.getString('browserLayoutCompact'),
+-      preview: 'compact',
+-    },
+-    {
+-      value: BrowserLayout.VERTICAL,
+-      name: loadTimeData.getString('browserLayoutVertical'),
+-      preview: 'vertical',
++      value: AddressBarMode.AUTO,
++      name: loadTimeData.getString('addressBarModeAuto'),
+     },
+   ];
+ 
+@@ -101,19 +92,24 @@ export class SettingsAppearanceLayoutPag
+     super.connectedCallback();
+ 
+     this.mirrorPrefs({
+-      'helium.browser.layout': 'browserLayoutPref_',
+       'helium.browser.zen_mode': 'zenModePref_',
+       'helium.browser.zen_mode_sidebar_pinned': 'zenModeSidebarPinnedPref_',
+     });
+   }
+ 
+   protected showVerticalSettings_(): boolean {
+-    return this.browserLayoutPref_?.value === BrowserLayout.VERTICAL;
++    // helium-fork: the layout is always the sidebar (154 dropped the
++    // vertical-tabs feature gate this used to read as well).
++    return true;
+   }
+ 
+   protected showVerticalTabsExpandOnHoverSetting_(): boolean {
+-    return this.showVerticalTabsExpandOnHoverEnabled_ &&
+-        this.showVerticalSettings_();
++    // helium-fork: Chromium's expand-on-hover (enabled by default since 156,
++    // off on 154) would grow a collapsed strip under the pointer -- the Arc
++    // shell's own edge reveal and Cmd+S cover own that. Kept hidden, as on
++    // 154; `showVerticalTabsExpandOnHoverEnabled_` stays for upstream's
++    // template.
++    return false;
+   }
+ 
+   // The unpinned zen mode sidebar is always expanded while it floats.
+@@ -121,10 +117,6 @@ export class SettingsAppearanceLayoutPag
+     return !!this.zenModePref_?.value &&
+         !this.zenModeSidebarPinnedPref_?.value;
+   }
+-
+-  protected showCenteredLocationBarSetting_(): boolean {
+-    return this.browserLayoutPref_?.value !== BrowserLayout.COMPACT;
+-  }
+ }
+ 
+ declare global {

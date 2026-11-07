@@ -10,7 +10,7 @@ Index: src/chrome/browser/prefs/browser_prefs.cc
  #include "chrome/browser/ui/network_profile_bubble.h"
  #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
  #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
-@@ -1885,6 +1886,7 @@ void RegisterProfilePrefs(user_prefs::Pr
+@@ -1948,6 +1949,7 @@ void RegisterProfilePrefs(user_prefs::Pr
    QuietNotificationPermissionUiState::RegisterProfilePrefs(registry);
    regional_capabilities::prefs::RegisterProfilePrefs(registry);
    browser_shortcuts::prefs::RegisterProfilePrefs(registry);
@@ -22,15 +22,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -606,6 +606,8 @@ static_library("ui") {
-   sources = [
-     "helium/helium_tab_switcher_controller.cc",
-     "helium/helium_tab_switcher_controller.h",
-+    "helium_workspace/workspace_prefs.cc",
-+    "helium_workspace/workspace_prefs.h",
-     "tab_helpers.cc",
-     "tab_helpers.h",
-   ]
+@@ -2316,6 +2316,8 @@ static_library("ui") {
+       "browser_tabstrip.h",
+       "helium/helium_tab_switcher_controller.cc",
+       "helium/helium_tab_switcher_controller.h",
++      "helium_workspace/workspace_prefs.cc",
++      "helium_workspace/workspace_prefs.h",
+     ]
+ 
+     if (enable_dice_support) {
 Index: src/chrome/browser/ui/helium_workspace/workspace_prefs.cc
 ===================================================================
 --- /dev/null

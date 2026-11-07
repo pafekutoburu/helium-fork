@@ -37,7 +37,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -2024,6 +2024,18 @@ are declared in tools/grit/grit_args.gni
+@@ -2021,6 +2021,18 @@ are declared in tools/grit/grit_args.gni
        <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_NEW_FOLDER" desc="Command name shown on the Settings shortcuts page for creating a new folder among the pinned entries of the sidebar.">
          New sidebar folder
        </message>
@@ -56,7 +56,7 @@ Index: src/chrome/app/generated_resources.grd
        <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
          Toggle developer tools
        </message>
-@@ -12437,6 +12449,63 @@ Check your passwords anytime in <ph name
+@@ -12503,6 +12515,63 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
            Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
          </message>
@@ -120,7 +120,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12619,6 +12688,63 @@ Check your passwords anytime in <ph name
+@@ -12694,6 +12763,63 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="In Title Case: Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
            Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
          </message>
@@ -220,7 +220,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -545,7 +545,13 @@ bool BrowserCommandController::IsReserve
+@@ -556,7 +556,13 @@ bool BrowserCommandController::IsReserve
           command_id == IDC_CYCLE_TO_NEXT_TAB ||
           command_id == IDC_CYCLE_TO_PREV_TAB || command_id == IDC_EXIT ||
           command_id == IDC_COPY_OR_INSPECT_SHORTCUT || command_id == IDC_DEV_TOOLS ||
@@ -235,7 +235,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  }
  
  void BrowserCommandController::TabStateChanged() {
-@@ -1564,6 +1570,43 @@ void BrowserCommandController::HandleCom
+@@ -1581,6 +1587,43 @@ void BrowserCommandController::HandleCom
        }
        break;
      }
@@ -279,7 +279,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
      // Hosted App commands
      case IDC_COPY_URL:
        CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
-@@ -2135,6 +2178,16 @@ void BrowserCommandController::InitComma
+@@ -2139,6 +2182,16 @@ void BrowserCommandController::InitComma
                                           normal_window);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_WS_NEW_FOLDER,
                                           normal_window);
@@ -308,7 +308,7 @@ Index: src/chrome/browser/ui/browser_live_tab_context.cc
  #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
  #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
-@@ -178,6 +179,10 @@ std::map<std::string, std::string> Brows
+@@ -206,6 +207,10 @@ std::map<std::string, std::string> Brows
  
    glic::PopulateGlicExtraData(tab_strip_model_->GetTabAtIndex(index),
                                &extra_data);
@@ -370,8 +370,8 @@ Index: src/chrome/browser/ui/browser_tabrestore.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_tabrestore.cc
 +++ src/chrome/browser/ui/browser_tabrestore.cc
-@@ -19,6 +19,7 @@
- #include "chrome/browser/ui/browser.h"
+@@ -18,6 +18,7 @@
+ #include "chrome/browser/sessions/session_service_lookup.h"
  #include "chrome/browser/ui/browser_window.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h"

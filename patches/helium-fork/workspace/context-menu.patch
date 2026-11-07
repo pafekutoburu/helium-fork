@@ -2,7 +2,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -12383,6 +12383,12 @@ Check your passwords anytime in <ph name
+@@ -12449,6 +12449,12 @@ Check your passwords anytime in <ph name
          <message name="IDS_TAB_CXMENU_SOUND_UNMUTE_TAB" desc="The label of the tab context menu item for unmuting one or more tabs. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Unmute tab} other {Unmute tabs}}
          </message>
@@ -15,7 +15,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12520,6 +12526,12 @@ Check your passwords anytime in <ph name
+@@ -12595,6 +12601,12 @@ Check your passwords anytime in <ph name
          <message name="IDS_TAB_CXMENU_SOUND_UNMUTE_TAB" desc="In Title Case: The label of the tab context menu item for unmuting one or more tabs. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Unmute Tab} other {Unmute Tabs}}
          </message>
@@ -236,7 +236,7 @@ Index: src/chrome/browser/ui/tabs/tab_menu_model.cc
  #include "chrome/browser/ui/tabs/split_tab_menu_model.h"
  #include "chrome/browser/ui/tabs/split_tab_swap_menu_model.h"
  #include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
-@@ -495,6 +498,25 @@ void TabMenuModel::Build(int index) {
+@@ -519,6 +522,25 @@ void TabMenuModel::Build(int index) {
        TabStripModel::CommandTogglePinned,
        will_pin ? IDS_TAB_CXMENU_PIN_TAB : IDS_TAB_CXMENU_UNPIN_TAB);
  
@@ -306,7 +306,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
  // Works similarly to base::AutoReset but checks for access from the wrong
  // thread as well as ensuring that the previous value of the re-entrancy guard
  // variable was false.
-@@ -1482,6 +1508,15 @@ void TabStripModel::CloseWebContents(con
+@@ -1389,6 +1415,15 @@ void TabStripModel::CloseWebContents(con
  
    CHECK(contents);
    CHECK_NE(GetIndexOfWebContents(contents), kNoTab);
@@ -322,7 +322,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
    CloseTabs({contents}, close_types);
  }
  
-@@ -2689,6 +2724,29 @@ bool TabStripModel::IsContextMenuCommand
+@@ -2760,6 +2795,29 @@ bool TabStripModel::IsContextMenuCommand
        return false;
      }
  
@@ -352,7 +352,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      case CommandCloseOtherTabs:
      case CommandCloseTabsToLeft:
      case CommandCloseTabsToRight: {
-@@ -2866,6 +2924,36 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -2962,6 +3020,36 @@ void TabStripModel::ExecuteContextMenuCo
        break;
      }
  
@@ -389,7 +389,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      case CommandCloseTab: {
        base::UmaHistogramCounts1000("Tab.ContextMenu.CloseTab.SelectedTabsCount",
                                     selection_model_.size());
-@@ -2928,6 +3016,21 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -3018,6 +3106,21 @@ void TabStripModel::ExecuteContextMenuCo
  
        base::RecordAction(UserMetricsAction("TabContextMenu_TogglePinned"));
  
@@ -411,7 +411,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
        std::vector<int> indices = GetIndicesForCommand(context_index);
        std::vector<tab_groups::TabGroupId> groups_to_delete =
            GetGroupsDestroyedFromRemovingIndices(indices);
-@@ -3425,6 +3528,16 @@ void TabStripModel::ExecuteCloseTabs(
+@@ -3539,6 +3642,16 @@ void TabStripModel::ExecuteCloseTabs(
    ReentrancyCheck::ValidateNotReentrant(&reentrancy_guard_);
    const std::vector<tabs::TabInterface*> tabs_to_close =
        std::move(get_tabs_to_close).Run();
@@ -428,7 +428,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
    if (!tabs_to_close.empty() && !closing_all_ &&
        static_cast<int>(tabs_to_close.size()) == count() &&
        delegate()->IsNormalWindow() &&
-@@ -3501,6 +3614,19 @@ bool TabStripModel::WillContextMenuMuteS
+@@ -3615,6 +3728,19 @@ bool TabStripModel::WillContextMenuMuteS
  
  bool TabStripModel::WillContextMenuPin(int index) {
    std::vector<int> indices = GetIndicesForCommand(index);
@@ -452,7 +452,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -4240,6 +4240,8 @@ if (is_mac) {
+@@ -5844,6 +5844,8 @@ if (is_mac) {
  # tabs, and a window is only ever compared by pointer.
  test("helium_workspace_unittests") {
    sources = [
@@ -579,8 +579,8 @@ Index: src/components/tabs/public/tab_context_menu_command.h
 ===================================================================
 --- src.orig/components/tabs/public/tab_context_menu_command.h
 +++ src/components/tabs/public/tab_context_menu_command.h
-@@ -41,6 +41,7 @@ enum TabContextMenuCommand {
-   CommandGlicUnshare,
+@@ -42,6 +42,7 @@ enum TabContextMenuCommand {
+   CommandToggleFocusGroup,
    CommandDiscard,
    CommandToggleTabMuted,
 +  CommandToggleFavorite,

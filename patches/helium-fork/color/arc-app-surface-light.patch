@@ -15,7 +15,7 @@ Index: src/chrome/browser/ui/color/BUILD.gn
      "chrome_color_mixer.cc",
      "chrome_color_mixer.h",
      "chrome_color_mixers.cc",
-@@ -64,6 +70,7 @@ source_set("mixers") {
+@@ -63,6 +69,7 @@ source_set("mixers") {
      "//ui/base:buildflags",
      "//ui/color",
      "//ui/color:mixers",
@@ -40,8 +40,8 @@ Index: src/chrome/browser/ui/color/material_chrome_color_mixer.cc
  #include "ui/color/color_mixer.h"
  #include "ui/color/color_provider.h"
  #include "ui/color/color_recipe.h"
-@@ -478,8 +480,29 @@ void AddMaterialChromeColorMixer(ui::Col
-       ui::kColorSysOnSurfaceSubtle};
+@@ -533,8 +535,29 @@ void AddMaterialChromeColorMixer(ui::Col
+   }
  
    // Toolbar colors.
 -  mixer[kColorToolbar] = {dark_mode ? ui::kColorFrameActive
@@ -72,3 +72,34 @@ Index: src/chrome/browser/ui/color/material_chrome_color_mixer.cc
    mixer[kColorToolbarButtonBackgroundHighlightedDefault] = {
        ui::kColorSysStateHoverOnSubtle};
    mixer[kColorToolbarButtonBorder] = {ui::kColorSysOutline};
+Index: src/chrome/browser/ui/profiles/profile_colors_util.cc
+===================================================================
+--- src.orig/chrome/browser/ui/profiles/profile_colors_util.cc
++++ src/chrome/browser/ui/profiles/profile_colors_util.cc
+@@ -162,8 +162,25 @@ ProfileThemeColors GetProfileThemeColors
+ ProfileThemeColors GetCurrentProfileThemeColors(
+     const ui::ColorProvider& color_provider,
+     const ThemeService& theme_service) {
++  // helium-fork: Helium 0.20 (#2692) sets the light frame of a built-in theme
++  // to kColorSysBase (white) to match its toolbar
++  // (material_chrome_color_mixer.cc, after the
++  // ShouldApplyChromeMaterialOverrides() guard: no custom theme, normal
++  // contrast). The profile colours are derived from the frame -- the toolbar
++  // avatar's placeholder ring is the highlight's lightness - 0.5, the profile
++  // menu and picker use the rest -- so on 156 the ring went from 154's 105 to
++  // 128. Where that override applies, take the colour it replaced,
++  // kColorSysHeader; a custom theme (ThemeService::GetColorProviderKey's
++  // custom_theme) and high contrast keep kColorFrameActive. Dark mode is not
++  // overridden: there both ids are kColorSysHeader.
++  const bool helium_frame_override =
++      (theme_service.UsingDeviceTheme() || !theme_service.GetThemeSupplier()) &&
++      ui::NativeTheme::GetInstanceForNativeUi()->preferred_contrast() !=
++          ui::NativeTheme::PreferredContrast::kMore;
+   return GetProfileThemeColorsFromHighlightColor(
+-      color_provider, color_provider.GetColor(ui::kColorFrameActive),
++      color_provider,
++      color_provider.GetColor(helium_frame_override ? ui::kColorSysHeader
++                                                    : ui::kColorFrameActive),
+       theme_service.GetUserColor().value_or(SK_ColorTRANSPARENT));
+ }
+ 

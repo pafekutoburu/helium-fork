@@ -2,9 +2,9 @@ Index: src/chrome/browser/prefs/browser_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/prefs/browser_prefs.cc
 +++ src/chrome/browser/prefs/browser_prefs.cc
-@@ -2808,6 +2808,13 @@ void MigrateObsoleteProfilePrefs(PrefSer
-   // Added 08/2026.
-   profile_prefs->ClearPref(kSigninInterceptionIDPCookiesUrl);
+@@ -2890,6 +2890,13 @@ void MigrateObsoleteProfilePrefs(PrefSer
+   profile_prefs->ClearPref(kNtpTabGroupsLastDismissedTime);
+ #endif  // !BUILDFLAG(IS_ANDROID)
  
 +#if !BUILDFLAG(IS_ANDROID)
 +  // helium-fork: pin the profile to the Arc shell and carry zen mode over to
@@ -20,7 +20,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -1509,17 +1509,10 @@ void BrowserCommandController::HandleCom
+@@ -1526,17 +1526,10 @@ void BrowserCommandController::HandleCom
        break;
      }
      case IDC_CTRL_S_SHORTCUT: {
@@ -156,7 +156,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc
 +++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc
-@@ -33,6 +33,11 @@ void RegisterProfilePrefs(user_prefs::Pr
+@@ -36,6 +36,11 @@ void RegisterProfilePrefs(user_prefs::Pr
                                  std::to_underlying(HeliumLayoutType::kClassic));
    registry->RegisterBooleanPref(prefs::kHeliumVerticalRightAligned, false);
    registry->RegisterBooleanPref(prefs::kHeliumZenMode, false);
@@ -168,7 +168,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
    registry->RegisterBooleanPref(prefs::kHeliumZenModeSidebarPinned, false);
    registry->RegisterBooleanPref(prefs::kHeliumZenModeTopChromePinned, false);
  }
-@@ -49,6 +54,39 @@ void MigrateHoverCardMemoryPref(PrefServ
+@@ -52,6 +57,39 @@ void MigrateHoverCardMemoryPref(PrefServ
                            true);
  }
  
@@ -227,7 +227,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -1719,8 +1719,11 @@ float BrowserView::GetSideChromeRevealRa
+@@ -1744,8 +1744,11 @@ float BrowserView::GetSideChromeRevealRa
  }
  
  bool BrowserView::IsZenModeSideChromePinned() const {
@@ -241,37 +241,41 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  }
  
  bool BrowserView::IsZenModeTopChromePinned() const {
-@@ -1881,22 +1884,13 @@ void BrowserView::OnZenModeTopChromePinn
+@@ -1906,25 +1909,14 @@ void BrowserView::OnZenModeTopChromePinn
    InvalidateLayout();
  }
  
 -// Unpinned sidebar floats in zen mode, so we make sure that VTS is usable
--// in that state by expanding it when it's attached, not pinned, and collapsed.
--void BrowserView::MaybeExpandVerticalTabStripForZenMode() {
+-// in that state by keeping it expanded on hover while it floats. This leaves
+-// the collapsed state alone for when the sidebar is pinned again.
+-void BrowserView::UpdateZenModeExpandOnHoverLock() {
 -  const bool vertical_initialized =
 -      vertical_tab_strip_region_view_ &&
 -      vertical_tab_strip_region_view_->GetTabStripView() != nullptr;
 -  if (!zen_mode_enabled_ || IsZenModeSideChromePinned() ||
 -      !ShouldDrawVerticalTabStrip() || !vertical_initialized) {
+-    zen_expand_on_hover_lock_.reset();
 -    return;
 -  }
 -
--  auto* controller = tabs::VerticalTabStripStateController::From(browser_);
--  if (controller && controller->IsCollapsed()) {
--    controller->RequestCollapse(false);
+-  if (!zen_expand_on_hover_lock_) {
+-    zen_expand_on_hover_lock_ =
+-        vertical_tab_strip_region_view_->GetExpandOnHoverLock(
+-            ExpandOnHoverLockType::kKeepExpanded);
 -  }
 -}
-+// helium-fork: obsolete. It existed because zen mode used to hide the sidebar
-+// along with the toolbar, which left a collapsed strip unreachable. The
-+// address bar mode governs the band only, so a collapsed sidebar in zen is
-+// exactly a collapsed sidebar anywhere else -- reachable by Cmd+S and by the
-+// edge reveal -- and force-expanding it here would throw away the state the
-+// user chose before entering zen.
-+void BrowserView::MaybeExpandVerticalTabStripForZenMode() {}
++// helium-fork: obsolete (it replaced MaybeExpandVerticalTabStripForZenMode,
++// which the fork emptied for the same reason). It existed because zen mode
++// used to hide the sidebar along with the toolbar, which left a collapsed
++// strip unreachable. The address bar mode governs the band only, so a
++// collapsed sidebar in zen is exactly a collapsed sidebar anywhere else --
++// reachable by Cmd+S and by the edge reveal -- and holding it expanded here
++// would override the state the user chose before entering zen.
++void BrowserView::UpdateZenModeExpandOnHoverLock() {}
  
  void BrowserView::UpdateZenModeState() {
    const bool zen_mode_enabled = IsZenModeEnabled();
-@@ -2144,11 +2138,12 @@ bool BrowserView::IsZenModeEnabled() con
+@@ -2172,11 +2164,12 @@ bool BrowserView::IsZenModeEnabled() con
  }
  
  bool BrowserView::IsSidebarHiddenModeActive() const {
@@ -289,7 +293,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
        !ShouldDrawVerticalTabStrip()) {
      return false;
    }
-@@ -2160,12 +2155,11 @@ bool BrowserView::IsSidebarHiddenModeAct
+@@ -2188,12 +2181,11 @@ bool BrowserView::IsSidebarHiddenModeAct
  void BrowserView::OnSidebarCollapseStateChanged(
      tabs::VerticalTabStripCollapseState state) {
    // helium-fork: keep the reveal ratio in step with the collapse state so the
@@ -307,7 +311,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
    if (state == tabs::VerticalTabStripCollapseState::kExpanded) {
-@@ -2184,10 +2178,11 @@ void BrowserView::OnSidebarCollapseState
+@@ -2212,10 +2204,11 @@ void BrowserView::OnSidebarCollapseState
  
  bool BrowserView::MaybeHandleSidebarCollapseRequest(bool collapse) {
    // helium-fork: choreographs the hidden-sidebar toggle. Returns false to let
@@ -352,7 +356,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
-@@ -241,6 +241,11 @@ OmniboxViewViews::OmniboxViewViews(bool
+@@ -242,6 +242,11 @@ OmniboxViewViews::OmniboxViewViews(bool
      pref_change_registrar_.Add(
          prefs::kHeliumMinimalLocationBar,
          base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
@@ -364,7 +368,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_view_views.cc
      pref_change_registrar_.Add(
          omnibox::kPreventUrlElisionsInOmnibox,
          base::BindRepeating(&OmniboxViewViews::Update, base::Unretained(this)));
-@@ -959,8 +964,13 @@ void OmniboxViewViews::UpdateSteadyState
+@@ -988,8 +993,13 @@ void OmniboxViewViews::UpdateSteadyState
    if (controller()->edit_model()->focus_state() == OMNIBOX_FOCUS_NONE &&
        !controller()->edit_model()->user_input_in_progress() &&
        location_bar_view_ && location_bar_view_->GetProfile()) {

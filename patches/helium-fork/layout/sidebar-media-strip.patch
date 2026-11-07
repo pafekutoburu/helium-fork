@@ -2,26 +2,26 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -613,6 +613,7 @@ static_library("ui") {
-     "helium/arc_card_layout.h",
-     "helium/arc_favorite_accent.h",
-     "helium/arc_loading_bar.h",
-+    "helium/arc_media_strip.h",
-     "helium/arc_minimal_field_state.h",
-     "helium/arc_omnibox_panel.h",
-     "helium/arc_sidebar_surface.h",
-@@ -2657,6 +2658,10 @@ static_library("ui") {
-       "views/tab_search_bubble_host.h",
+@@ -2323,6 +2323,7 @@ static_library("ui") {
+       "helium/arc_card_layout.h",
+       "helium/arc_favorite_accent.h",
+       "helium/arc_loading_bar.h",
++      "helium/arc_media_strip.h",
+       "helium/arc_minimal_field_state.h",
+       "helium/arc_omnibox_panel.h",
+       "helium/arc_sidebar_surface.h",
+@@ -3596,6 +3597,10 @@ static_library("ui") {
+       "views/helium/native_frame_materials.h",
        "views/tabs/switcher/tab_switcher_hud_view.cc",
        "views/tabs/switcher/tab_switcher_hud_view.h",
 +      "views/tabs/vertical/helium_media_strip_controller.cc",
 +      "views/tabs/vertical/helium_media_strip_controller.h",
 +      "views/tabs/vertical/helium_media_strip_view.cc",
 +      "views/tabs/vertical/helium_media_strip_view.h",
-       "views/web_apps/create_shortcut_confirmation_view.cc",
-       "views/web_apps/create_shortcut_confirmation_view.h",
-       "views/web_apps/frame_toolbar/web_app_frame_toolbar_view.cc",
-@@ -4274,6 +4279,8 @@ test("helium_workspace_unittests") {
+     ]
+ 
+     sources += get_target_outputs(":webui_name_variants")
+@@ -5877,6 +5882,8 @@ test("helium_workspace_unittests") {
      "helium/arc_favorite_accent_unittest.cc",
      "helium/arc_loading_bar.h",
      "helium/arc_loading_bar_unittest.cc",
@@ -583,21 +583,24 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -36,11 +36,13 @@
+@@ -39,12 +39,16 @@
  #include "chrome/browser/ui/views/frame/browser_view.h"
  #include "chrome/browser/ui/view_ids.h"
  #include "chrome/browser/ui/views/frame/custom_corners_background.h"
 +#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
+ #include "chrome/browser/ui/views/frame/frame_separator.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
++#include "chrome/browser/ui/views/frame/helium_card_shadow_view.h"
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
  #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
- #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
  #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
  #include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
++#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
  #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
-@@ -51,6 +53,10 @@
+@@ -56,6 +60,10 @@
  #include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h"
@@ -608,7 +611,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
  #include "chrome/grit/generated_resources.h"
  #include "components/tabs/public/tab_group.h"
-@@ -96,6 +102,7 @@ constexpr ShadowFrameView::ShadowAlpha k
+@@ -102,6 +110,7 @@ constexpr ShadowFrameView::ShadowAlpha k
       .light_ambient = 0.0,
       .dark_key = 0.6,
       .dark_ambient = 0.0});
@@ -616,7 +619,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  }  // namespace
  
  DEFINE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(VerticalTabStripRegionView,
-@@ -150,10 +157,17 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -177,10 +186,17 @@ VerticalTabStripRegionView::VerticalTabS
    arc_address_row_->SetPaintToLayer();
    arc_address_row_->layer()->SetFillsBoundsOpaquely(false);
    arc_address_row_->layer()->SetMasksToBounds(true);
@@ -634,9 +637,9 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +          GetLayoutConstant(LayoutConstant::kVerticalTabFavoriteGridGap),
 +          region_horizontal_padding));
  
-   bottom_button_container_ =
-       AddChildView(std::make_unique<VerticalTabStripBottomContainer>(
-@@ -170,6 +184,47 @@ VerticalTabStripRegionView::VerticalTabS
+   bottom_button_container_ = content_area_view_->AddChildView(
+       std::make_unique<VerticalTabStripBottomContainer>(
+@@ -197,6 +213,51 @@ VerticalTabStripRegionView::VerticalTabS
        gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
                          0, region_horizontal_padding));
  
@@ -653,13 +656,17 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +      browser_view->browser(),
 +      base::BindRepeating(&VerticalTabStripRegionView::OnMediaStripModelChanged,
 +                          base::Unretained(this)));
-+  media_scrim_ = AddChildView(std::make_unique<HeliumMediaScrimView>());
++  // 156: the scrim and the strip's shadow sit between the bottom container and
++  // the strip in paint order, so they are content-area children too (ignored
++  // by its layout) -- region children would stack above every row.
++  media_scrim_ = content_area_view_->AddChildView(std::make_unique<HeliumMediaScrimView>());
 +  media_scrim_->SetProperty(views::kViewIgnoredByLayoutKey, true);
-+  media_strip_shadow_ = AddChildView(std::make_unique<HeliumCardShadowView>());
++  media_strip_shadow_ = content_area_view_->AddChildView(
++      std::make_unique<HeliumCardShadowView>());
 +  media_strip_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
 +  media_strip_shadow_->SetShadowCornerRadius(helium::kMediaStripCornerRadius);
 +  media_strip_shadow_->SetVisible(false);
-+  media_strip_ = AddChildView(std::make_unique<HeliumMediaStripView>(
++  media_strip_ = content_area_view_->AddChildView(std::make_unique<HeliumMediaStripView>(
 +      media_strip_controller_.get(),
 +      base::BindRepeating(
 +          [](VerticalTabStripRegionView* region) {
@@ -681,10 +688,10 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +  media_overlay_stack_->SetProperty(views::kViewIgnoredByLayoutKey, true);
 +  media_overlay_stack_->SetVisible(false);
 +
-   gemini_button_ = AddChildView(std::make_unique<views::View>());
+   gemini_button_ =
+       content_area_view_->AddChildView(std::make_unique<views::View>());
  
-   resize_area_ = AddChildView(std::make_unique<views::ResizeArea>(this));
-@@ -206,12 +261,52 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -237,11 +298,51 @@ VerticalTabStripRegionView::VerticalTabS
          std::make_unique<VerticalTabStripFocusSwipeController>(this);
    }
  
@@ -728,7 +735,6 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +  media_strip_panel_->SetShadowFrame(media_strip_panel_shadow_);
 +
    SetNotifyEnterExitOnChild(true);
-   UpdateColors();
    UpdateInteriorMargin();
  }
  
@@ -737,7 +743,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    for (const auto& lock : hover_locks_) {
      lock->ClearRegionViewOnDestruction();
    }
-@@ -294,6 +389,17 @@ bool VerticalTabStripRegionView::IsPosit
+@@ -324,6 +425,17 @@ bool VerticalTabStripRegionView::IsPosit
      return false;
    }
  
@@ -755,26 +761,45 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (IsHitInView(bottom_button_container_, point)) {
      gfx::Point point_in_child = point;
      views::View::ConvertPointToTarget(this, bottom_button_container_,
-@@ -315,6 +421,15 @@ bool VerticalTabStripRegionView::IsPosit
-     if (!child->GetVisible()) {
-       continue;
-     }
-+    // helium-fork: card shadows overhang their cards on every side (the view
-+    // is the card outset by the blur reach), and the media scrim spans the
-+    // sidebar's width over the empty stretch. Both are decoration --
-+    // treating them as UI here would eat the window-drag area around every
-+    // floating card.
-+    if (views::IsViewClass<HeliumCardShadowView>(child) ||
-+        views::IsViewClass<HeliumMediaScrimView>(child)) {
-+      continue;
-+    }
+@@ -340,15 +452,28 @@ bool VerticalTabStripRegionView::IsPosit
+     return arc_top_container_->IsPositionInWindowCaption(point_in_child);
+   }
  
-     gfx::Point point_in_child = point;
-     views::View::ConvertPointToTarget(this, child, &point_in_child);
-@@ -452,6 +567,34 @@ void VerticalTabStripRegionView::Layout(
++  // helium-fork: card shadows overhang their cards on every side (the view
++  // is the card outset by the blur reach), and the media scrim spans the
++  // sidebar's width over the empty stretch. Both are decoration --
++  // treating them as UI here would eat the window-drag area around every
++  // floating card. (156: they sit among this view's children and the content
++  // area's, so both loops skip them.)
++  const auto is_decoration = [](const views::View* view) {
++    return views::IsViewClass<HeliumCardShadowView>(view) ||
++           views::IsViewClass<HeliumMediaScrimView>(view);
++  };
++
+   // For any of the other children, absorb the click as non window caption.
+   for (views::View* child : children()) {
+     if (child == content_area_view_) {
+       for (views::View* grandchild : child->children()) {
+-        if (grandchild->GetVisible() && IsHitInView(grandchild, point)) {
++        if (!is_decoration(grandchild) && grandchild->GetVisible() &&
++            IsHitInView(grandchild, point)) {
+           return false;
+         }
+       }
+-    } else if (child->GetVisible() && IsHitInView(child, point)) {
++    } else if (!is_decoration(child) && child->GetVisible() &&
++               IsHitInView(child, point)) {
+       return false;
+     }
+   }
+@@ -548,6 +673,38 @@ void VerticalTabStripRegionView::Layout(
        gfx::Rect(resize_area_x, 0, resize_area_width_, bounds().height()));
    shadow_frame_->SetBoundsRect(GetLocalBounds());
  
++  // helium-fork: the Arc shell's region math reads content-area children's
++  // bounds as this view's coordinates; that holds because UpdateInteriorMargin
++  // leaves interior_margin_ empty and the organizer panel is off.
++  DCHECK_EQ(content_area_view_->origin(), gfx::Point());
 +  // Lazy injection: TabStripView (and its containers) may not exist yet at
 +  // construction time. Re-calling is a cheap resync.
 +  if (active_row_shadow_ && tab_strip_view()) {
@@ -806,7 +831,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // Ensure that we update the drop arrow position so that it does not render in
    // the collapsed state when expand on hover is active.
    if (drop_arrow()) {
-@@ -459,6 +602,263 @@ void VerticalTabStripRegionView::Layout(
+@@ -555,6 +712,263 @@ void VerticalTabStripRegionView::Layout(
    }
  }
  
@@ -1070,7 +1095,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  views::View* VerticalTabStripRegionView::GetDefaultFocusableChild() {
    tabs::TabInterface* active_tab = tab_strip_model()->GetActiveTab();
    if (active_tab) {
-@@ -541,10 +941,16 @@ void VerticalTabStripRegionView::OnMouse
+@@ -637,10 +1051,16 @@ void VerticalTabStripRegionView::OnMouse
      mouse_exit_timer_.Stop();
    }
    UpdateExpandOnHoverState(true);
@@ -1086,12 +1111,12 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +  OnMediaStripPointerLeft();
  }
  
- void VerticalTabStripRegionView::HandleMouseExited() {
+ void VerticalTabStripRegionView::SetOrganizerPanelView(
 Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -33,8 +33,13 @@
+@@ -37,8 +37,13 @@
  
  class ArcSidebarTopContainer;
  class BrowserView;
@@ -1105,7 +1130,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class ShadowFrameView;
  
  namespace tabs {
-@@ -120,6 +125,7 @@ class VerticalTabStripRegionView final
+@@ -141,6 +146,7 @@ class VerticalTabStripRegionView final
    void OnMouseEntered(const ui::MouseEvent& event) override;
    void OnMouseMoved(const ui::MouseEvent& event) override;
    void OnMouseExited(const ui::MouseEvent& event) override;
@@ -1113,7 +1138,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  
    std::unique_ptr<ExpandOnHoverLock> GetExpandOnHoverLock(
        ExpandOnHoverLockType lock_type) override;
-@@ -260,6 +266,65 @@ class VerticalTabStripRegionView final
+@@ -300,6 +306,65 @@ class VerticalTabStripRegionView final
    raw_ptr<views::View> arc_address_row_ = nullptr;
    raw_ptr<VerticalTabStripBottomContainer> bottom_button_container_ = nullptr;
    raw_ptr<views::View> gemini_button_ = nullptr;

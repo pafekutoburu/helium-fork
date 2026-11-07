@@ -2,7 +2,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -12485,6 +12485,18 @@ Check your passwords anytime in <ph name
+@@ -12551,6 +12551,18 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_SPACE_MENU_CHANGE_ICON" desc="The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that opens the emoji / icon picker for the space's icon.">
            Change Space Icon…
          </message>
@@ -21,7 +21,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_HELIUM_WS_SPACE_FORM_TITLE" desc="Title of the in-sidebar form that creates a new sidebar space.">
            Create a Space
          </message>
-@@ -12790,6 +12802,18 @@ Check your passwords anytime in <ph name
+@@ -12865,6 +12877,18 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_SPACE_MENU_CHANGE_ICON" desc="In Title Case: The label of the menu item on a sidebar space's header row (and on its icon in the bottom bar) that opens the emoji / icon picker for the space's icon.">
            Change Space Icon…
          </message>
@@ -44,7 +44,7 @@ Index: src/chrome/app/vector_icons/BUILD.gn
 ===================================================================
 --- src.orig/chrome/app/vector_icons/BUILD.gn
 +++ src/chrome/app/vector_icons/BUILD.gn
-@@ -160,6 +160,7 @@ aggregate_vector_icons("chrome_vector_ic
+@@ -162,6 +162,7 @@ aggregate_vector_icons("chrome_vector_ic
      "hardware_computer_old.icon",
      "hardware_computer_small_custom.icon",
      "hardware_smartphone_old.icon",
@@ -77,7 +77,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -2638,6 +2638,8 @@ static_library("ui") {
+@@ -3625,6 +3625,8 @@ static_library("ui") {
        "views/frame/helium_space_icon_picker_view.h",
        "views/tabs/vertical/helium_space_create_form_view.cc",
        "views/tabs/vertical/helium_space_create_form_view.h",
@@ -86,7 +86,7 @@ Index: src/chrome/browser/ui/BUILD.gn
        "views/frame/helium_sidebar_submenu_view.cc",
        "views/frame/helium_sidebar_submenu_view.h",
        "views/frame/horizontal_tab_strip_region_view.cc",
-@@ -4341,6 +4343,8 @@ test("helium_workspace_unittests") {
+@@ -5944,6 +5946,8 @@ test("helium_workspace_unittests") {
      "helium/arc_sidebar_surface_unittest.cc",
      "helium/arc_space_form.h",
      "helium/arc_space_form_unittest.cc",
@@ -619,7 +619,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  
  #include <algorithm>
  #include <optional>
-@@ -939,6 +941,13 @@ void VerticalTabStripRegionView::OnCurre
+@@ -1035,6 +1037,13 @@ void VerticalTabStripRegionView::OnCurre
    // slide (its label's subpixel text goes greyscale for those 180ms: a
    // non-opaque layer cannot carry LCD text, label.cc). Set up before the
    // strip starts so the first frame's transform reaches it too.
@@ -633,7 +633,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (TabStripView* const strip = tab_strip_view()) {
      if (const auto* controller = helium_workspace::WorkspaceTabController::From(
              browser_view()->browser())) {
-@@ -1114,12 +1123,39 @@ void VerticalTabStripRegionView::ShowSpa
+@@ -1210,12 +1219,39 @@ void VerticalTabStripRegionView::ShowSpa
                            base::Unretained(this)),
        base::BindRepeating(&VerticalTabStripRegionView::OnCreateFormPickIcon,
                            base::Unretained(this)));
@@ -676,7 +676,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    CloseSidebarSheet();
    // Right after the address row, before the tab strip: the flex layout
    // runs children in order, and the sheet takes all the height the hidden
-@@ -1135,7 +1171,7 @@ void VerticalTabStripRegionView::ShowSid
+@@ -1234,7 +1270,7 @@ void VerticalTabStripRegionView::ShowSid
        views::kFlexBehaviorKey,
        views::FlexSpecification(views::MinimumFlexSizeRule::kPreferred,
                                 views::MaximumFlexSizeRule::kUnbounded));
@@ -685,12 +685,12 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    InvalidateLayout();
  }
  
-@@ -1149,12 +1185,14 @@ void VerticalTabStripRegionView::CloseSi
+@@ -1248,12 +1284,14 @@ void VerticalTabStripRegionView::CloseSi
    views::View* const sheet = sheet_;
    sheet_ = nullptr;
    create_form_ = nullptr;
 +  manage_view_ = nullptr;
-   RemoveChildViewT(sheet);
+   content_area_view_->RemoveChildViewT(sheet);
 -  ApplySheetVisibility(/*sheet_shown=*/false);
 +  ApplySheetVisibility(SidebarSheetKind::kNone);
    InvalidateLayout();
@@ -702,7 +702,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // Arc g18: everything below the top row goes -- the address row, the
    // favorites, the head row, the lists, New Tab -- and the bar changes
    // shape. SetVisible rather than a cover: an invisible child is neither
-@@ -1178,7 +1216,13 @@ void VerticalTabStripRegionView::ApplySh
+@@ -1277,7 +1315,13 @@ void VerticalTabStripRegionView::ApplySh
      undo_bar_->Dismiss();
    }
    if (space_bar_) {
@@ -717,7 +717,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    }
    UpdateMediaStripVisibility();
    if (shown && tab_strip_view()) {
-@@ -1218,6 +1262,84 @@ void VerticalTabStripRegionView::OnCreat
+@@ -1317,6 +1361,84 @@ void VerticalTabStripRegionView::OnCreat
    CloseSidebarSheet();
  }
  
@@ -802,7 +802,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  void VerticalTabStripRegionView::OnCreateFormPickIcon(views::View* anchor,
                                                        const std::string& icon) {
    BrowserView* const view = browser_view();
-@@ -1967,6 +2089,16 @@ void VerticalTabStripRegionView::OnColla
+@@ -2120,6 +2242,16 @@ void VerticalTabStripRegionView::OnColla
      if (HeliumSidebarMenuView* const menu = browser_view()->helium_sidebar_menu()) {
        menu->HideForSidebarFold();
      }
@@ -823,7 +823,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -43,6 +43,8 @@ class VerticalTabStripBottomContainer;
+@@ -47,6 +47,8 @@ class VerticalTabStripBottomContainer;
  class VerticalTabStripFocusSwipeController;
  class HeliumCardShadowView;
  class HeliumSpaceCreateFormView;
@@ -832,7 +832,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class HeliumViewSnapshotLayer;
  class WorkspaceEntryDragOverlay;
  class ShadowFrameView;
-@@ -101,6 +103,9 @@ class VerticalTabStripRegionView final
+@@ -107,6 +109,9 @@ class VerticalTabStripRegionView final
    // the top row stays (⛔ ←/→/⟳) and the bottom bar changes shape.
    // CloseSidebarSheet puts everything back.
    void ShowSpaceCreateForm();
@@ -842,7 +842,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    void CloseSidebarSheet();
    bool HasSidebarSheet() const { return sheet_ != nullptr; }
    // Whether the space carousel is mid-slide (an anchor taken through
-@@ -350,6 +355,7 @@ class VerticalTabStripRegionView final
+@@ -390,6 +395,7 @@ class VerticalTabStripRegionView final
    // M6 轮2: the sheet in the lists' place, and the form when it is one.
    raw_ptr<views::View> sheet_ = nullptr;
    raw_ptr<HeliumSpaceCreateFormView> create_form_ = nullptr;
@@ -850,7 +850,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    raw_ptr<HeliumMediaStripView> media_strip_ = nullptr;
    raw_ptr<HeliumMediaStripExpandedView> media_strip_panel_ = nullptr;
    // The strip's and the panel's floating-card shadows: sibling
-@@ -400,9 +406,25 @@ class VerticalTabStripRegionView final
+@@ -440,9 +446,25 @@ class VerticalTabStripRegionView final
  
    void OnMediaStripModelChanged();
    void UpdateMediaStripVisibility();
@@ -903,7 +903,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
 +++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
-@@ -277,6 +277,7 @@ class WorkspaceSidebarView : public view
+@@ -276,6 +276,7 @@ class WorkspaceSidebarView : public view
    void OnSpaceNewFolderRequested(const std::string& space_id) override;
    void OnSpaceDeleteRequested(const std::string& space_id) override;
    void OnSpaceChangeIconRequested(const std::string& space_id) override;

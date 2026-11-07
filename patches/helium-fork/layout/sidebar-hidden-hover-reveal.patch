@@ -2,9 +2,9 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -1737,6 +1737,10 @@ void BrowserView::OnVerticalTabStripMode
-     horizontal_tab_strip_region_view_->InitializeTabStrip();
+@@ -1815,6 +1815,10 @@ void BrowserView::OnVerticalTabStripMode
    }
+   UpdateZenModeExpandOnHoverLock();
  
 +  // helium-fork: the hidden sidebar mode's hover monitor follows the
 +  // vertical-vs-horizontal switch.
@@ -13,7 +13,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    GetFrameView()->OnTabStripStateChanged();
  
    UpdateTabSearchBubbleHost();
-@@ -1883,7 +1887,9 @@ void BrowserView::UpdateZenModeState() {
+@@ -1965,7 +1969,9 @@ void BrowserView::UpdateZenModeState() {
  }
  
  void BrowserView::UpdateZenModeEventMonitor() {
@@ -24,7 +24,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      zen_mode_event_monitor_.reset();
      return;
    }
-@@ -1925,7 +1931,7 @@ bool BrowserView::IsLeavingZenSideGap(co
+@@ -2007,7 +2013,7 @@ bool BrowserView::IsLeavingZenSideGap(co
  }
  
  void BrowserView::UpdateZenModeRevealFromCursor() {
@@ -33,7 +33,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
  
-@@ -1971,7 +1977,7 @@ void BrowserView::UpdateZenModeRevealFro
+@@ -2053,7 +2059,7 @@ void BrowserView::UpdateZenModeRevealFro
  }
  
  void BrowserView::UpdateZenModeReveal(bool reveal_top, bool reveal_side) {
@@ -42,7 +42,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
  
-@@ -2014,15 +2020,20 @@ void BrowserView::UpdateZenModeReveal(bo
+@@ -2096,15 +2102,20 @@ void BrowserView::UpdateZenModeReveal(bo
      }
    }
  
@@ -70,7 +70,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    }
  
    if (reveal_side) {
-@@ -2082,6 +2093,12 @@ void BrowserView::OnSidebarCollapseState
+@@ -2169,6 +2180,12 @@ void BrowserView::OnSidebarCollapseState
    } else {
      zen_side_chrome_animation_.Reset(0);
    }
@@ -83,7 +83,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    InvalidateLayout();
  }
  
-@@ -6695,13 +6712,14 @@ void BrowserView::OnWillChangeFocus(View
+@@ -6905,13 +6922,14 @@ void BrowserView::OnWillChangeFocus(View
  }
  void BrowserView::OnDidChangeFocus(View* focused_before, View* focused_now) {
    UpdateAccessibleNameForRootView();

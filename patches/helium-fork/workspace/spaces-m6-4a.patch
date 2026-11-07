@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -4352,6 +4352,8 @@ test("helium_workspace_unittests") {
+@@ -5955,6 +5955,8 @@ test("helium_workspace_unittests") {
      "helium/arc_space_form_unittest.cc",
      "helium/arc_space_manage.h",
      "helium/arc_space_manage_unittest.cc",
@@ -488,7 +488,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    // SwitchToSpace with an explicit slide direction (Next/Prev wrapping
    // around the ends still slide their own way).
    void SwitchToSpaceInternal(const std::string& space_id, int direction);
-@@ -567,10 +596,11 @@ class WorkspaceTabController : public Ta
+@@ -566,10 +595,11 @@ class WorkspaceTabController : public Ta
    std::string turn_undo_origin_space_id_;
    std::vector<std::string> turn_undo_children_;
    std::vector<tabs::TabHandle> turn_undo_tabs_;
@@ -515,15 +515,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
  #include "base/task/sequenced_task_runner.h"
  #include "chrome/browser/ui/helium/arc_space_form.h"
-@@ -99,6 +102,7 @@
- #include "ui/views/layout/flex_layout.h"
- #include "ui/views/layout/flex_layout_types.h"
- #include "ui/views/layout/layout_types.h"
-+#include "ui/views/layout/proposed_layout.h"
- #include "ui/views/view.h"
- #include "ui/views/view_class_properties.h"
- #include "ui/views/view_utils.h"
-@@ -289,7 +293,11 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -323,7 +326,11 @@ VerticalTabStripRegionView::VerticalTabS
            base::Unretained(this)),
        base::BindRepeating(
            &VerticalTabStripRegionView::OnSpaceSwitchSettledForToday,
@@ -535,7 +527,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    space_bar_->SetProperty(
        views::kMarginsKey,
        gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
-@@ -693,6 +701,10 @@ void VerticalTabStripRegionView::AddedTo
+@@ -732,6 +739,10 @@ void VerticalTabStripRegionView::AddedTo
  }
  
  void VerticalTabStripRegionView::RemovedFromWidget() {
@@ -546,7 +538,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (GetFocusManager()) {
      GetFocusManager()->RemoveFocusChangeListener(&focus_listener_);
    }
-@@ -925,6 +937,10 @@ void VerticalTabStripRegionView::Layout(
+@@ -1021,6 +1032,10 @@ void VerticalTabStripRegionView::Layout(
  void VerticalTabStripRegionView::OnBoundsChanged(
      const gfx::Rect& previous_bounds) {
    BaseTabStripRegionView::OnBoundsChanged(previous_bounds);
@@ -557,7 +549,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // The strip's width gate (helium::kMediaStripMinWidth) rides the sidebar's
    // drag-resize and collapse, both of which land here.
    UpdateMediaStripVisibility();
-@@ -958,31 +974,8 @@ void VerticalTabStripRegionView::OnCurre
+@@ -1054,31 +1069,8 @@ void VerticalTabStripRegionView::OnCurre
        today && !today->IsDragging()) {
      today->SnapLayoutToTarget();
    }
@@ -591,7 +583,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  }
  
  void VerticalTabStripRegionView::OnSpaceSwitchSettledForToday() {
-@@ -1001,56 +994,109 @@ void VerticalTabStripRegionView::OnSpace
+@@ -1097,56 +1089,109 @@ void VerticalTabStripRegionView::OnSpace
  }
  
  void VerticalTabStripRegionView::OnCurrentSpaceWillChange(int direction) {
@@ -736,7 +728,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    for (HeliumCardShadowView* shadow :
         {pinned_row_shadow_.get(), active_row_shadow_.get()}) {
      if (shadow && shadow->layer()) {
-@@ -1114,8 +1160,7 @@ void VerticalTabStripRegionView::ShowUnd
+@@ -1210,8 +1255,7 @@ void VerticalTabStripRegionView::ShowUnd
  }
  
  bool VerticalTabStripRegionView::IsListSliding() const {
@@ -746,7 +738,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  }
  
  void VerticalTabStripRegionView::ShowSpaceCreateForm() {
-@@ -1170,6 +1215,10 @@ void VerticalTabStripRegionView::ShowSpa
+@@ -1266,6 +1310,10 @@ void VerticalTabStripRegionView::ShowSpa
  void VerticalTabStripRegionView::ShowSidebarSheet(
      std::unique_ptr<views::View> sheet,
      SidebarSheetKind kind) {
@@ -757,7 +749,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    CloseSidebarSheet();
    // Right after the address row, before the tab strip: the flex layout
    // runs children in order, and the sheet takes all the height the hidden
-@@ -2135,6 +2184,11 @@ void VerticalTabStripRegionView::OnColla
+@@ -2288,6 +2336,11 @@ void VerticalTabStripRegionView::OnColla
    if (collapsed && manage_view_) {
      manage_view_->AbortDrag();
    }
@@ -773,36 +765,37 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -5,7 +5,10 @@
+@@ -5,8 +5,11 @@
  #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_VERTICAL_TAB_STRIP_REGION_VIEW_H_
  #define CHROME_BROWSER_UI_VIEWS_FRAME_VERTICAL_TAB_STRIP_REGION_VIEW_H_
  
 +#include <map>
+ #include <memory>
  #include <optional>
 +#include <string>
 +#include <vector>
  
  #include "base/callback_list.h"
  #include "base/containers/flat_set.h"
-@@ -20,6 +23,7 @@
+@@ -21,6 +24,7 @@
  #include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
  #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
  #include "chrome/browser/ui/views/frame/base_tab_strip_region_view.h"
 +#include "chrome/browser/ui/views/tabs/common/space_carousel.h"
  #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
  #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
- #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
-@@ -70,7 +74,8 @@ class VerticalTabStripRegionView final
-     : public BaseTabStripRegionView,
-       public views::ResizeAreaDelegate,
+ #include "chrome/browser/ui/views/tabs/organizer/organizer_panel_host.h"
+@@ -76,7 +80,8 @@ class VerticalTabStripRegionView final
        public OmniboxTabHelper::Observer,
--      public tabs::VerticalTabStripStateController::Delegate {
-+      public tabs::VerticalTabStripStateController::Delegate,
+       public tabs::VerticalTabStripStateController::Delegate,
+       public OrganizerPanelHost,
+-      public views::LayoutDelegate {
++      public views::LayoutDelegate,
 +      public SpaceCarousel::Delegate {
    METADATA_HEADER(VerticalTabStripRegionView, BaseTabStripRegionView)
  
   public:
-@@ -383,12 +388,12 @@ class VerticalTabStripRegionView final
+@@ -423,12 +428,12 @@ class VerticalTabStripRegionView final
    // M6-r4: the two row shadows' host. Its layer masks to the strip's
    // x-range widened by the shadow's own overhang and the region's full
    // height (Layout), so a shadow riding the space carousel is clipped where
@@ -820,7 +813,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    // 3a-r1: the press metric of the strip's own "+ New Tab" row (the bottom
    // container wires its copy itself).
    base::CallbackListSubscription new_tab_row_pressed_subscription_;
-@@ -446,17 +451,25 @@ class VerticalTabStripRegionView final
+@@ -486,17 +491,25 @@ class VerticalTabStripRegionView final
    // M6: the window switched space; the Today list reads the current space
    // from the controller, so it just needs a fresh layout.
    void OnCurrentSpaceChangedForToday();
@@ -857,7 +850,7 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
 +++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -81,6 +81,10 @@ source_set("impl") {
+@@ -89,6 +89,10 @@ source_set("impl") {
      # rather than ":common" because they need the complete WorkspaceService
      # type, which is in //chrome/browser/ui -- a dependency ":common" cannot
      # take without a cycle.
@@ -1441,7 +1434,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -190,8 +190,7 @@ class TabStripView::TargetViewsTracker :
+@@ -192,8 +192,7 @@ class TabStripView::TargetViewsTracker :
  };
  
  TabStripView::TabStripView(TabCollectionNode* collection_node)
@@ -1451,7 +1444,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
        target_views_tracker_(std::make_unique<TargetViewsTracker>(
            collection_node->orientation())) {
    // Paint to a layer and mask to bounds to prevent tabs from overflowing and
-@@ -266,15 +265,14 @@ TabStripView::TabStripView(TabCollection
+@@ -271,15 +270,14 @@ TabStripView::TabStripView(TabCollection
    // layers sit inside this view's (which masks to bounds, so the arriving
    // list is clipped at the strip's edges); the scrollers' contents already
    // paint to layers (ScrollWithLayers), so text rendering does not change.
@@ -1469,7 +1462,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  
    collection_node->set_add_child_to_node(base::BindRepeating(
        &TabStripView::AddScrollViewContents, base::Unretained(this)));
-@@ -438,18 +436,13 @@ void HeliumViewSnapshotLayer::OnPaintLay
+@@ -442,18 +440,13 @@ void HeliumViewSnapshotLayer::OnPaintLay
    recorder.canvas()->DrawImageInt(image_, 0, 0);
  }
  
@@ -1493,7 +1486,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    }
    const float scale = layer()->device_scale_factor();
    const auto add = [&](views::View* view, const gfx::Rect& visible_in_view,
-@@ -461,7 +454,7 @@ void TabStripView::CaptureListSnapshot()
+@@ -465,7 +458,7 @@ void TabStripView::CaptureListSnapshot()
      }
      snapshot->layer()->SetBounds(bounds_in_strip);
      layer()->Add(snapshot->layer());
@@ -1502,7 +1495,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    };
    // The scrollers' contents, through the part of them that is on screen
    // (GetVisibleRect is in contents coordinates); the snapshot sits where
-@@ -479,8 +472,8 @@ void TabStripView::CaptureListSnapshot()
+@@ -483,8 +476,8 @@ void TabStripView::CaptureListSnapshot()
      add(tabs_separator_, tabs_separator_->GetLocalBounds(),
          tabs_separator_->bounds());
    }
@@ -1513,7 +1506,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    // the arriving list's height then carried off to a row that was not its
    // own (user 2026-09-18 recording).
    if (today_new_tab_button_ && today_new_tab_button_->GetVisible() &&
-@@ -488,6 +481,7 @@ void TabStripView::CaptureListSnapshot()
+@@ -492,6 +485,7 @@ void TabStripView::CaptureListSnapshot()
      add(today_new_tab_button_, today_new_tab_button_->GetLocalBounds(),
          today_new_tab_button_->bounds());
    }
@@ -1521,7 +1514,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  }
  
  bool TabStripView::today_new_tab_row_on_top() const {
-@@ -500,68 +494,33 @@ void TabStripView::OnNewTabPositionChang
+@@ -504,68 +498,33 @@ void TabStripView::OnNewTabPositionChang
    InvalidateLayout();
  }
  
@@ -1605,7 +1598,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  }
  
  void TabStripView::AddedToWidget() {
-@@ -573,7 +532,6 @@ void TabStripView::AddedToWidget() {
+@@ -575,7 +534,6 @@ void TabStripView::AddedToWidget() {
  
  void TabStripView::RemovedFromWidget() {
    widget_observation_.Reset();
@@ -1704,7 +1697,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
  
    void SetCollapsedState(bool is_collapsed);
    void SetIsAnimatingSize(bool is_animating);
-@@ -254,19 +246,9 @@ class TabStripView final : public views:
+@@ -250,19 +242,9 @@ class TabStripView final : public views:
    friend class TabStripViewLayout;
  
    PrefChangeRegistrar pref_change_registrar_;
@@ -1728,7 +1721,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
-@@ -322,7 +322,10 @@ std::string UnpinnedTabContainerView::Cu
+@@ -323,7 +323,10 @@ std::string UnpinnedTabContainerView::Cu
    }
    const helium_workspace::WorkspaceTabController* const controller =
        helium_workspace::WorkspaceTabController::From(browser_view->browser());

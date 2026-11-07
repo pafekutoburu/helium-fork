@@ -2,17 +2,17 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -623,7 +623,9 @@ static_library("ui") {
-     "helium/helium_tab_switcher_controller.h",
-     "helium_workspace/workspace_entry.cc",
-     "helium_workspace/workspace_entry.h",
-+    "helium_workspace/workspace_favicon_image.h",
-     "helium_workspace/workspace_grid_math.h",
-+    "helium_workspace/workspace_omnibox_match.h",
-     "helium_workspace/workspace_prefs.cc",
-     "helium_workspace/workspace_prefs.h",
-     "helium_workspace/workspace_service.cc",
-@@ -4302,6 +4304,8 @@ test("helium_workspace_unittests") {
+@@ -2333,7 +2333,9 @@ static_library("ui") {
+       "helium/helium_tab_switcher_controller.h",
+       "helium_workspace/workspace_entry.cc",
+       "helium_workspace/workspace_entry.h",
++      "helium_workspace/workspace_favicon_image.h",
+       "helium_workspace/workspace_grid_math.h",
++      "helium_workspace/workspace_omnibox_match.h",
+       "helium_workspace/workspace_prefs.cc",
+       "helium_workspace/workspace_prefs.h",
+       "helium_workspace/workspace_service.cc",
+@@ -5905,6 +5907,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_entry.h",
      "helium_workspace/workspace_entry_unittest.cc",
      "helium_workspace/workspace_grid_math.h",
@@ -21,7 +21,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium_workspace/workspace_prefs.cc",
      "helium_workspace/workspace_prefs.h",
      "helium_workspace/workspace_service.cc",
-@@ -4310,6 +4314,9 @@ test("helium_workspace_unittests") {
+@@ -5913,6 +5917,9 @@ test("helium_workspace_unittests") {
    ]
    deps = [
      "//base",
@@ -36,9 +36,9 @@ Index: src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 --- src.orig/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 +++ src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 @@ -52,6 +52,10 @@
+ #include "chrome/browser/sync/sync_service_factory.h"
  #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
  #include "chrome/browser/translate/chrome_translate_client.h"
- #include "chrome/browser/ui/browser_command_controller.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_entry.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_omnibox_match.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_service.h"
@@ -46,7 +46,7 @@ Index: src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/omnibox_pedal_implementations.h"
-@@ -623,6 +627,27 @@ const TabMatcher& ChromeAutocompleteProv
+@@ -637,6 +641,27 @@ const TabMatcher& ChromeAutocompleteProv
    return tab_matcher_;
  }
  
@@ -78,7 +78,7 @@ Index: src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
 ===================================================================
 --- src.orig/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
 +++ src/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
-@@ -129,6 +129,9 @@ class ChromeAutocompleteProviderClient :
+@@ -130,6 +130,9 @@ class ChromeAutocompleteProviderClient :
    void PrefetchImage(const GURL& url) override;
    void StartServiceWorker(const GURL& destination_url) override;
    const TabMatcher& GetTabMatcher() const override;
@@ -442,7 +442,7 @@ Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
 +++ src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
-@@ -65,6 +65,10 @@
+@@ -66,6 +66,10 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/hats/hats_service.h"
@@ -453,7 +453,7 @@ Index: src/chrome/browser/ui/omnibox/chrome_omnibox_client.cc
  #include "chrome/browser/ui/hats/hats_service_factory.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/lens/lens_search_controller.h"
-@@ -807,6 +811,33 @@ void ChromeOmniboxClient::OnResultChange
+@@ -809,6 +813,33 @@ void ChromeOmniboxClient::OnResultChange
  gfx::Image ChromeOmniboxClient::GetFaviconForPageUrl(
      const GURL& page_url,
      FaviconFetchedCallback on_favicon_fetched) {
@@ -584,15 +584,15 @@ Index: src/components/omnibox/browser/autocomplete_classifier.cc
 ===================================================================
 --- src.orig/components/omnibox/browser/autocomplete_classifier.cc
 +++ src/components/omnibox/browser/autocomplete_classifier.cc
-@@ -59,6 +59,8 @@ int AutocompleteClassifier::DefaultOmnib
-       // Custom search engines cannot be used on mobile.
-       AutocompleteProvider::TYPE_KEYWORD | AutocompleteProvider::TYPE_OPEN_TAB |
-       AutocompleteProvider::TYPE_FEATURED_SEARCH |
+@@ -60,6 +60,8 @@ int AutocompleteClassifier::DefaultOmnib
+       AutocompleteProvider::Type::kKeyword |
+       AutocompleteProvider::Type::kOpenTab |
+       AutocompleteProvider::Type::kFeaturedSearch |
 +      // helium-fork r8③: sidebar favorites / pinned entries.
-+      AutocompleteProvider::TYPE_HELIUM_WORKSPACE |
++      AutocompleteProvider::Type::kHeliumWorkspace |
        // Most visited sites for desktop.
        (omnibox_feature_configs::OmniboxUrlSuggestionsOnFocus::Get().enabled
-            ? AutocompleteProvider::TYPE_MOST_VISITED_SITES
+            ? AutocompleteProvider::Type::kMostVisitedSites
 Index: src/components/omnibox/browser/autocomplete_controller.cc
 ===================================================================
 --- src.orig/components/omnibox/browser/autocomplete_controller.cc
@@ -605,44 +605,45 @@ Index: src/components/omnibox/browser/autocomplete_controller.cc
  #include "components/omnibox/browser/keyword_provider.h"
  #include "components/omnibox/browser/local_history_zero_suggest_provider.h"
  #include "components/omnibox/browser/most_visited_sites_provider.h"
-@@ -555,7 +556,9 @@ AutocompleteController::AutocompleteCont
+@@ -560,7 +561,9 @@ AutocompleteController::AutocompleteCont
    if (base::CommandLine::ForCurrentProcess()->HasSwitch("omnibox-autocomplete-filtering")) {
      const std::string flag_value = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("omnibox-autocomplete-filtering");
-     config_.provider_types &= AutocompleteProvider::TYPE_KEYWORD | AutocompleteProvider::TYPE_SEARCH |
--        AutocompleteProvider::TYPE_HISTORY_URL | AutocompleteProvider::TYPE_BOOKMARK | AutocompleteProvider::TYPE_BUILTIN;
-+        AutocompleteProvider::TYPE_HISTORY_URL | AutocompleteProvider::TYPE_BOOKMARK | AutocompleteProvider::TYPE_BUILTIN |
+     config_.provider_types &= static_cast<int>(AutocompleteProvider::Type::kKeyword | AutocompleteProvider::Type::kSearch |
+-        AutocompleteProvider::Type::kHistoryUrl | AutocompleteProvider::Type::kBookmark | AutocompleteProvider::Type::kBuiltin);
++        AutocompleteProvider::Type::kHistoryUrl | AutocompleteProvider::Type::kBookmark | AutocompleteProvider::Type::kBuiltin |
 +        // helium-fork r8③: the sidebar's entries are local, keep them under the flag.
-+        AutocompleteProvider::TYPE_HELIUM_WORKSPACE;
++        AutocompleteProvider::Type::kHeliumWorkspace);
      if (!flag_value.contains("bookmarks"))
-       config_.provider_types &= ~AutocompleteProvider::TYPE_BOOKMARK;
+       config_.provider_types &= ~static_cast<int>(AutocompleteProvider::Type::kBookmark);
      if (!flag_value.contains("chrome"))
-@@ -1471,6 +1474,11 @@ void AutocompleteController::InitializeS
-     open_tab_provider_ = open_tab_provider.get();
+@@ -1525,6 +1528,12 @@ void AutocompleteController::InitializeS
      providers_.push_back(std::move(open_tab_provider));
    }
-+  if (provider_types & AutocompleteProvider::TYPE_HELIUM_WORKSPACE) {
+   if (provider_types &
++      static_cast<int>(AutocompleteProvider::Type::kHeliumWorkspace)) {
 +    // helium-fork r8③: sidebar favorites / pinned entries, synchronous.
 +    providers_.push_back(
 +        base::MakeRefCounted<HeliumWorkspaceProvider>(provider_client_.get()));
 +  }
-   if (provider_types & AutocompleteProvider::TYPE_FEATURED_SEARCH) {
++  if (provider_types &
+       static_cast<int>(AutocompleteProvider::Type::kFeaturedSearch)) {
      auto featured_search_provider =
          base::MakeRefCounted<FeaturedSearchProvider>(provider_client_.get(),
 Index: src/components/omnibox/browser/autocomplete_match.cc
 ===================================================================
 --- src.orig/components/omnibox/browser/autocomplete_match.cc
 +++ src/components/omnibox/browser/autocomplete_match.cc
-@@ -122,6 +122,9 @@ int GetDeduplicationProviderPreferenceSc
+@@ -124,6 +124,9 @@ int GetDeduplicationProviderPreferenceSc
            // last access date.
-           {AutocompleteProvider::TYPE_DOCUMENT, 2},
-           {AutocompleteProvider::TYPE_ENTERPRISE_SEARCH_AGGREGATOR, 2},
+           {AutocompleteProvider::Type::kDocument, 2},
+           {AutocompleteProvider::Type::kEnterpriseSearchAggregator, 2},
 +          // helium-fork r8③: a sidebar entry's own title beats the bookmark
 +          // copy of the same URL, so the row reads like the sidebar does.
-+          {AutocompleteProvider::TYPE_HELIUM_WORKSPACE, 2},
++          {AutocompleteProvider::Type::kHeliumWorkspace, 2},
            // Prefer bookmark suggestions, as:
            // 1) Their titles may be explicitly set.
            // 2) They may display enhanced information such as the bookmark
-@@ -1688,6 +1691,14 @@ int AutocompleteMatch::GetSortingOrder()
+@@ -1676,6 +1679,14 @@ int AutocompleteMatch::GetSortingOrder()
        return 7;
    }
  
@@ -650,7 +651,7 @@ Index: src/components/omnibox/browser/autocomplete_match.cc
 +  // search suggestions -- the same slot boosted shortcuts get. Relevance alone
 +  // cannot do this on desktop: rows 1..N are stable-sorted by this order.
 +  if (provider &&
-+      provider->type() == AutocompleteProvider::TYPE_HELIUM_WORKSPACE) {
++      provider->type() == AutocompleteProvider::Type::kHeliumWorkspace) {
 +    return 2;
 +  }
 +
@@ -663,18 +664,18 @@ Index: src/components/omnibox/browser/autocomplete_provider.cc
 +++ src/components/omnibox/browser/autocomplete_provider.cc
 @@ -95,6 +95,8 @@ const char* AutocompleteProvider::TypeTo
        return "TabGroup";
-     case TYPE_CROSS_DEVICE_TAB:
+     case AutocompleteProvider::Type::kCrossDeviceTab:
        return "CrossDeviceTab";
-+    case TYPE_HELIUM_WORKSPACE:
++    case AutocompleteProvider::Type::kHeliumWorkspace:
 +      return "HeliumWorkspace";
      default:
        DUMP_WILL_BE_NOTREACHED()
-           << "Unhandled AutocompleteProvider::Type " << type;
+           << "Unhandled AutocompleteProvider::Type " << static_cast<int>(type);
 @@ -213,6 +215,9 @@ AutocompleteProvider::AsOmniboxEventProv
        return metrics::OmniboxEventProto::TAB_GROUP_PROVIDER;
-     case TYPE_CROSS_DEVICE_TAB:
+     case AutocompleteProvider::Type::kCrossDeviceTab:
        return metrics::OmniboxEventProto::CROSS_DEVICE_TAB;
-+    case TYPE_HELIUM_WORKSPACE:
++    case AutocompleteProvider::Type::kHeliumWorkspace:
 +      // helium-fork r8③: no proto value of its own; metrics are off here.
 +      return metrics::OmniboxEventProto::UNKNOWN_PROVIDER;
      default:
@@ -684,12 +685,12 @@ Index: src/components/omnibox/browser/autocomplete_provider.h
 ===================================================================
 --- src.orig/components/omnibox/browser/autocomplete_provider.h
 +++ src/components/omnibox/browser/autocomplete_provider.h
-@@ -184,6 +184,8 @@ class AutocompleteProvider
-     TYPE_CONTEXTUAL_SEARCH = 1 << 25,
-     TYPE_TAB_GROUP = 1 << 26,
-     TYPE_CROSS_DEVICE_TAB = 1 << 27,
+@@ -185,6 +185,8 @@ class AutocompleteProvider
+     kContextualSearch = 1 << 25,
+     kTabGroup = 1 << 26,
+     kCrossDeviceTab = 1 << 27,
 +    // helium-fork r8③: the sidebar's persistent entries (favorites + pinned).
-+    TYPE_HELIUM_WORKSPACE = 1 << 28,
++    kHeliumWorkspace = 1 << 28,
  
      // When adding a value here, also update:
      // - omnibox_event.proto
@@ -736,7 +737,7 @@ Index: src/components/omnibox/browser/autocomplete_provider_client.h
  class AutocompleteProviderClient : public OmniboxAction::Client {
   public:
    ~AutocompleteProviderClient() override = default;
-@@ -226,6 +233,14 @@ class AutocompleteProviderClient : publi
+@@ -227,6 +234,14 @@ class AutocompleteProviderClient : publi
    // for a given set of AutocompleteMatches within the current profile.
    virtual const TabMatcher& GetTabMatcher() const = 0;
  
@@ -793,7 +794,7 @@ Index: src/components/omnibox/browser/helium_workspace_provider.cc
 +
 +HeliumWorkspaceProvider::HeliumWorkspaceProvider(
 +    AutocompleteProviderClient* client)
-+    : AutocompleteProvider(AutocompleteProvider::TYPE_HELIUM_WORKSPACE),
++    : AutocompleteProvider(AutocompleteProvider::Type::kHeliumWorkspace),
 +      client_(client) {}
 +
 +HeliumWorkspaceProvider::~HeliumWorkspaceProvider() = default;
@@ -828,7 +829,7 @@ Index: src/components/omnibox/browser/helium_workspace_provider.cc
 +    }
 +
 +    AutocompleteMatch match(this, /*relevance=*/0, /*deletable=*/false,
-+                            AutocompleteMatchType::OPEN_TAB);
++                            omnibox::AutocompleteMatchType::kOpenTab);
 +    match.destination_url = url;
 +
 +    // Inline autocompletion, verbatim after

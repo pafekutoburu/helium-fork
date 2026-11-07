@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -1696,6 +1696,11 @@ float BrowserView::GetTopChromeRevealRat
+@@ -1721,6 +1721,11 @@ float BrowserView::GetTopChromeRevealRat
  }
  
  float BrowserView::GetSideChromeRevealRatio() const {
@@ -14,7 +14,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    if (!zen_mode_enabled_) {
      return 1.f;
    }
-@@ -2109,6 +2114,36 @@ bool BrowserView::IsZenModeEnabled() con
+@@ -2137,6 +2142,36 @@ bool BrowserView::IsZenModeEnabled() con
           (!IsFullscreen() || allow_fullscreen);
  }
  
@@ -51,7 +51,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::UpdateZenCollapseButtonVisibility() {
    if (toolbar_) {
      toolbar_->UpdateVerticalTabsCollapseButton();
-@@ -5882,6 +5917,16 @@ void BrowserView::AddedToWidget() {
+@@ -5911,6 +5946,16 @@ void BrowserView::AddedToWidget() {
      } else {
        horizontal_tab_strip_region_view_->InitializeTabStrip();
      }
@@ -72,7 +72,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -955,6 +955,12 @@ class BrowserView : public BrowserWindow
+@@ -965,6 +965,12 @@ class BrowserView : public BrowserWindow
    void UpdateZenModeReveal(bool reveal_top, bool reveal_side);
    void RevealZenModeTopChromeImmediately();
    bool IsZenModeEnabled() const;
@@ -85,7 +85,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    bool IsPointInZenTopTrigger(const gfx::Point& point) const;
    bool IsPointInZenSideTrigger(const gfx::Point& point) const;
    bool IsPointInZenTopChromeBounds(const gfx::Point& point) const;
-@@ -1490,6 +1496,9 @@ class BrowserView : public BrowserWindow
+@@ -1510,6 +1516,9 @@ class BrowserView : public BrowserWindow
    std::optional<gfx::Point> zen_last_cursor_;
    bool zen_mode_enabled_ = false;
  
@@ -99,7 +99,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -127,12 +127,17 @@ gfx::Rect SlideBoundsFromSide(const gfx:
+@@ -131,12 +131,17 @@ gfx::Rect SlideBoundsFromSide(const gfx:
  
  ZenModeLayoutState GetZenModeLayoutState(
      const BrowserViewLayoutDelegate& delegate,
@@ -121,7 +121,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
    state.top_chrome_ratio = delegate.GetTopChromeRevealRatio();
    state.side_chrome_ratio = delegate.GetSideChromeRevealRatio();
  
-@@ -486,6 +491,14 @@ BrowserViewTabbedLayoutImpl::CalculateHo
+@@ -497,6 +502,14 @@ BrowserViewTabbedLayoutImpl::CalculateHo
          vertical_tab_strip->GetPreferredSize().width();
      layout.vertical_tab_strip_collapsed_state =
          GetVerticalTabStripCollapsedState();
@@ -136,7 +136,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
      if (layout.vertical_tab_strip_collapsed_state ==
          VerticalTabStripCollapsedState::kCollapsed) {
        // Collapsed tab strip always gets its preferred size.
-@@ -767,6 +780,21 @@ BrowserViewTabbedLayoutImpl::GetVertical
+@@ -789,6 +802,21 @@ BrowserViewTabbedLayoutImpl::GetVertical
    return VerticalTabStripCollapsedState::kExpanded;
  }
  
@@ -158,7 +158,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  int BrowserViewTabbedLayoutImpl::GetCollapsedVerticalTabStripRelativeTop()
      const {
    // When the top container isn't in the browser view, the exclusion won't apply
-@@ -848,7 +876,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -870,7 +898,8 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    const bool show_dynamic_tab_strip =
        ShowDynamicTabStrip(layout_data_->tab_strip_type);
    const ZenModeLayoutState zen = GetZenModeLayoutState(
@@ -168,7 +168,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
    std::optional<int> dynamic_tab_strip_top;
    const HorizontalLayout& horizontal_layout = layout_data_->horizontal_layout;
    const bool infobar_visible = delegate().IsInfobarVisible();
-@@ -916,6 +945,31 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -974,6 +1003,31 @@ BrowserViewTabbedLayoutImpl::CalculatePr
          last_vertical_tab_strip_width_ = vertical_tab_strip_width;
        }
  
@@ -200,8 +200,8 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
        const int vertical_tab_strip_x =
            vertical_right_aligned
                ? params.visual_client_area.right() -
-@@ -950,55 +1004,37 @@ BrowserViewTabbedLayoutImpl::CalculatePr
-       }
+@@ -1014,57 +1068,39 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+               : 0.0);
  
        vertical_tab_strip_width = vertical_tab_strip_bounds.width();
 -      // helium-fork: the toggle is instant (see tab_strip_animations.cc), but
@@ -217,10 +217,12 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 -          vertical_tab_strip_animation.current_motion ==
 -              TabStripAnimations::kCollapse;
        if (!zen.floating_vertical_tab_strip) {
+         // Expand on hover overlaps the contents instead of resizing them.
 +        // The strip width is forced to its toggle target above, so insetting
 +        // by it keeps the contents at their final size for every frame of the
 +        // instant toggle.
-         int inset_amount = vertical_tab_strip_width;
+         int inset_amount =
+             vertical_tab_strip_width - vertical_tab_strip_hover_width;
 -        if (sidebar_toggle_in_progress) {
 -          const int target_width =
 -              vertical_tab_strip_animation.current_motion ==
@@ -279,7 +281,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
        }
      }
      layout.AddChild(views().vertical_tab_strip_region_view,
-@@ -1540,7 +1576,8 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
+@@ -1595,7 +1631,8 @@ gfx::Rect BrowserViewTabbedLayoutImpl::C
    const bool show_dynamic_tab_strip =
        ShowDynamicTabStrip(layout_data_->tab_strip_type);
    const ZenModeLayoutState zen = GetZenModeLayoutState(
@@ -293,7 +295,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
-@@ -98,6 +98,11 @@ class BrowserViewTabbedLayoutImpl : publ
+@@ -96,6 +96,11 @@ class BrowserViewTabbedLayoutImpl : publ
    // Returns the current state of the vertical tabstrip.
    VerticalTabStripCollapsedState GetVerticalTabStripCollapsedState() const;
  

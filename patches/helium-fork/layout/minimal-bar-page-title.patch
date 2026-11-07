@@ -2,15 +2,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -611,6 +611,7 @@ static_library("ui") {
-     "helium/arc_band_tint_store.h",
-     "helium/arc_caption_opacity.h",
-     "helium/arc_card_layout.h",
-+    "helium/arc_minimal_field_state.h",
-     "helium/helium_tab_switcher_controller.cc",
-     "helium/helium_tab_switcher_controller.h",
-     "helium_workspace/workspace_entry.cc",
-@@ -4258,6 +4259,8 @@ test("helium_workspace_unittests") {
+@@ -2321,6 +2321,7 @@ static_library("ui") {
+       "helium/arc_band_tint_store.h",
+       "helium/arc_caption_opacity.h",
+       "helium/arc_card_layout.h",
++      "helium/arc_minimal_field_state.h",
+       "helium/helium_tab_switcher_controller.cc",
+       "helium/helium_tab_switcher_controller.h",
+       "helium_workspace/workspace_entry.cc",
+@@ -5861,6 +5862,8 @@ test("helium_workspace_unittests") {
      "helium/arc_caption_opacity_unittest.cc",
      "helium/arc_card_layout.h",
      "helium/arc_card_layout_unittest.cc",
@@ -205,7 +205,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
-@@ -556,6 +558,16 @@ void LocationBarView::Init() {
+@@ -572,6 +574,16 @@ void LocationBarView::Init() {
        std::make_unique<LocationBarProgressView>(profile_->GetPrefs()));
    loading_progress_view_->SetLocationBarFocused(IsFocusWithin());
  
@@ -222,7 +222,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    // Initialize the location entry. We do this to avoid a black flash which is
    // visible when the location entry has just been initialized.
    Update(nullptr);
-@@ -1089,14 +1101,29 @@ void LocationBarView::Layout(PassKey) {
+@@ -1127,14 +1139,29 @@ void LocationBarView::Layout(PassKey) {
        !ime_inline_autocomplete_view_->GetVisible();
    if (arc_minimal_unfocused_field) {
      // Dia's forgiveness margin: clicks and the I-beam extend this far past
@@ -256,7 +256,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
      // Short circuit the below logic when the additional views aren't visible.
      // This is necessary as resizing the omnibox can throw off it's scroll,
      // i.e., which chars are visible when its text overflows its width.
-@@ -1211,6 +1238,13 @@ void LocationBarView::RefreshPushedIconC
+@@ -1249,6 +1276,13 @@ void LocationBarView::RefreshPushedIconC
        }
      }
    }
@@ -270,7 +270,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  }
  
  void LocationBarView::ChildPreferredSizeChanged(views::View* child) {
-@@ -1246,6 +1280,11 @@ void LocationBarView::Update(WebContents
+@@ -1284,6 +1318,11 @@ void LocationBarView::Update(WebContents
    RefreshPageActionContainerViewAndIconsVisibility(
        /*should_hide_page_actions=*/ShouldHidePageActionIcons());
  
@@ -282,7 +282,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    OnChanged();  // NOTE: Triggers layout.
  
    // A permission prompt may be suspended due to an invalid state (empty or
-@@ -1441,6 +1480,42 @@ void LocationBarView::UpdateArcMinimalDe
+@@ -1480,6 +1519,42 @@ void LocationBarView::UpdateArcMinimalDe
    InvalidateLayout();
  }
  
@@ -325,7 +325,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
  double LocationBarView::GetArcRevealAmount() const {
    if (!ShouldMinimizeArcChrome()) {
      return 1.0;
-@@ -2322,6 +2397,11 @@ void LocationBarView::OnChanged() {
+@@ -2461,6 +2536,11 @@ void LocationBarView::OnChanged() {
        !omnibox_view_->GetText().empty() &&
        IsVirtualKeyboardVisible(GetWidget()));
  
@@ -374,7 +374,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.h
    // helium-fork: the reveal's single curve. 0 at rest, 1 revealed, the hover
    // tween in between -- every part of the reveal is a function of this one
    // value, so the parts cannot come and go at different times.
-@@ -625,6 +635,13 @@ class LocationBarView
+@@ -636,6 +646,13 @@ class LocationBarView
    // feature flag is disabled.
    raw_ptr<views::Label> omnibox_additional_text_view_ = nullptr;
  

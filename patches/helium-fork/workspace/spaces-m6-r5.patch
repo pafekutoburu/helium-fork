@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/helium/arc_floating_sidebar.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/arc_floating_sidebar.h
 +++ src/chrome/browser/ui/helium/arc_floating_sidebar.h
-@@ -30,18 +30,24 @@
+@@ -30,18 +30,24 @@ namespace helium {
  // --- 1. geometry -----------------------------------------------------------
  
  // Gap between the floating card and the window edges (all four sides), in
@@ -71,7 +71,7 @@ Index: src/chrome/browser/ui/helium/arc_sidebar_surface.h
 ===================================================================
 --- src.orig/chrome/browser/ui/helium/arc_sidebar_surface.h
 +++ src/chrome/browser/ui/helium/arc_sidebar_surface.h
-@@ -181,22 +181,6 @@
+@@ -181,22 +181,6 @@ inline SkColor GetSidebarSelectedSurface
    return color_utils::AlphaBlend(SK_ColorWHITE, sidebar, kSelectedAlpha);
  }
  
@@ -98,7 +98,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -1294,7 +1294,7 @@
+@@ -1305,7 +1305,7 @@ BrowserView::BrowserView(BrowserWindowIn
    helium_sidebar_menu_->SetShadowFrame(helium_sidebar_menu_shadow_);
  
    // helium-fork M6-r1: the sidebar's own resize grip is the 5pt inside its
@@ -111,7 +111,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -75,7 +75,8 @@
+@@ -85,7 +85,8 @@ constexpr int kTopToolbarExclusion = 10;
  // helium-fork: the floating sidebar card's inset from the window edges. It
  // used to alias the contents card's inset; since M3.9d it is its own number
  // (helium/arc_floating_sidebar.h) so the card can be calibrated against the
@@ -121,11 +121,24 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  // The macOS traffic lights are pinned by AppKit (x≈11, vertically centered in
  // the caption band) and cannot follow the card, so the card must come to
  // them: with the upstream 8px inset the lights sat 3px from the card edge and
+@@ -1833,9 +1834,9 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+     if (zen.floating_vertical_tab_strip) {
+       floating_style = FloatingStyle::kDetached;
+       // helium-fork: the floating card sits kFloatingSidebarGap from the
+-      // window edges, so its radius must be concentric with the system window
+-      // radius (window radius minus that gap). The generic 8 visibly
+-      // mismatched the window's corners ("侧边栏的R角和app窗口的R角没有匹配").
++      // window edges; its radius is the shell's one (12, M6-r5.1 -- it used
++      // to be concentric with the window, window radius minus the gap, after
++      // the generic 8 visibly mismatched the window's corners).
+       floating_corner_radius =
+           helium::FloatingSidebarCornerRadius(GetSystemWindowRadius());
+     } else if (vertical_tab_strip_animation.expand_on_hover_width > 0.0) {
 Index: src/chrome/browser/ui/views/frame/multi_contents_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/multi_contents_view.h
 +++ src/chrome/browser/ui/views/frame/multi_contents_view.h
-@@ -64,11 +64,12 @@
+@@ -65,11 +65,12 @@ class MultiContentsView
    static constexpr int kSplitViewContentInset = 3;
    // helium-fork: uniform breathing room around the contents card in the Arc
    // shell (single-contents layout only; split view keeps its own inset).
@@ -143,23 +156,6 @@ Index: src/chrome/browser/ui/views/frame/multi_contents_view.h
  
    MultiContentsView(BrowserView* browser_view,
                      std::unique_ptr<MultiContentsViewDelegate> delegate);
-Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-===================================================================
---- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-+++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -593,9 +593,9 @@
-     CustomCornersBackground::Corner rounded_corner;
-     rounded_corner.type = CustomCornersBackground::CornerType::kRounded;
-     // helium-fork: the floating card sits kFloatingSidebarGap from the window
--    // edges, so its radius must be concentric with the system window radius
--    // (window radius minus that gap). The generic 8 visibly mismatched the
--    // window's corners ("侧边栏的R角和app窗口的R角没有匹配").
-+    // edges; its radius is the shell's one (12, M6-r5.1 -- it used to be
-+    // concentric with the window, window radius minus the gap, after the
-+    // generic 8 visibly mismatched the window's corners).
-     rounded_corner.radius =
-         helium::FloatingSidebarCornerRadius(GetSystemWindowRadius());
-     corners[CornerOrientation::kTopLeading] = rounded_corner;
 Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
@@ -187,7 +183,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
  constexpr int kSquareRadius = 12;
  constexpr int kEmojiFontSize = 13;
  constexpr int kDotSize = 8;
-@@ -85,10 +86,38 @@
+@@ -85,10 +86,38 @@ class SpaceMenuModel : public ui::Simple
    const base::RepeatingCallback<void(int)> on_command_;
  };
  
@@ -227,7 +223,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
  // desaturates itself through a layer filter when it is not current.
  class WorkspaceSpaceBarView::SpaceButton : public views::Button,
                                             public views::ContextMenuController {
-@@ -167,18 +196,11 @@
+@@ -167,18 +196,11 @@ class WorkspaceSpaceBarView::SpaceButton
    // Button::OnPaint is final; the background pass paints under the emoji
    // label, which is where the square belongs anyway.
    void OnPaintBackground(gfx::Canvas* canvas) override {
@@ -247,7 +243,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
      if (icon_.empty()) {
        cc::PaintFlags dot;
        dot.setStyle(cc::PaintFlags::kFill_Style);
-@@ -200,6 +222,39 @@
+@@ -200,6 +222,39 @@ class WorkspaceSpaceBarView::SpaceButton
  BEGIN_METADATA(WorkspaceSpaceBarView, SpaceButton)
  END_METADATA
  
@@ -287,7 +283,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.cc
  WorkspaceSpaceBarView::WorkspaceSpaceBarView(
      BrowserWindowInterface* browser,
      base::RepeatingClosure on_menu_pressed,
-@@ -209,11 +264,9 @@
+@@ -209,11 +264,9 @@ WorkspaceSpaceBarView::WorkspaceSpaceBar
        on_menu_pressed_(std::move(on_menu_pressed)),
        on_current_space_changed_(std::move(on_current_space_changed)),
        on_current_space_will_change_(std::move(on_current_space_will_change)) {
@@ -306,7 +302,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
 +++ src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
-@@ -32,11 +32,14 @@
+@@ -32,11 +32,14 @@ class ImageButton;
  // left-packed, and the Dia-style "⌄" at the right that opens the sidebar
  // menu. Sits in the 42pt band the user reserved for it on 2026-08-20.
  //
@@ -326,7 +322,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical/workspace_space_bar_view.h
  // and its trailing "+" are not here: New Space lives in the "⌄" menu (user
  // ruling 2026-09-02).
  //
-@@ -90,6 +93,7 @@
+@@ -90,6 +93,7 @@ class WorkspaceSpaceBarView
  
   private:
    class SpaceButton;

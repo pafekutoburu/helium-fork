@@ -2,19 +2,19 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -611,9 +611,11 @@ static_library("ui") {
-     "helium/arc_band_tint_store.h",
-     "helium/arc_caption_opacity.h",
-     "helium/arc_card_layout.h",
-+    "helium/arc_favorite_accent.h",
-     "helium/arc_loading_bar.h",
-     "helium/arc_minimal_field_state.h",
-     "helium/arc_omnibox_panel.h",
-+    "helium/arc_sidebar_surface.h",
-     "helium/helium_tab_switcher_controller.cc",
-     "helium/helium_tab_switcher_controller.h",
-     "helium_workspace/workspace_entry.cc",
-@@ -4267,10 +4269,14 @@ test("helium_workspace_unittests") {
+@@ -2321,9 +2321,11 @@ static_library("ui") {
+       "helium/arc_band_tint_store.h",
+       "helium/arc_caption_opacity.h",
+       "helium/arc_card_layout.h",
++      "helium/arc_favorite_accent.h",
+       "helium/arc_loading_bar.h",
+       "helium/arc_minimal_field_state.h",
+       "helium/arc_omnibox_panel.h",
++      "helium/arc_sidebar_surface.h",
+       "helium/helium_tab_switcher_controller.cc",
+       "helium/helium_tab_switcher_controller.h",
+       "helium_workspace/workspace_entry.cc",
+@@ -5870,10 +5872,14 @@ test("helium_workspace_unittests") {
      "helium/arc_caption_opacity_unittest.cc",
      "helium/arc_card_layout.h",
      "helium/arc_card_layout_unittest.cc",
@@ -29,7 +29,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_omnibox_panel.h",
      "helium/arc_omnibox_panel_unittest.cc",
      "helium_workspace/workspace_blank_tab.h",
-@@ -4301,10 +4307,12 @@ test("helium_workspace_unittests") {
+@@ -5904,10 +5910,12 @@ test("helium_workspace_unittests") {
      "//components/tabs:test_support",
      "//testing/gmock",
      "//testing/gtest",
@@ -663,7 +663,7 @@ Index: src/chrome/browser/ui/layout_constants.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/layout_constants.cc
 +++ src/chrome/browser/ui/layout_constants.cc
-@@ -148,8 +148,14 @@ int GetLayoutConstant(LayoutConstant con
+@@ -150,8 +150,14 @@ int GetLayoutConstant(LayoutConstant con
        return 20;
      case LayoutConstant::kMainBackgroundRegionCornerRadius:
      case LayoutConstant::kToolbarCornerRadius:
@@ -679,7 +679,7 @@ Index: src/chrome/browser/ui/layout_constants.cc
      case LayoutConstant::kVerticalTabHeight:
        // helium-fork: Arc's rows are a little taller than upstream's 30.
        return 34;
-@@ -159,10 +165,15 @@ int GetLayoutConstant(LayoutConstant con
+@@ -161,10 +167,15 @@ int GetLayoutConstant(LayoutConstant con
        return 44;
      case LayoutConstant::kVerticalTabFavoriteCornerRadius:
        return 12;
@@ -700,7 +700,7 @@ Index: src/chrome/browser/ui/layout_constants.h
 ===================================================================
 --- src.orig/chrome/browser/ui/layout_constants.h
 +++ src/chrome/browser/ui/layout_constants.h
-@@ -238,6 +238,14 @@ enum class LayoutConstant {
+@@ -242,6 +242,14 @@ enum class LayoutConstant {
    // helium-fork: the corner radius of a workspace favorite capsule.
    kVerticalTabFavoriteCornerRadius,
  
@@ -719,7 +719,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -601,15 +601,15 @@ bool LocationBarView::IsInitialized() co
+@@ -617,15 +617,15 @@ bool LocationBarView::IsInitialized() co
  }
  
  int LocationBarView::GetBorderRadius() const {
@@ -743,7 +743,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
    }
    return ComputeBorderRadius(size());
  }
-@@ -1547,7 +1547,8 @@ void LocationBarView::RefreshArcTitleLab
+@@ -1585,7 +1585,8 @@ void LocationBarView::RefreshArcTitleLab
            ShouldMinimizeArcChrome(),
            (omnibox_view_ && omnibox_view_->HasFocus()) ||
                GetOmniboxController()->edit_model()->user_input_in_progress(),
@@ -753,7 +753,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
        helium::ArcFieldContent::kHostAndTitle;
    if (show == arc_title_label_->GetVisible() && title == arc_last_title_) {
      return;
-@@ -2706,9 +2707,18 @@ void LocationBarView::OnOmniboxHovered(b
+@@ -2848,9 +2849,18 @@ void LocationBarView::OnOmniboxHovered(b
  }
  
  bool LocationBarView::IsArcHoverUrlPreview() const {
@@ -779,7 +779,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
-@@ -332,6 +332,26 @@ void TabStripView::OnChildMoved(TabColle
+@@ -333,6 +333,26 @@ void TabStripView::OnChildMoved(TabColle
  }
  
  void TabStripView::OnTabChanged(const tabs::TabInterface* active_tab) {
@@ -819,7 +819,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
  #include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
-@@ -498,6 +500,13 @@ bool TabView::IsHoverAnimationActive() c
+@@ -521,6 +523,13 @@ bool TabView::IsHoverAnimationActive() c
    return hovered_ || (hover_controller_ && hover_controller_->ShouldDraw());
  }
  
@@ -837,7 +837,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.h
-@@ -199,6 +199,9 @@ class TabView : public views::View,
+@@ -203,6 +203,9 @@ class TabView : public views::View,
    SkColor GetNativeFrameMaterialTabBackgroundColor(
        TabStyle::TabSelectionState selection_state) const;
    bool ShouldUseNativeFrameMaterials() const;
@@ -1627,28 +1627,28 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
  
    // If the tab is collapsed but animating with a wider width then we shouldn't
    // center the contents.
-Index: src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
+Index: src/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
 ===================================================================
---- src.orig/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
-+++ src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
-@@ -10,6 +10,8 @@
- #include <string>
+--- src.orig/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
++++ src/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
+@@ -9,6 +9,8 @@
  
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
  #include "chrome/browser/themes/theme_properties.h"
 +#include "chrome/browser/ui/color/chrome_color_id.h"
 +#include "chrome/browser/ui/helium/arc_sidebar_surface.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/views/frame/browser_frame_view.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
-@@ -21,6 +23,7 @@
+@@ -20,6 +22,7 @@
  #include "third_party/skia/include/core/SkPath.h"
  #include "third_party/skia/include/core/SkRRect.h"
  #include "ui/base/theme_provider.h"
 +#include "ui/color/color_provider.h"
  #include "ui/gfx/canvas.h"
+ #include "ui/gfx/color_utils.h"
  #include "ui/gfx/geometry/skia_conversions.h"
- #include "ui/gfx/scoped_canvas.h"
-@@ -202,6 +205,24 @@ bool VerticalTabStyleViews::ShouldPaintT
+@@ -214,6 +217,24 @@ bool VerticalTabStyleViews::ShouldPaintT
  
  SkColor VerticalTabStyleViews::GetCurrentTabBackgroundColor(
      TabStyle::TabSelectionState selection_state) const {

@@ -2,7 +2,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -2036,6 +2036,9 @@ are declared in tools/grit/grit_args.gni
+@@ -2033,6 +2033,9 @@ are declared in tools/grit/grit_args.gni
        <message name="IDS_SHORTCUT_COMMAND_HELIUM_WS_SWITCH_TO_SPACE" desc="Command name shown on the Settings shortcuts page for switching the sidebar to the space at a given position, counted from 1.">
          Switch to space <ph name="INDEX">$1<ex>3</ex></ph>
        </message>
@@ -12,7 +12,7 @@ Index: src/chrome/app/generated_resources.grd
        <message name="IDS_SHORTCUT_COMMAND_TOGGLE_DEV_TOOLS" desc="Command name shown on the Settings shortcuts page for toggling Developer Tools.">
          Toggle developer tools
        </message>
-@@ -12425,6 +12428,60 @@ Check your passwords anytime in <ph name
+@@ -12491,6 +12494,60 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
            Remove
          </message>
@@ -73,7 +73,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL" desc="Hint under a pinned sidebar entry's title (and its context menu item) while the pointer is on its favicon and the tab has navigated away from the URL it was pinned at: clicking takes the tab back to that URL.">
            Back to Pinned URL
          </message>
-@@ -12446,6 +12503,15 @@ Check your passwords anytime in <ph name
+@@ -12512,6 +12569,15 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_DELETE_FOLDER_CONFIRM" desc="The confirming button of the delete-folder dialog.">
            Delete Folder
          </message>
@@ -89,7 +89,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_HELIUM_WS_FOLDER_DELETED_BODY" desc="Text in the sidebar's bottom undo bar right after a folder was deleted, next to an Undo button.">
            Deleted “<ph name="FOLDER_NAME">$1<ex>Research</ex></ph>”
          </message>
-@@ -12742,6 +12808,60 @@ Check your passwords anytime in <ph name
+@@ -12817,6 +12883,60 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="In Title Case: The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
            Remove
          </message>
@@ -150,7 +150,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_HELIUM_WS_ENTRY_BACK_TO_PINNED_URL" desc="In Title Case: Hint under a pinned sidebar entry's title (and its context menu item) while the pointer is on its favicon and the tab has navigated away from the URL it was pinned at: clicking takes the tab back to that URL.">
            Back to Pinned URL
          </message>
-@@ -12763,6 +12883,15 @@ Check your passwords anytime in <ph name
+@@ -12838,6 +12958,15 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_DELETE_FOLDER_CONFIRM" desc="In Title Case: The confirming button of the delete-folder dialog.">
            Delete Folder
          </message>
@@ -190,7 +190,7 @@ Index: src/chrome/browser/app_controller_mac.mm
 ===================================================================
 --- src.orig/chrome/browser/app_controller_mac.mm
 +++ src/chrome/browser/app_controller_mac.mm
-@@ -242,13 +242,40 @@ void LaunchBrowserStartup(Profile* profi
+@@ -245,13 +245,40 @@ void LaunchBrowserStartup(Profile* profi
  
  // Creates an empty browser window with the given profile and returns a pointer
  // to the new |BrowserWindowInterface|.
@@ -222,7 +222,7 @@ Index: src/chrome/browser/app_controller_mac.mm
 +  if (with_last_session && !profile->IsOffTheRecord() &&
 +      !profile->IsGuestSession() &&
 +      !IncognitoModePrefs::ShouldOpenSubsequentBrowsersInIncognito(
-+          *base::CommandLine::ForCurrentProcess(), profile->GetPrefs())) {
++          *base::CommandLine::ForCurrentProcess(), profile)) {
 +    if (BrowserWindowInterface* browser =
 +            chrome::OpenEmptyWindow(profile->GetOriginalProfile())) {
 +      return browser;
@@ -232,7 +232,7 @@ Index: src/chrome/browser/app_controller_mac.mm
    {
      base::AutoReset<bool> auto_reset_in_run(&g_is_opening_new_window, true);
      chrome::NewEmptyWindow(profile);
-@@ -260,6 +287,40 @@ BrowserWindowInterface* CreateBrowser(Pr
+@@ -263,6 +290,40 @@ BrowserWindowInterface* CreateBrowser(Pr
    return browser;
  }
  
@@ -273,7 +273,7 @@ Index: src/chrome/browser/app_controller_mac.mm
  // Activates a browser window having the given profile (the last one active) if
  // possible or creates an empty one if necessary. Returns a pointer to the
  // activated/new |BrowserWindowInterface|.
-@@ -267,7 +328,7 @@ BrowserWindowInterface* ActivateOrCreate
+@@ -270,7 +331,7 @@ BrowserWindowInterface* ActivateOrCreate
    if (BrowserWindowInterface* browser = ActivateBrowser(profile)) {
      return browser;
    }
@@ -282,7 +282,7 @@ Index: src/chrome/browser/app_controller_mac.mm
  }
  
  // Attempts restoring a previous session if there is one. Otherwise, opens
-@@ -1749,7 +1810,7 @@ class AppControllerProfileObserver : pub
+@@ -1752,7 +1813,7 @@ class AppControllerProfileObserver : pub
        }
        [[fallthrough]];  // To create new window.
      case IDC_NEW_WINDOW:
@@ -291,7 +291,7 @@ Index: src/chrome/browser/app_controller_mac.mm
        break;
      case IDC_FOCUS_LOCATION:
        chrome::ExecuteCommand(ActivateOrCreateBrowser(profile),
-@@ -1767,7 +1828,9 @@ class AppControllerProfileObserver : pub
+@@ -1770,7 +1831,9 @@ class AppControllerProfileObserver : pub
        app_controller_mac::TabRestorer::RestoreMostRecent(profile);
        break;
      case IDC_OPEN_FILE:
@@ -302,7 +302,7 @@ Index: src/chrome/browser/app_controller_mac.mm
        break;
      case IDC_CLEAR_BROWSING_DATA: {
        // There may not be a browser open, so use the default profile.
-@@ -1917,7 +1980,7 @@ class AppControllerProfileObserver : pub
+@@ -1920,7 +1983,7 @@ class AppControllerProfileObserver : pub
            if (!profile) {
              return;
            }
@@ -315,7 +315,7 @@ Index: src/chrome/browser/extensions/api/settings_private/prefs_util.cc
 ===================================================================
 --- src.orig/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ src/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -330,6 +330,7 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
+@@ -329,6 +329,7 @@ const PrefsUtil::TypedPrefMap& PrefsUtil
  
    (*s_allowlist)[::prefs::kNewTabNextToActive] =
        settings_api::PrefType::kBoolean;
@@ -347,7 +347,7 @@ Index: src/chrome/browser/favicon/favicon_utils.cc
  #include "components/favicon/content/content_favicon_driver.h"
  #include "components/favicon/core/fallback_url_util.h"
  #include "components/favicon/core/favicon_service.h"
-@@ -59,11 +60,17 @@ SkColor ComputeBackgroundColorForUrl(con
+@@ -54,11 +55,17 @@ SkColor ComputeBackgroundColorForUrl(con
  }
  
  // Gets the appropriate light or dark rasterized default favicon.
@@ -368,19 +368,6 @@ Index: src/chrome/browser/favicon/favicon_utils.cc
  }
  
  }  // namespace
-@@ -120,7 +127,11 @@ gfx::Image TabFaviconFromWebContents(con
-     content::NavigationController& controller = contents->GetController();
- 
-     content::NavigationEntry* entry = controller.GetLastCommittedEntry();
--    if (entry && (entry->GetPageType() == content::PAGE_TYPE_ERROR)) {
-+    // helium-fork 3a-r3: only a site's own icon is greyed out. The default
-+    // one is the browser's mark now (above), already grey on white -- the
-+    // shift would wash it out, and it is meant to read the same on every row.
-+    if (entry && (entry->GetPageType() == content::PAGE_TYPE_ERROR) &&
-+        entry->GetFavicon().valid) {
-       color_utils::HSL shift = {kDesaturateHue, kDesaturateSaturation,
-                                 kDesaturateLightness};
-       return gfx::Image(gfx::ImageSkiaOperations::CreateHSLShiftedImage(
 Index: src/chrome/browser/favicon/favicon_utils_unittest.cc
 ===================================================================
 --- src.orig/chrome/browser/favicon/favicon_utils_unittest.cc
@@ -391,9 +378,9 @@ Index: src/chrome/browser/favicon/favicon_utils_unittest.cc
  #include "chrome/browser/favicon/favicon_utils.h"
 +#include "chrome/grit/theme_resources.h"
  
- #include "content/public/browser/navigation_entry.h"
- #include "testing/gtest/include/gtest/gtest.h"
-@@ -91,11 +92,11 @@ class DefaultFaviconModelTest : public :
+ #include "base/functional/bind.h"
+ #include "base/test/bind.h"
+@@ -93,11 +94,11 @@ class DefaultFaviconModelTest : public :
      return ui::ColorProviderManager::GetForTesting().GetColorProviderFor(key);
    }
  
@@ -473,15 +460,15 @@ Index: src/chrome/browser/sessions/session_restore.cc
 ===================================================================
 --- src.orig/chrome/browser/sessions/session_restore.cc
 +++ src/chrome/browser/sessions/session_restore.cc
-@@ -76,6 +76,7 @@
- #include "chrome/browser/ui/startup/startup_types.h"
+@@ -77,6 +77,7 @@
  #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
  #include "chrome/browser/ui/helium_workspace/workspace_tab_state.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model_selection_state.h"
-@@ -1073,21 +1074,26 @@ class SessionRestoreImpl : public Browse
+@@ -1098,21 +1099,26 @@ class SessionRestoreImpl : public Browse
      // builds those inside its TYPE_NORMAL block) and no business being handed
      // a chrome://newtab -- it keeps upstream's behaviour exactly.
  
@@ -516,7 +503,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
          browser != browser_ &&
          browser->GetType() == BrowserWindowInterface::TYPE_NORMAL;
  
-@@ -1174,6 +1180,39 @@ class SessionRestoreImpl : public Browse
+@@ -1199,6 +1205,39 @@ class SessionRestoreImpl : public Browse
        browser->tab_strip_model()->RestoreSplit(
            split_id, tab_indices, split_tabs::SplitTabVisualData());
      }
@@ -556,11 +543,11 @@ Index: src/chrome/browser/sessions/session_restore.cc
    }
  
    // |tab_index| is constrained to the pinned region for pinned tabs.
-@@ -1309,14 +1348,27 @@ class SessionRestoreImpl : public Browse
+@@ -1335,14 +1374,27 @@ class SessionRestoreImpl : public Browse
      }
      if (browser->GetTabStripModel()->group_model()->ContainsTabGroup(
              *initial_group)) {
--      browser->GetTabStripModel()->SetFocusedGroup(*initial_group);
+-      browser->GetTabStripModel()->EnterFocusMode(*initial_group);
 +      FocusRestoredGroup(browser->GetTabStripModel(), *initial_group);
        return;
      }
@@ -568,25 +555,25 @@ Index: src/chrome/browser/sessions/session_restore.cc
      if (it != new_group_ids.end() &&
          browser->GetTabStripModel()->group_model()->ContainsTabGroup(
              it->second)) {
--      browser->GetTabStripModel()->SetFocusedGroup(it->second);
+-      browser->GetTabStripModel()->EnterFocusMode(it->second);
 +      FocusRestoredGroup(browser->GetTabStripModel(), it->second);
 +    }
 +  }
 +
 +  // helium-fork 3a-r2 (user 2026-09-18: no path wakes a restored row; review
 +  // 2026-10-04): focusing a group the active tab is not in activates -- and
-+  // so loads -- the group's first tab (TabStripModel::SetFocusedGroup). The
++  // so loads -- the group's first tab (TabStripModel::EnterFocusMode). The
 +  // window keeps the tab it landed on instead, and the group stays unfocused.
 +  // Reachable only with the TabGroupsFocusing experiment on (off by default).
 +  static void FocusRestoredGroup(TabStripModel* model,
 +                                 tab_groups::TabGroupId group) {
 +    const tabs::TabInterface* const active = model->GetActiveTab();
 +    if (active && active->GetGroup() == group) {
-+      model->SetFocusedGroup(group);
++      model->EnterFocusMode(group);
      }
    }
  
-@@ -1461,6 +1513,18 @@ class SessionRestoreImpl : public Browse
+@@ -1505,6 +1557,18 @@ class SessionRestoreImpl : public Browse
    void AppendURLsToBrowser(BrowserWindowInterface* browser,
                             const StartupTabs& startup_tabs) {
      bool is_first_tab = true;
@@ -605,7 +592,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
      for (const auto& startup_tab : startup_tabs) {
        const GURL& url = startup_tab.url;
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-@@ -1469,6 +1533,9 @@ class SessionRestoreImpl : public Browse
+@@ -1513,6 +1577,9 @@ class SessionRestoreImpl : public Browse
          continue;
        }
  #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
@@ -615,7 +602,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
        // helium-fork 2a-r1 / 2a-r5: with "Open the New Tab page" the session
        // is restored anyway (the sidebar's Today, asleep), and the NTP that
        // startup wants on top may already be sitting in it, untouched, from
-@@ -1489,11 +1556,37 @@ class SessionRestoreImpl : public Browse
+@@ -1533,11 +1600,37 @@ class SessionRestoreImpl : public Browse
            }
          }
          if (blank_ntp >= 0) {
@@ -653,7 +640,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
        int add_types = AddTabTypes::ADD_FORCE_INDEX;
        if (is_first_tab) {
          add_types |= AddTabTypes::ADD_ACTIVE;
-@@ -1504,8 +1597,22 @@ class SessionRestoreImpl : public Browse
+@@ -1548,8 +1641,22 @@ class SessionRestoreImpl : public Browse
                                 : WindowOpenDisposition::NEW_BACKGROUND_TAB;
        params.tabstrip_add_types = add_types;
        is_first_tab = false;
@@ -680,22 +667,24 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -632,11 +632,14 @@ static_library("ui") {
-     "helium_workspace/workspace_archive_service.h",
-     "helium_workspace/workspace_archive_service_factory.cc",
-     "helium_workspace/workspace_archive_service_factory.h",
-+    "helium_workspace/workspace_close_landing.h",
-     "helium_workspace/workspace_entry.cc",
-     "helium_workspace/workspace_entry.h",
-     "helium_workspace/workspace_drag_math.h",
-     "helium_workspace/workspace_favicon_image.h",
-     "helium_workspace/workspace_grid_math.h",
-+    "helium_workspace/workspace_move_to_space_menu_model.cc",
-+    "helium_workspace/workspace_move_to_space_menu_model.h",
-     "helium_workspace/workspace_omnibox_match.h",
-     "helium_workspace/workspace_pin_semantics.cc",
-     "helium_workspace/workspace_pin_semantics.h",
-@@ -4325,6 +4328,8 @@ test("helium_workspace_unittests") {
+@@ -2342,6 +2342,7 @@ static_library("ui") {
+       "helium_workspace/workspace_archive_service.h",
+       "helium_workspace/workspace_archive_service_factory.cc",
+       "helium_workspace/workspace_archive_service_factory.h",
++      "helium_workspace/workspace_close_landing.h",
+       "helium_workspace/workspace_drag_math.h",
+       "helium_workspace/workspace_emoji_table.cc",
+       "helium_workspace/workspace_emoji_table.h",
+@@ -2349,6 +2350,8 @@ static_library("ui") {
+       "helium_workspace/workspace_entry.h",
+       "helium_workspace/workspace_favicon_image.h",
+       "helium_workspace/workspace_grid_math.h",
++      "helium_workspace/workspace_move_to_space_menu_model.cc",
++      "helium_workspace/workspace_move_to_space_menu_model.h",
+       "helium_workspace/workspace_omnibox_match.h",
+       "helium_workspace/workspace_pin_semantics.cc",
+       "helium_workspace/workspace_pin_semantics.h",
+@@ -5935,6 +5938,8 @@ test("helium_workspace_unittests") {
      "helium/arc_card_layout_unittest.cc",
      "helium/arc_composer.h",
      "helium/arc_composer_unittest.cc",
@@ -704,7 +693,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_favorite_accent.h",
      "helium/arc_favorite_accent_unittest.cc",
      "helium/arc_floating_sidebar.h",
-@@ -4357,6 +4362,8 @@ test("helium_workspace_unittests") {
+@@ -5967,6 +5972,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_archive_policy_unittest.cc",
      "helium_workspace/workspace_blank_tab.h",
      "helium_workspace/workspace_blank_tab_unittest.cc",
@@ -717,7 +706,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -852,6 +852,16 @@ void BrowserCommandController::HandleCom
+@@ -859,6 +859,16 @@ void BrowserCommandController::HandleCom
      case IDC_SELECT_TAB_5:
      case IDC_SELECT_TAB_6:
      case IDC_SELECT_TAB_7:
@@ -734,7 +723,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
        base::RecordAction(base::UserMetricsAction("Accel_SelectNumberedTab"));
        SelectNumberedTab(
            browser_, id - IDC_SELECT_TAB_0,
-@@ -859,6 +869,12 @@ void BrowserCommandController::HandleCom
+@@ -866,6 +876,12 @@ void BrowserCommandController::HandleCom
                TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
        break;
      case IDC_SELECT_LAST_TAB:
@@ -759,7 +748,7 @@ Index: src/chrome/browser/ui/browser_commands.cc
  #include "chrome/browser/ui/helium_workspace/workspace_tab_state.h"
  
  #include <algorithm>
-@@ -1522,17 +1523,25 @@ void CloseTab(BrowserWindowInterface* br
+@@ -1523,17 +1524,25 @@ void CloseTab(BrowserWindowInterface* br
      TabStripModel* const model = browser->GetTabStripModel();
      content::WebContents* const active = active_tab->GetContents();
      if (model->selection_model().size() == 1 &&
@@ -3080,7 +3069,7 @@ Index: src/chrome/browser/ui/navigator/browser_navigator.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/navigator/browser_navigator.cc
 +++ src/chrome/browser/ui/navigator/browser_navigator.cc
-@@ -1017,7 +1017,14 @@ base::WeakPtr<content::NavigationHandle>
+@@ -1045,7 +1045,14 @@ base::WeakPtr<content::NavigationHandle>
                                       user_initiated);
    } else if (singleton_index == -1) {
      if (source_browser != params->browser) {
@@ -3100,7 +3089,7 @@ Index: src/chrome/browser/ui/tab_ui_helper.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tab_ui_helper.cc
 +++ src/chrome/browser/ui/tab_ui_helper.cc
-@@ -33,6 +33,7 @@
+@@ -35,6 +35,7 @@
  #include "components/tabs/public/tab_interface.h"
  #include "components/tabs/public/tab_network_state.h"
  #include "content/public/browser/navigation_controller.h"
@@ -3108,7 +3097,7 @@ Index: src/chrome/browser/ui/tab_ui_helper.cc
  #include "content/public/browser/navigation_entry.h"
  #include "content/public/browser/render_frame_host.h"
  #include "content/public/browser/web_contents.h"
-@@ -137,7 +138,12 @@ bool TabUIHelper::ShouldRenderLoadingTit
+@@ -158,7 +159,12 @@ bool TabUIHelper::ShouldRenderLoadingTit
  bool TabUIHelper::ShouldThemifyFavicon() {
    content::NavigationEntry* const entry =
        tab().GetContents()->GetController().GetLastCommittedEntry();
@@ -3137,7 +3126,7 @@ Index: src/chrome/browser/ui/tabs/tab_menu_model.cc
  #include "chrome/browser/ui/tabs/split_tab_menu_model.h"
  #include "chrome/browser/ui/tabs/split_tab_swap_menu_model.h"
  #include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
-@@ -514,6 +516,39 @@ void TabMenuModel::Build(int index) {
+@@ -538,6 +540,39 @@ void TabMenuModel::Build(int index) {
        AddItemWithStringId(TabStripModel::CommandToggleFavorite,
                            is_favorite ? IDS_TAB_CXMENU_REMOVE_FROM_FAVORITES
                                        : IDS_TAB_CXMENU_ADD_TO_FAVORITES);
@@ -3181,7 +3170,7 @@ Index: src/chrome/browser/ui/tabs/tab_menu_model.h
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_menu_model.h
 +++ src/chrome/browser/ui/tabs/tab_menu_model.h
-@@ -97,6 +97,8 @@ class TabMenuModel : public ui::SimpleMe
+@@ -98,6 +98,8 @@ class TabMenuModel : public ui::SimpleMe
  
    std::unique_ptr<ui::SimpleMenuModel> add_to_existing_group_submenu_;
    std::unique_ptr<ui::SimpleMenuModel> add_to_existing_window_submenu_;
@@ -3349,7 +3338,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
  // Works similarly to base::AutoReset but checks for access from the wrong
  // thread as well as ensuring that the previous value of the re-entrancy guard
  // variable was false.
-@@ -1464,6 +1564,17 @@ void TabStripModel::CloseAllTabs() {
+@@ -1373,6 +1473,17 @@ void TabStripModel::CloseAllTabs() {
         tabs::TabInterface* tab : std::views::reverse(tabs)) {
      closing_tabs.push_back(tab->GetContents());
    }
@@ -3367,7 +3356,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
    CloseTabs(closing_tabs, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
  }
  
-@@ -1483,6 +1594,18 @@ void TabStripModel::CloseAllTabsInGroup(
+@@ -1390,6 +1501,18 @@ void TabStripModel::CloseAllTabsInGroup(
      // If the group about to be closed has all of the tabs in the browser, add a
      // new tab outside the group to prevent the browser from closing.
      delegate_->AddTabAt(GURL(), -1, /*foreground=*/true);
@@ -3386,7 +3375,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
    }
  
    if (!group_model_ || !group_model_->ContainsTabGroup(group)) {
-@@ -1533,8 +1656,29 @@ void TabStripModel::CloseWebContents(con
+@@ -1440,8 +1563,29 @@ void TabStripModel::CloseWebContents(con
    // "close-window-with-last-tab" check on this path any more.
    // 2a-r5: "the last one" means the last *loaded* one -- sleeping rows may
    // remain (HasLoadedTabOutside).
@@ -3418,7 +3407,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      delegate()->AddTabAt(GURL(), -1, true);
    }
    CloseTabs({contents}, close_types);
-@@ -1944,6 +2088,40 @@ void TabStripModel::AddTab(std::unique_p
+@@ -1851,6 +1995,40 @@ void TabStripModel::AddTab(std::unique_p
      // the history backend, so we don't inherit the opener in this case.
      index = DetermineInsertionIndex(transition, add_types & ADD_ACTIVE);
      inherit_opener = true;
@@ -3459,7 +3448,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
  
      // The current active index is our opener. If the tab we are adding is not
      // in a group, set the group of the tab to that of its opener.
-@@ -1954,20 +2132,13 @@ void TabStripModel::AddTab(std::unique_p
+@@ -1861,20 +2039,13 @@ void TabStripModel::AddTab(std::unique_p
      // For all other types, respect what was passed to us, normalizing -1s and
      // values that are too large.
      if (index < 0 || index > count()) {
@@ -3487,7 +3476,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      }
    }
  
-@@ -2820,6 +2991,10 @@ bool TabStripModel::IsContextMenuCommand
+@@ -2916,6 +3087,10 @@ bool TabStripModel::IsContextMenuCommand
      case CommandMoveToExistingWindow:
        return true;
  
@@ -3498,7 +3487,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      case CommandMoveTabsToNewWindow: {
        std::vector<int> indices = GetIndicesForCommand(context_index);
        const bool would_leave_strip_empty =
-@@ -2966,11 +3141,21 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -3062,11 +3237,21 @@ void TabStripModel::ExecuteContextMenuCo
          }
          break;
        }
@@ -3521,7 +3510,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
        break;
      }
  
-@@ -3032,25 +3217,41 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -3122,25 +3307,41 @@ void TabStripModel::ExecuteContextMenuCo
        base::UmaHistogramCounts1000(
            "Tab.ContextMenu.TogglePinned.SelectedTabsCount",
            selection_model_.size());
@@ -3566,7 +3555,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
        std::vector<int> indices = GetIndicesForCommand(context_index);
        std::vector<tab_groups::TabGroupId> groups_to_delete =
            GetGroupsDestroyedFromRemovingIndices(indices);
-@@ -3234,6 +3435,11 @@ void TabStripModel::ExecuteContextMenuCo
+@@ -3361,6 +3562,11 @@ void TabStripModel::ExecuteContextMenuCo
        break;
      }
  
@@ -3578,7 +3567,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
      case CommandMoveTabsToNewWindow: {
        base::UmaHistogramCounts1000(
            "Tab.ContextMenu.MoveTabsToNewWindow.SelectedTabsCount",
-@@ -3557,8 +3763,17 @@ void TabStripModel::ExecuteCloseTabs(
+@@ -3671,8 +3877,17 @@ void TabStripModel::ExecuteCloseTabs(
    for (tabs::TabInterface* t : tabs_to_close) {
      closing_contents.push_back(t->GetContents());
    }
@@ -3597,7 +3586,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
        !(tabs_to_close.size() == 1 && IsBlankNewTab(closing_contents[0]))) {
      delegate()->AddTabAt(GURL(), -1, true);
    }
-@@ -6050,6 +6265,47 @@ bool TabStripModel::IsTabClosable(const
+@@ -6167,6 +6382,47 @@ bool TabStripModel::IsTabClosable(const
           !provider->policy_manager().IsPreventCloseEnabled(*app_id);
  }
  
@@ -3645,40 +3634,46 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.cc
  int TabStripModel::DetermineInsertionIndex(ui::PageTransition transition,
                                             bool foreground) {
    int tab_count = count();
-@@ -6136,17 +6392,24 @@ std::optional<int> TabStripModel::Determ
-   // follows it there, WorkspaceTabController::HandleActiveTabChange). A
-   // sleeping tab (workspace_tab_state.h) is skipped: landing on it would
-   // load a page the user did not ask for.
-+  // 3a-r8 (user 2026-09-20 #5): ... of the tabs the window's space shows, no
-+  // longer "in whichever space it lives" -- Cmd+W stays in the space it was
-+  // pressed in. There always is one: every close that would leave the space
-+  // without a loaded tab hands back a blank page first (HasLoadedTabOutside).
-+  // 3a-r9 (user 2026-09-20, shown 3a-r1's "the row below the closed one" next
-+  // to this: "关标签后落到哪一行，严格按照最近使用顺序"): and it is the only fork
-+  // rule -- 3a-r1's Dia rule (a loaded Today tab hands over to the Today row
-+  // under it) stood before this one and is withdrawn.
-   {
-+    const ShownSpace shown = ShownSpaceOf(*this);
-     int mru_index = TabStripModel::kNoTab;
-     base::TimeTicks mru_time;
-     for (int i = 0; i < count(); ++i) {
--      if (block_tabs.Contains(gfx::Range(i)) || IsTabCollapsed(i)) {
-+      if (block_tabs.Contains(gfx::Range(i)) ||
-+          !IsLoadedTabOfSpace(*this, i, shown.service, shown.id)) {
-         continue;
-       }
-       content::WebContents* const contents = GetWebContentsAt(i);
--      if (!contents || helium_workspace::IsSleepingTab(contents)) {
--        continue;
--      }
-       if (mru_index == TabStripModel::kNoTab ||
-           contents->GetLastActiveTimeTicks() > mru_time) {
-         mru_index = i;
+@@ -6277,20 +6533,28 @@ std::optional<int> TabStripModel::Determ
+     // Ctrl+Tab would offer first -- in whichever space it lives (the window
+     // follows it there, WorkspaceTabController::HandleActiveTabChange). A
+     // sleeping tab (workspace_tab_state.h) is skipped: landing on it would
+-    // load a page the user did not ask for. (156: inside the candidate search,
+-    // so a focused tab group still bounds it like every other preference.)
++    // load a page the user did not ask for.
++    // 3a-r8 (user 2026-09-20 #5): ... of the tabs the window's space shows, no
++    // longer "in whichever space it lives" -- Cmd+W stays in the space it was
++    // pressed in. There always is one: every close that would leave the space
++    // without a loaded tab hands back a blank page first (HasLoadedTabOutside).
++    // 3a-r9 (user 2026-09-20, shown 3a-r1's "the row below the closed one" next
++    // to this: "关标签后落到哪一行，严格按照最近使用顺序"): and it is the only fork
++    // rule -- 3a-r1's Dia rule (a loaded Today tab hands over to the Today row
++    // under it) stood before this one and is withdrawn.
++    // (156: inside the candidate search, so a focused tab group still bounds
++    // it like every other preference.)
+     {
++      const ShownSpace shown = ShownSpaceOf(*this);
+       int mru_index = TabStripModel::kNoTab;
+       base::TimeTicks mru_time;
+       for (int i = 0; i < count(); ++i) {
+-        if (block_tabs.Contains(gfx::Range(i)) || IsTabCollapsed(i) ||
++        if (block_tabs.Contains(gfx::Range(i)) ||
++            !IsLoadedTabOfSpace(*this, i, shown.service, shown.id) ||
+             !is_valid_for_focus(i)) {
+           continue;
+         }
+         content::WebContents* const contents = GetWebContentsAt(i);
+-        if (!contents || helium_workspace::IsSleepingTab(contents)) {
+-          continue;
+-        }
+         if (mru_index == TabStripModel::kNoTab ||
+             contents->GetLastActiveTimeTicks() > mru_time) {
+           mru_index = i;
 Index: src/chrome/browser/ui/tabs/tab_strip_model.h
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_model.h
 +++ src/chrome/browser/ui/tabs/tab_strip_model.h
-@@ -49,6 +49,7 @@
+@@ -51,6 +51,7 @@
  #endif
  
  class DraggingTabsSession;
@@ -3686,7 +3681,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_model.h
  class Profile;
  class TabGroupModel;
  class TabStripModelDelegate;
-@@ -878,6 +879,40 @@ class TabStripModel {
+@@ -910,6 +911,40 @@ class TabStripModel {
    // transition and foreground flag to figure out how it was opened.
    int DetermineInsertionIndex(ui::PageTransition transition, bool foreground);
  
@@ -3731,7 +3726,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -116,6 +116,28 @@ constexpr int kSpaceBarBottomInset = 9;
+@@ -124,6 +124,28 @@ constexpr int kSpaceBarBottomInset = 9;
  // helium-fork: breathing room above and below the Arc shell top row.
  constexpr int kArcTopContainerGap = 4;
  
@@ -3760,7 +3755,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  // Shadow is used in expand-on-hover mode. Shadow radius and opacity are dynamic
  // and set by the layout.
  // helium-fork: no longer shown for the floating sidebar card -- that card's
-@@ -200,10 +222,11 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -229,10 +251,11 @@ VerticalTabStripRegionView::VerticalTabS
            base::BindRepeating(
                &VerticalTabStripRegionView::RecordNewTabButtonPressed,
                base::Unretained(this))));
@@ -3774,7 +3769,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    bottom_button_container_->SetProperty(
        views::kMarginsKey,
        gfx::Insets::TLBR(kBottomContainerGap, region_horizontal_padding,
-@@ -263,6 +286,9 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -297,6 +320,9 @@ VerticalTabStripRegionView::VerticalTabS
            base::Unretained(this)),
        base::BindRepeating(
            &VerticalTabStripRegionView::OnCurrentSpaceWillChange,
@@ -3784,7 +3779,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
            base::Unretained(this))));
    space_bar_->SetProperty(
        views::kMarginsKey,
-@@ -936,11 +962,8 @@ void VerticalTabStripRegionView::OnCurre
+@@ -1045,11 +1071,8 @@ void VerticalTabStripRegionView::OnCurre
    // row, pinned rows, folders, Today and New Tab move as one; favorites,
    // the address row and the bottom bar stay). The controller says which
    // way; 0 is a landing (startup, restore) and does not animate.
@@ -3798,7 +3793,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // M6 轮2 2b (reviewer 2026-09-16): no slide while a sheet is up -- the
    // lists are hidden, OnCurrentSpaceWillChange took no snapshot, and a
    // slide started here would still be mid-transform if the sheet closed
-@@ -952,13 +975,6 @@ void VerticalTabStripRegionView::OnCurre
+@@ -1061,13 +1084,6 @@ void VerticalTabStripRegionView::OnCurre
      if (const auto* controller = helium_workspace::WorkspaceTabController::From(
              browser_view()->browser())) {
        const int direction = controller->last_switch_direction();
@@ -3812,7 +3807,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
        strip->SetSlideCallbacks(
            base::BindRepeating(&VerticalTabStripRegionView::OnListSlideProgress,
                                base::Unretained(this)),
-@@ -969,35 +985,27 @@ void VerticalTabStripRegionView::OnCurre
+@@ -1078,35 +1094,27 @@ void VerticalTabStripRegionView::OnCurre
    }
  }
  
@@ -3863,7 +3858,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // M6-r4: the leaving list's card shadow goes with it (r3 hid it for the
    // slide, which the user read as a blink: 2026-09-03 recording, shadow
    // zone 211 -> 222 -> 211 over 7 frames). Snapshotted like the list, into
-@@ -1027,17 +1035,6 @@ void VerticalTabStripRegionView::OnCurre
+@@ -1136,17 +1144,6 @@ void VerticalTabStripRegionView::OnCurre
  
  void VerticalTabStripRegionView::OnListSlideProgress(float dx_live,
                                                       float dx_old) {
@@ -3881,7 +3876,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // M6-r4: the row shadows ride with their lists.
    const gfx::Transform live = gfx::Transform::MakeTranslation(dx_live, 0.0f);
    for (HeliumCardShadowView* shadow :
-@@ -1053,7 +1050,6 @@ void VerticalTabStripRegionView::OnListS
+@@ -1162,7 +1159,6 @@ void VerticalTabStripRegionView::OnListS
  }
  
  void VerticalTabStripRegionView::OnListSlideEnded() {
@@ -3889,7 +3884,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    leaving_shadow_snapshots_.clear();
    for (HeliumCardShadowView* shadow :
         {pinned_row_shadow_.get(), active_row_shadow_.get()}) {
-@@ -1061,18 +1057,6 @@ void VerticalTabStripRegionView::OnListS
+@@ -1170,18 +1166,6 @@ void VerticalTabStripRegionView::OnListS
        shadow->layer()->SetTransform(gfx::Transform());
      }
    }
@@ -3908,7 +3903,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // The card shadow: both containers re-derive it in their Layout.
    if (WorkspaceSidebarView* const sidebar = WorkspaceDragSidebar()) {
      sidebar->InvalidateLayout();
-@@ -1116,6 +1100,14 @@ void VerticalTabStripRegionView::ShowSpa
+@@ -1225,6 +1209,14 @@ void VerticalTabStripRegionView::ShowSpa
    if (create_form_) {
      return;
    }
@@ -3923,10 +3918,10 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    auto form = std::make_unique<HeliumSpaceCreateFormView>(
        base::BindRepeating(&VerticalTabStripRegionView::OnCreateFormCreate,
                            base::Unretained(this)),
-@@ -1167,10 +1159,11 @@ void VerticalTabStripRegionView::ShowSid
-   const size_t index =
-       arc_address_row_ ? GetIndexOf(arc_address_row_).value() + 1 : 0;
-   sheet_ = AddChildViewAt(std::move(sheet), index);
+@@ -1279,10 +1271,11 @@ void VerticalTabStripRegionView::ShowSid
+           ? content_area_view_->GetIndexOf(arc_address_row_).value() + 1
+           : 0;
+   sheet_ = content_area_view_->AddChildViewAt(std::move(sheet), index);
 +  // 3a-r4: the sheets lay themselves out by hand and report no preferred
 +  // height either -- same rule, same reason (LeftoverHeightFlexRule).
    sheet_->SetProperty(
@@ -3937,7 +3932,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    ApplySheetVisibility(kind);
    InvalidateLayout();
  }
-@@ -1224,7 +1217,8 @@ void VerticalTabStripRegionView::ApplySh
+@@ -1336,7 +1329,8 @@ void VerticalTabStripRegionView::ApplySh
                    ? WorkspaceSpaceBarView::FormMode::kManage
                    : WorkspaceSpaceBarView::FormMode::kNone);
    }
@@ -3947,7 +3942,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (shown && tab_strip_view()) {
      if (PinnedTabContainerView* const pinned =
              tab_strip_view()->GetPinnedTabsContainer()) {
-@@ -1552,7 +1546,7 @@ void VerticalTabStripRegionView::OnMedia
+@@ -1664,7 +1658,7 @@ void VerticalTabStripRegionView::OnMedia
    SetMediaStripExpanded(true);
  }
  
@@ -3956,7 +3951,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    if (!media_strip_ || !media_strip_controller_) {
      return;
    }
-@@ -1562,7 +1556,7 @@ void VerticalTabStripRegionView::UpdateM
+@@ -1674,7 +1668,7 @@ void VerticalTabStripRegionView::UpdateM
    const bool shown =
        !sheet_ && helium::ShouldShowSidebarMediaStrip(
                       media_strip_controller_->ready_row_count(), strip_width);
@@ -3965,7 +3960,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    // The floating half: capsules for sessions beyond the first -- one shown
    // flag, one trigger frame, one 200ms fade for all of it (M3.3h). The
    // scrim that used to fade rows out under the stack is gone (2a-r3): the
-@@ -1573,7 +1567,7 @@ void VerticalTabStripRegionView::UpdateM
+@@ -1685,7 +1679,7 @@ void VerticalTabStripRegionView::UpdateM
      media_overlay_stack_->SetVisible(stack_shown);
    }
    for (HeliumMediaStripView* capsule : overlay_capsules_) {
@@ -3974,9 +3969,9 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    }
    UpdateMediaStripReservedSpace(stack_shown ? overlay_capsules_.size() : 0);
    if (!shown) {
-@@ -2040,10 +2034,28 @@ void VerticalTabStripRegionView::OnTabSt
-   CHECK(bottom_container_index.has_value());
-   ReorderChildView(tab_strip_view(), bottom_container_index.value());
+@@ -2192,11 +2186,29 @@ void VerticalTabStripRegionView::AddTabS
+               &VerticalTabStripRegionView::OnExpandOnHoverEnabledChanged,
+               base::Unretained(this)));
  
 +  // helium-fork 3a-r1 (user 2026-09-18): the "+ New Tab" row is Today's first
 +  // row now and the strip brings its own (TabStripView::
@@ -3998,7 +3993,8 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    OnCollapseStateChanged(state_controller_->GetCollapseState());
  }
  
- void VerticalTabStripRegionView::OnTabStripViewWillClear() {
+ std::unique_ptr<views::View> VerticalTabStripRegionView::RemoveTabStripView(
+     views::View* view) {
 +  new_tab_row_pressed_subscription_ = {};
    on_animation_update_subscription_.reset();
    expand_on_hover_enabled_changed_subscription_.reset();
@@ -4007,7 +4003,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -368,14 +368,6 @@ class VerticalTabStripRegionView final
+@@ -409,14 +409,6 @@ class VerticalTabStripRegionView final
    // machinery below TabStripView masks to bounds and would clip it -- and
    // aimed by the unpinned container (injected lazily from Layout()).
    raw_ptr<HeliumCardShadowView> active_row_shadow_ = nullptr;
@@ -4022,7 +4018,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    // Its twin for the active *pinned* row (aimed by WorkspaceSidebarView; the
    // active tab is unique, so at most one of the two is ever lit).
    raw_ptr<HeliumCardShadowView> pinned_row_shadow_ = nullptr;
-@@ -388,6 +380,9 @@ class VerticalTabStripRegionView final
+@@ -429,6 +421,9 @@ class VerticalTabStripRegionView final
    // sits in the host's layer at the landed bounds).
    std::vector<std::unique_ptr<HeliumViewSnapshotLayer>>
        leaving_shadow_snapshots_;
@@ -4032,7 +4028,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    std::unique_ptr<ExpandOnHoverLock> media_strip_hover_lock_;
    // r5: one capsule per session. media_strip_ is the base capsule (oldest
    // session, keeps the layout-flow slot); every later session gets a
-@@ -405,7 +400,9 @@ class VerticalTabStripRegionView final
+@@ -446,7 +441,9 @@ class VerticalTabStripRegionView final
    raw_ptr<HeliumMediaStripView> hovered_media_capsule_ = nullptr;
  
    void OnMediaStripModelChanged();
@@ -4043,7 +4039,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    // M6 轮2: the sheet slot (see ShowSpaceCreateForm). The kind tells the
    // bottom bar which shape to take (WorkspaceSpaceBarView::FormMode).
    enum class SidebarSheetKind { kNone, kCreateForm, kManage };
-@@ -446,6 +443,9 @@ class VerticalTabStripRegionView final
+@@ -487,6 +484,9 @@ class VerticalTabStripRegionView final
    // button in with the list and its snapshot out; at the end drop it all
    // and let the containers re-derive the active row's shadow.
    void OnCurrentSpaceWillChange(int direction);
@@ -4057,7 +4053,7 @@ Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
 +++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -81,6 +81,8 @@ source_set("impl") {
+@@ -89,6 +89,8 @@ source_set("impl") {
      # rather than ":common" because they need the complete WorkspaceService
      # type, which is in //chrome/browser/ui -- a dependency ":common" cannot
      # take without a cycle.
@@ -4070,7 +4066,7 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.cc
-@@ -173,6 +173,21 @@ bool PinnedTabContainerView::ShouldSnapT
+@@ -174,6 +174,21 @@ bool PinnedTabContainerView::ShouldSnapT
           &child_view == workspace_view_;
  }
  
@@ -4096,7 +4092,7 @@ Index: src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
 +++ src/chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h
-@@ -45,6 +45,8 @@ class PinnedTabContainerView
+@@ -46,6 +46,8 @@ class PinnedTabContainerView
    bool ShouldAnimateOpacityForAddAndRemove(
        const views::View& child_view) const override;
    bool ShouldSnapToTarget(const views::View& child_view) const override;
@@ -4234,7 +4230,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
      RemoveNonAnimatingPendingDeleteViews();
      ClearViewAnimationMetadata();
    }
-@@ -307,7 +342,29 @@ void TabCollectionAnimatingLayoutManager
+@@ -327,7 +362,29 @@ void TabCollectionAnimatingLayoutManager
    double denominator = 1.0 - starting_offset_;
    double percent = (current_offset_ - starting_offset_) / denominator;
    percent = std::clamp(percent, 0.0, 1.0);
@@ -4265,7 +4261,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
  }
  
  bool TabCollectionAnimatingLayoutManager::RecalculateTarget() {
-@@ -376,7 +433,7 @@ bool TabCollectionAnimatingLayoutManager
+@@ -396,7 +453,7 @@ bool TabCollectionAnimatingLayoutManager
  
    // If we haven't actually rendered a frame yet keep the original
    // starting_layout.
@@ -4274,8 +4270,8 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
      return true;
    }
  
-@@ -388,6 +445,11 @@ bool TabCollectionAnimatingLayoutManager
-     SetStartingLayout(current_layout_);
+@@ -408,6 +465,11 @@ bool TabCollectionAnimatingLayoutManager
+     SetStartingLayoutToCurrent();
      starting_offset_ = 0.0;
      current_offset_ = 0.0;
 +    // helium-fork 3a-r2: a fresh run picks its timing (a retarget early in a
@@ -4286,7 +4282,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
      animation_.Reset(0.0);
    } else {
      // We are still early in the animation. Simply update the starting offset.
-@@ -397,12 +459,57 @@ bool TabCollectionAnimatingLayoutManager
+@@ -417,12 +479,57 @@ bool TabCollectionAnimatingLayoutManager
      starting_offset_ = current_offset_;
    }
  
@@ -4346,7 +4342,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
  void TabCollectionAnimatingLayoutManager::ResetViewsToTargetLayout(
      const std::vector<const views::View*>& views_to_snap) {
    RecalculateTarget();
-@@ -420,7 +527,7 @@ void TabCollectionAnimatingLayoutManager
+@@ -440,7 +547,7 @@ void TabCollectionAnimatingLayoutManager
    SetTargetLayout(target_layout_);
    // Call `InterpolateLayout()` to ensure layout metadata is available for
    // preferred size calculations
@@ -4355,7 +4351,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
    InvalidateHost(/*mark_layouts_changed=*/true);
  }
  
-@@ -432,6 +539,12 @@ void TabCollectionAnimatingLayoutManager
+@@ -452,6 +559,12 @@ void TabCollectionAnimatingLayoutManager
    if (animation_.is_animating()) {
      animation_.End();
    }
@@ -4368,7 +4364,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
    const views::ProposedLayout new_target =
        target_layout_manager_->GetProposedLayout(
            views::SizeBounds(host_view()->width(), {}), PassKey());
-@@ -477,7 +590,8 @@ void TabCollectionAnimatingLayoutManager
+@@ -497,7 +610,8 @@ void TabCollectionAnimatingLayoutManager
  }
  
  views::ProposedLayout TabCollectionAnimatingLayoutManager::InterpolateLayout(
@@ -4378,7 +4374,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
    views::ProposedLayout result;
  
    // Assume the host size snaps to its target size for the duration of the
-@@ -497,6 +611,11 @@ views::ProposedLayout TabCollectionAnima
+@@ -517,6 +631,11 @@ views::ProposedLayout TabCollectionAnima
          gfx::Tween::IntValueBetween(value, starting_layout_.host_size.width(),
                                      target_layout_.host_size.width());
    }
@@ -4390,7 +4386,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
  
    auto get_animation_axis_end = [this](const gfx::Rect& bounds) {
      return IsVerticalOrWrappingVertically() ? bounds.bottom() : bounds.right();
-@@ -524,10 +643,30 @@ views::ProposedLayout TabCollectionAnima
+@@ -544,10 +663,30 @@ views::ProposedLayout TabCollectionAnima
                   start_it != start_view_layout_map_.end()) {
          // Moved child.
          // Interpolate between start and target bounds.
@@ -4423,7 +4419,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
          // In the case layouts are updated mid-animation, ensure any previously
          // added views that are now treated as moved views are snapped to being
          // opaque.
-@@ -567,6 +706,11 @@ views::ProposedLayout TabCollectionAnima
+@@ -587,6 +726,11 @@ views::ProposedLayout TabCollectionAnima
          // This branch results in new children being snapped to target bounds
          // (e.g. drag-and-drop or split-tabs which explicitly requires no
          // animated transition).
@@ -4435,7 +4431,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
        }
        if (!interpolated_child.bounds.IsEmpty()) {
          current_layout_content_size_ =
-@@ -591,22 +735,36 @@ views::ProposedLayout TabCollectionAnima
+@@ -611,22 +755,36 @@ views::ProposedLayout TabCollectionAnima
        // `starting_layout_`), at which point they will be removed by
        // `RemoveNonAnimatingPendingDeleteViews()`.
        views::ChildLayout interpolated_child = start_it->second;
@@ -4595,7 +4591,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
  
    views::LayoutManagerBase* target_layout_manager() {
      return &*target_layout_manager_;
-@@ -157,6 +225,27 @@ class TabCollectionAnimatingLayoutManage
+@@ -161,6 +229,27 @@ class TabCollectionAnimatingLayoutManage
    // Updates `current_layout_` to reflect the current state of `animation_`.
    void UpdateCurrentLayout();
  
@@ -4623,7 +4619,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
    // Recalculates the target layout and starts/updates animation if necessary.
    // Returns true if a new target layout was computed.
    // Note: This is called in `OnLayoutChanged()` to ensure preferred size
-@@ -164,11 +253,14 @@ class TabCollectionAnimatingLayoutManage
+@@ -168,11 +257,14 @@ class TabCollectionAnimatingLayoutManage
    bool RecalculateTarget();
  
    // Interpolates between `starting_layout_` and `target_layout_` based on
@@ -4640,7 +4636,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
  
    // For horizontal tabs, the positions of adding views shift based on the
    // surrounding views. Precompute the starting x-position for those views.
-@@ -243,6 +335,18 @@ class TabCollectionAnimatingLayoutManage
+@@ -247,6 +339,18 @@ class TabCollectionAnimatingLayoutManage
    // and does not affect logical constness.
    mutable int current_layout_content_size_ = 0;
  
@@ -4659,7 +4655,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_m
    // True if the manager should animate its preferred size, i.e. the manager
    // will update the host's preferred size to match the layout calculated in
    // `current_layout_`. This should be used only when the host's parent is not
-@@ -250,6 +354,9 @@ class TabCollectionAnimatingLayoutManage
+@@ -254,6 +358,9 @@ class TabCollectionAnimatingLayoutManage
    // to its target size. In such cases animating the host's preferred size
    // avoids clipping close / fade-out animations.
    const bool animate_host_size_ = false;
@@ -4686,7 +4682,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.c
  #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
  #include "chrome/browser/ui/browser_command_controller.h"
  #include "chrome/browser/ui/browser_commands.h"
-@@ -291,6 +293,37 @@ void TabStripCollectionController::Selec
+@@ -298,6 +300,37 @@ void TabStripCollectionController::Selec
  void TabStripCollectionController::CloseTab(
      const tabs::TabInterface* tab_interface,
      CloseTabSource source) {
@@ -4753,7 +4749,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  #include "chrome/browser/ui/browser_element_identifiers.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
-@@ -43,6 +47,7 @@
+@@ -44,6 +48,7 @@
  #include "chrome/browser/ui/views/tabs/horizontal/horizontal_tab_strip_overflow_indicator_view.h"
  #include "chrome/browser/ui/views/tabs/horizontal/tab_scroll_button_container.h"
  #include "chrome/browser/ui/views/tabs/hovercard/tab_hover_card_controller.h"
@@ -4761,9 +4757,9 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_scroll_bar.h"
  #include "chrome/common/pref_names.h"
  #include "components/prefs/pref_service.h"
-@@ -217,6 +222,30 @@ TabStripView::TabStripView(TabCollection
-   // regular (Today) tabs, restored from the upstream separator.
-   tabs_separator_ = AddChildView(std::make_unique<views::Separator>());
+@@ -221,6 +226,30 @@ TabStripView::TabStripView(TabCollection
+   tabs_separator->SetInactiveColorId(kColorTabDividerFrameInactive);
+   tabs_separator_ = tabs_separator;
  
 +  // helium-fork 3a-r1: the "+ New Tab" row, Today's first (see the header).
 +  // The controller is attached before the views are built
@@ -4792,7 +4788,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    unpinned_tabs_scroll_view_ = AddChildView(std::make_unique<views::ScrollView>(
        views::ScrollView::ScrollWithLayers::kEnabled));
    SetScrollViewProperties(unpinned_tabs_scroll_view_);
-@@ -238,6 +267,7 @@ TabStripView::TabStripView(TabCollection
+@@ -242,6 +271,7 @@ TabStripView::TabStripView(TabCollection
    // layers sit inside this view's (which masks to bounds, so the arriving
    // list is clipped at the strip's edges); the scrollers' contents already
    // paint to layers (ScrollWithLayers), so text rendering does not change.
@@ -4800,7 +4796,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    for (views::View* view : {static_cast<views::View*>(pinned_tabs_scroll_view_),
                              static_cast<views::View*>(tabs_separator_),
                              static_cast<views::View*>(unpinned_tabs_scroll_view_)}) {
-@@ -281,6 +311,42 @@ TabStripView::~TabStripView() {
+@@ -284,6 +314,42 @@ TabStripView::~TabStripView() {
  
  namespace {
  
@@ -4843,7 +4839,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  // View::Paint stops at descendants that paint to their own layer (the
  // compositor draws those); a snapshot wants them too. Walk the subtree and
  // paint each layered node as a root at its offset -- its own layered
-@@ -288,19 +354,18 @@ namespace {
+@@ -291,19 +357,18 @@ namespace {
  // TabStripControlButton::SetText gives it a layer.)
  void PaintLayeredDescendants(views::View* view,
                               const ui::PaintContext& context,
@@ -4868,7 +4864,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    }
  }
  
-@@ -311,9 +376,34 @@ std::unique_ptr<HeliumViewSnapshotLayer>
+@@ -314,9 +379,34 @@ std::unique_ptr<HeliumViewSnapshotLayer>
      views::View* view,
      const gfx::Rect& visible_rect,
      float scale) {
@@ -4904,7 +4900,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
    SkBitmap bitmap;
    {
      // The painter rasters its recording into |bitmap| when it goes out of
-@@ -321,13 +411,14 @@ std::unique_ptr<HeliumViewSnapshotLayer>
+@@ -324,13 +414,14 @@ std::unique_ptr<HeliumViewSnapshotLayer>
      // by -origin is what clips it to |visible_rect|.
      ui::CanvasPainter painter(&bitmap, visible_rect.size(), scale,
                                SK_ColorTRANSPARENT, /*is_pixel_canvas=*/true);
@@ -4925,7 +4921,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  }
  
  HeliumViewSnapshotLayer::HeliumViewSnapshotLayer(gfx::ImageSkia image,
-@@ -389,6 +480,25 @@ void TabStripView::CaptureListSnapshot()
+@@ -392,6 +483,25 @@ void TabStripView::CaptureListSnapshot()
      add(tabs_separator_, tabs_separator_->GetLocalBounds(),
          tabs_separator_->bounds());
    }
@@ -4951,7 +4947,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
  }
  
  void TabStripView::DropSlideSnapshots() {
-@@ -421,9 +531,11 @@ void TabStripView::ApplySlideTransform(d
+@@ -424,9 +534,11 @@ void TabStripView::ApplySlideTransform(d
    const float dx_old = dx_live - static_cast<float>(slide_direction_ * width());
    slide_dx_live_ = dx_live;
    const gfx::Transform live = gfx::Transform::MakeTranslation(dx_live, 0.0f);
@@ -4966,7 +4962,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
      if (view && view->layer()) {
        view->layer()->SetTransform(live);
      }
-@@ -770,6 +882,10 @@ bool TabStripView::IsPositionInWindowCap
+@@ -771,6 +883,10 @@ bool TabStripView::IsPositionInWindowCap
      if (child == favorites_band_) {
        return false;
      }
@@ -5026,7 +5022,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
  
    // helium-fork M6-r1: slides the list region -- the pinned scroller, the
    // separator and the Today scroller, i.e. everything below the favorites
-@@ -234,6 +258,7 @@ class TabStripView final : public views:
+@@ -230,6 +254,7 @@ class TabStripView final : public views:
    void AnimationProgressed(const gfx::Animation* animation) override;
    void AnimationEnded(const gfx::Animation* animation) override;
    void ApplySlideTransform(double progress);
@@ -5034,7 +5030,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
    void DropSlideSnapshots();
  
    int slide_direction_ = 0;
-@@ -248,6 +273,9 @@ class TabStripView final : public views:
+@@ -244,6 +269,9 @@ class TabStripView final : public views:
    raw_ptr<views::ScrollView> pinned_tabs_scroll_view_ = nullptr;
    raw_ptr<PinnedTabContainerView> pinned_tabs_container_view_ = nullptr;
    raw_ptr<views::Separator> tabs_separator_ = nullptr;
@@ -5048,15 +5044,15 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
-@@ -15,6 +15,7 @@
- #include "chrome/browser/ui/views/tabs/common/workspace_favorites_band_view.h"
+@@ -18,6 +18,7 @@
  #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+ #include "chrome/browser/ui/views/tabs/horizontal/horizontal_tab_closing_helper.h"
  #include "chrome/browser/ui/views/tabs/horizontal/tab_scroll_button_container.h"
 +#include "chrome/browser/ui/views/tabs/vertical/vertical_new_tab_button.h"
  #include "ui/views/controls/scroll_view.h"
  #include "ui/views/controls/separator.h"
  #include "ui/views/view_utils.h"
-@@ -196,6 +197,19 @@ views::ProposedLayout TabStripViewLayout
+@@ -241,6 +242,19 @@ views::ProposedLayout TabStripViewLayout
  
    views::Separator* tabs_separator = tab_strip_view->GetTabsSeparator();
  
@@ -5076,7 +5072,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
    int y = 0;
  
    // Determine container preferred heights.
-@@ -234,6 +248,12 @@ views::ProposedLayout TabStripViewLayout
+@@ -279,6 +293,12 @@ views::ProposedLayout TabStripViewLayout
        remaining_height -= tabs_separator->GetPreferredSize().height() +
                            kTabsSeparatorVerticalPadding;
      }
@@ -5089,7 +5085,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
      // Clamp the remaining height to 0 if we have less space.
      remaining_height = std::max(remaining_height, 0);
      // The band is capped so a degenerate rail width (one tile per row)
-@@ -312,6 +332,19 @@ views::ProposedLayout TabStripViewLayout
+@@ -357,6 +377,19 @@ views::ProposedLayout TabStripViewLayout
      layouts.child_layouts.emplace_back(tabs_separator, false, gfx::Rect());
    }
  
@@ -5109,7 +5105,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
    // Place the unpinned container using the entire available width, we do not
    // inset the x value by `region_horizontal_padding` here because, when the tab
    // strip is collapsed, tab groups need to draw the group colored line in this
-@@ -332,7 +365,29 @@ views::ProposedLayout TabStripViewLayout
+@@ -377,8 +410,30 @@ views::ProposedLayout TabStripViewLayout
                                       unpinned_tabs_scroll_view->GetVisible(),
                                       unpinned_container_bounds);
  
@@ -5141,11 +5137,12 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view_layout.cc
 +  layouts.host_size = gfx::Size(size_bounds.width().value(), bottom);
    return layouts;
  }
+ 
 Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
-@@ -488,6 +488,16 @@ void TabView::UpdateHovered(bool hovered
+@@ -511,6 +511,16 @@ void TabView::UpdateHovered(bool hovered
    InvalidateLayout();
  }
  
@@ -5162,7 +5159,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
  bool TabView::IsHoverAnimationActive() const {
    if (split_) {
      auto* split_view = views::AsViewClass<SplitTabView>(parent());
-@@ -1183,7 +1193,15 @@ void TabView::UpdateColors() {
+@@ -1275,7 +1285,15 @@ void TabView::UpdateColors() {
      should_fill_background_tab_color_ = false;
    }
    TabStyle::TabColors colors = tab_styling()->CalculateTargetColors();
@@ -5183,7 +5180,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.h
-@@ -91,6 +91,12 @@ class TabView : public views::View,
+@@ -93,6 +93,12 @@ class TabView : public views::View,
    void UpdateFocusFreezing();
  
    void UpdateHovered(bool hovered);
@@ -5209,7 +5206,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/helium_workspace/workspace_service.h"
-@@ -37,6 +39,7 @@
+@@ -38,6 +40,7 @@
  #include "ui/base/metadata/metadata_impl_macros.h"
  #include "ui/gfx/geometry/rect.h"
  #include "ui/gfx/geometry/rect_conversions.h"
@@ -5217,7 +5214,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  #include "ui/views/controls/scroll_view.h"
  #include "ui/views/layout/layout_types.h"
  #include "ui/views/layout/proposed_layout.h"
-@@ -222,9 +225,9 @@ UnpinnedTabContainerView::UnpinnedTabCon
+@@ -223,9 +226,9 @@ UnpinnedTabContainerView::UnpinnedTabCon
    // half is region-owned and injected via SetCardShadowFrame.
    card_shadow_tracker_ = std::make_unique<CardShadowTracker>(this);
  
@@ -5230,7 +5227,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
    collection_node->set_attach_child_to_node(base::BindRepeating(
        &TabCollectionAnimatingLayoutManager::AnimateAndReparentView,
        base::Unretained(&layout_manager_.get())));
-@@ -233,6 +236,15 @@ UnpinnedTabContainerView::UnpinnedTabCon
+@@ -234,6 +237,15 @@ UnpinnedTabContainerView::UnpinnedTabCon
        base::BindOnce(&UnpinnedTabContainerView::ResetCollectionNode,
                       base::Unretained(this)));
  
@@ -5246,7 +5243,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
    // Last line of the constructor on purpose -- see the header.
    constructed_ = true;
  }
-@@ -530,9 +542,78 @@ bool UnpinnedTabContainerView::ShouldAni
+@@ -531,9 +543,78 @@ bool UnpinnedTabContainerView::ShouldAni
  
  bool UnpinnedTabContainerView::ShouldSnapToTarget(
      const views::View& child_view) const {
@@ -5325,7 +5322,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
  std::optional<views::SizeBound>
  UnpinnedTabContainerView::GetAvailableMainAxisSpaceOverride() const {
    if (!collection_node_ ||
-@@ -574,9 +655,169 @@ int UnpinnedTabContainerView::GetUnconst
+@@ -575,9 +656,169 @@ int UnpinnedTabContainerView::GetUnconst
  }
  
  void UnpinnedTabContainerView::SnapLayoutToTarget() {
@@ -5507,9 +5504,9 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  
  #include "base/callback_list.h"
  #include "base/memory/raw_ptr.h"
-@@ -18,8 +19,10 @@
- #include "chrome/browser/ui/views/tabs/common/dragged_tabs_container.h"
+@@ -19,8 +20,10 @@
  #include "chrome/browser/ui/views/tabs/common/tab_collection_animating_layout_manager.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_collection_z_order_manager.h"
  #include "ui/base/metadata/metadata_header_macros.h"
 +#include "ui/gfx/image/image_skia.h"
  #include "ui/views/controls/scroll_view.h"
@@ -5518,7 +5515,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  
  class HeliumCardShadowView;
  class TabCollectionNode;
-@@ -31,6 +34,10 @@ namespace helium_workspace {
+@@ -32,6 +35,10 @@ namespace helium_workspace {
  class WorkspaceService;
  }  // namespace helium_workspace
  
@@ -5529,7 +5526,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  // The view class that represents the unpinned tab region for the
  // tab strip. It hosts all the unpinned tabs and serves as the drag target
  // for unpinned tabs which aren't grouped. Layout is managed by
-@@ -59,6 +66,66 @@ class UnpinnedTabContainerView
+@@ -60,6 +67,66 @@ class UnpinnedTabContainerView
    // horizontal slide that Arc does not have (user 2026-09-03, recording).
    void SnapLayoutToTarget();
  
@@ -5596,7 +5593,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
    // helium-fork M3.11 轮3: the second drop target of the sidebar's entry
    // drag. Everything except the hit test is delegated -- the session, the
    // floating card and the commit all live in WorkspaceSidebarView, because
-@@ -107,6 +174,11 @@ class UnpinnedTabContainerView
+@@ -108,6 +175,11 @@ class UnpinnedTabContainerView
        const views::View& child_view) const override;
    std::optional<views::SizeBound> GetAvailableMainAxisSpaceOverride()
        const override;
@@ -5608,7 +5605,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  
    // DraggedTabsContainer:
    DraggedTabsContainer& GetTabDragTarget(
-@@ -193,6 +265,9 @@ class UnpinnedTabContainerView
+@@ -194,6 +266,9 @@ class UnpinnedTabContainerView
                                 const gfx::Point& point_in_screen) const;
  
    void ResetCollectionNode();
@@ -5618,7 +5615,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
  
    // helium-fork: follows the active row for the card shadow. Every trigger
    // (activation, layout-animation frames, drag, deletion, visibility)
-@@ -219,6 +294,23 @@ class UnpinnedTabContainerView
+@@ -220,6 +295,23 @@ class UnpinnedTabContainerView
    // flag (or be declared above |layout_manager_|).
    bool constructed_ = false;
  
@@ -5642,7 +5639,7 @@ Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
    raw_ptr<TabCollectionNode> collection_node_;
  
    // The available main-axis space allocated by TabStripViewLayout.
-@@ -229,6 +321,12 @@ class UnpinnedTabContainerView
+@@ -230,6 +322,12 @@ class UnpinnedTabContainerView
    base::CallbackListSubscription node_destroyed_subscription_;
  
    raw_ptr<WorkspaceSidebarView> workspace_drag_host_ = nullptr;
@@ -8684,7 +8681,7 @@ Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.
 ===================================================================
 --- src.orig/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -595,6 +595,9 @@ void AddAppearanceStrings(content::WebUI
+@@ -605,6 +605,9 @@ void AddAppearanceStrings(content::WebUI
        {"darkMode", IDS_NTP_CUSTOMIZE_CHROME_COLOR_SCHEME_MODE_DARK_LABEL},
        {"systemMode", IDS_NTP_CUSTOMIZE_CHROME_COLOR_SCHEME_MODE_SYSTEM_LABEL},
        {"openNewTabNextToActive", IDS_SETTINGS_NEW_TAB_NEXT_TO_ACTIVE_BUTTON},
@@ -8723,7 +8720,7 @@ Index: src/components/tabs/public/tab_context_menu_command.h
 ===================================================================
 --- src.orig/components/tabs/public/tab_context_menu_command.h
 +++ src/components/tabs/public/tab_context_menu_command.h
-@@ -42,6 +42,8 @@ enum TabContextMenuCommand {
+@@ -43,6 +43,8 @@ enum TabContextMenuCommand {
    CommandDiscard,
    CommandToggleTabMuted,
    CommandToggleFavorite,
@@ -8731,4 +8728,31 @@ Index: src/components/tabs/public/tab_context_menu_command.h
 +  CommandMoveToSpace,
  };
  // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/histograms.xml:TabContextMenuCommand)
+ 
+Index: src/components/favicon/content/content_favicon_util.cc
+===================================================================
+--- src.orig/components/favicon/content/content_favicon_util.cc
++++ src/components/favicon/content/content_favicon_util.cc
+@@ -7,6 +7,7 @@
+ #include "base/check.h"
+ #include "components/favicon/content/content_favicon_driver.h"
+ #include "components/favicon/core/favicon_driver.h"
++#include "content/public/browser/favicon_status.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/web_contents.h"
+@@ -45,7 +46,13 @@ gfx::Image GetTabFaviconMaybeDesaturated
+ 
+   content::NavigationEntry* entry =
+       contents->GetController().GetLastCommittedEntry();
+-  if (!entry || entry->GetPageType() != content::PAGE_TYPE_ERROR) {
++  // helium-fork 3a-r3: only a site's own icon is greyed out. The default
++  // one is the browser's mark now (chrome/browser/favicon/favicon_utils.cc),
++  // already grey on white -- the shift would wash it out, and it is meant to
++  // read the same everywhere. (156 moved this function here from
++  // favicon_utils.cc's TabFaviconFromWebContents.)
++  if (!entry || entry->GetPageType() != content::PAGE_TYPE_ERROR ||
++      !entry->GetFavicon().valid) {
+     return favicon;
+   }
  

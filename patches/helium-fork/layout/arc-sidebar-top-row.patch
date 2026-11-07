@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -224,6 +224,7 @@
+@@ -229,6 +229,7 @@
  #include "chrome/browser/ui/views/tabs/tab.h"
  #include "chrome/browser/ui/views/tabs/tab/tab_accessibility.h"
  #include "chrome/browser/ui/views/tabs/tab_strip.h"
@@ -10,9 +10,9 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_top_container.h"
  #include "chrome/browser/ui/views/theme_copying_widget.h"
  #include "chrome/browser/ui/views/toolbar/app_menu_control.h"
-@@ -1801,6 +1802,10 @@ void BrowserView::OnVerticalTabStripMode
-     horizontal_tab_strip_region_view_->InitializeTabStrip();
+@@ -1826,6 +1827,10 @@ void BrowserView::OnVerticalTabStripMode
    }
+   UpdateZenModeExpandOnHoverLock();
  
 +  // helium-fork: the collapse button follows the layout between the toolbar
 +  // and the Arc shell sidebar top row.
@@ -21,7 +21,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    // helium-fork: the hidden sidebar mode's hover monitor follows the
    // vertical-vs-horizontal switch.
    UpdateZenModeEventMonitor();
-@@ -1829,6 +1834,10 @@ void BrowserView::OnToolbarTabStripState
+@@ -1854,6 +1859,10 @@ void BrowserView::OnToolbarTabStripState
      horizontal_tab_strip_region_view_->DestroyLayer();
    }
  
@@ -32,7 +32,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    if (toolbar_) {
      toolbar_->UpdateToolbarLayout();
    }
-@@ -2152,6 +2161,46 @@ bool BrowserView::IsSidebarHiddenModeAct
+@@ -2178,6 +2187,46 @@ bool BrowserView::IsSidebarHiddenModeAct
                             tabs::VerticalTabStripCollapseState::kExpanded;
  }
  
@@ -79,7 +79,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::OnSidebarCollapseStateChanged(
      tabs::VerticalTabStripCollapseState state) {
    // helium-fork: keep the reveal ratio in step with the collapse state so the
-@@ -6054,6 +6103,9 @@ void BrowserView::AddedToWidget() {
+@@ -6081,6 +6130,9 @@ void BrowserView::AddedToWidget() {
      }
    }
  
@@ -93,7 +93,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -964,6 +964,10 @@ class BrowserView : public BrowserWindow
+@@ -974,6 +974,10 @@ class BrowserView : public BrowserWindow
    // helium-fork: true when the vertical tab strip is collapsed outside zen
    // mode -- the fully-hidden floating sidebar state (Arc behavior).
    bool IsSidebarHiddenModeActive() const;
@@ -104,7 +104,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    // helium-fork: keeps the zen side-chrome reveal ratio in step with the
    // collapse state while the hidden sidebar mode is in charge of it.
    void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
-@@ -1265,6 +1269,11 @@ class BrowserView : public BrowserWindow
+@@ -1275,6 +1279,11 @@ class BrowserView : public BrowserWindow
    // view tree. This is used to correctly reparent the tabstrip when exiting
    // fullscreen mode. See BrowserView::ReparentTopContainerForEndOfImmersive.
    std::optional<size_t> horizontal_tab_strip_region_insertion_index_;
@@ -120,10 +120,10 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -1537,6 +1537,42 @@ BrowserViewTabbedLayoutImpl::CalculatePr
-         has_leading_exclusion);
-     views().vertical_tab_strip_region_view->SetZenModeFloatingStyleForLayout(
-         zen.floating_vertical_tab_strip);
+@@ -1592,6 +1592,42 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+     const bool below_toolbar = toolbar_bounds && toolbar_bounds->bottom() > 0;
+     views().vertical_tab_strip_region_view->SetFloatingStyleForLayout(
+         floating_style, floating_corner_radius, below_toolbar);
 +
 +    // helium-fork: feed the caption reservation to the Arc shell top row.
 +    // Reserve only while the strip actually reaches up into the caption
@@ -167,15 +167,15 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -48,6 +48,7 @@
- #include "chrome/browser/ui/views/tabs/common/tab_view.h"
+@@ -53,6 +53,7 @@
  #include "chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h"
+ #include "chrome/browser/ui/views/tabs/organizer/organizer_panel_utils.h"
  #include "chrome/browser/ui/views/tabs/shared/drop_arrow.h"
 +#include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
-@@ -82,6 +83,8 @@ constexpr int kCollapsedResizeAreaWidth
+@@ -88,6 +89,8 @@ constexpr int kCollapsedResizeAreaWidth
  constexpr int kKeyboardResizeWidth = 50;
  constexpr int kSnapDistance = 15;
  constexpr int kBottomContainerGap = 2;
@@ -184,23 +184,42 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  constexpr int kDefaultWidthSnapDistance = 6;
  
  // Shadow is used in expand-on-hover mode. Shadow radius and opacity are dynamic
-@@ -123,6 +126,15 @@ VerticalTabStripRegionView::VerticalTabS
-                                    views::MinimumFlexSizeRule::kPreferred,
-                                    views::MaximumFlexSizeRule::kPreferred));
+@@ -132,8 +135,16 @@ VerticalTabStripRegionView::VerticalTabS
+       views::kFlexBehaviorKey,
+       views::FlexSpecification(content_area_view->GetDefaultFlexRule()));
+   content_area_view_ = AddChildView(std::move(content_area_view));
+-  content_area_view_->SetPaintToLayer();
+-  content_area_view_->layer()->SetFillsBoundsOpaquely(false);
++  // helium-fork: the Arc shell's rows are the content area's flex children
++  // (on 154 they were this view's, laid out by its own FlexLayout), and the
++  // content area gets no layer of its own: the rows' layers then hang off this
++  // view's layer in view order, interleaved with the overlays exactly as on
++  // 154 (row shadows and the floating dress beneath every row, the media
++  // strip's shadow between the bottom container and the strip). A layer here
++  // would squash the whole column into one and put every overlay either under
++  // or over all of it. UpdatePanelClips() then clips only its own painting.
++  flex_layout_ =
++      static_cast<views::FlexLayout*>(content_area_view_->GetLayoutManager());
+ 
+   // --------------
+   // Views that go into the content area below
+@@ -141,6 +152,15 @@ VerticalTabStripRegionView::VerticalTabS
+   const int region_horizontal_padding =
+       GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
  
 +  // helium-fork: the Arc shell top row is the first child so the tab strip
 +  // and every other section lay out beneath it.
-+  arc_top_container_ =
-+      AddChildViewAt(std::make_unique<ArcSidebarTopContainer>(), 0);
++  arc_top_container_ = content_area_view_->AddChildViewAt(
++      std::make_unique<ArcSidebarTopContainer>(), 0);
 +  arc_top_container_->SetProperty(
 +      views::kMarginsKey,
 +      gfx::Insets::TLBR(kArcTopContainerGap, region_horizontal_padding,
 +                        kArcTopContainerGap, region_horizontal_padding));
 +
-   bottom_button_container_ =
-       AddChildView(std::make_unique<VerticalTabStripBottomContainer>(
+   bottom_button_container_ = content_area_view_->AddChildView(
+       std::make_unique<VerticalTabStripBottomContainer>(
            state_controller_, root_action_item, browser_view->browser(),
-@@ -269,6 +281,15 @@ bool VerticalTabStripRegionView::IsPosit
+@@ -290,6 +310,15 @@ bool VerticalTabStripRegionView::IsPosit
      return bottom_button_container_->IsPositionInWindowCaption(point_in_child);
    }
  
@@ -215,8 +234,8 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +
    // For any of the other children, absorb the click as non window caption.
    for (views::View* child : children()) {
-     if (!child->GetVisible()) {
-@@ -295,6 +316,38 @@ void VerticalTabStripRegionView::SetHasL
+     if (child == content_area_view_) {
+@@ -316,6 +345,44 @@ void VerticalTabStripRegionView::SetHasL
    UpdateInteriorMargin();
  }
  
@@ -250,21 +269,27 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +    return;
 +  }
 +  arc_top_container_->SetProperty(views::kMarginsKey, margins);
++  // 156: the row is the content area's flex child. A margin by itself
++  // invalidates nothing (only a changed reservation does, above), and the
++  // region laying itself out again no longer re-runs the rows' flex, so a
++  // margin-only change (the caption's centre moving) has to say so. Only
++  // on a real change: the early return above keeps the next pass quiet.
++  content_area_view_->InvalidateLayout();
 +}
 +
- void VerticalTabStripRegionView::SetZenModeFloatingStyleForLayout(
-     bool floating) {
-   if (zen_mode_floating_style_ == floating) {
-@@ -321,14 +374,13 @@ void VerticalTabStripRegionView::SetZenM
-     corners[CornerOrientation::kTopTrailing] = rounded_corner;
-     corners[CornerOrientation::kBottomLeading] = rounded_corner;
-     corners[CornerOrientation::kBottomTrailing] = rounded_corner;
+ void VerticalTabStripRegionView::SetFloatingStyleForLayout(FloatingStyle style,
+                                                            int corner_radius,
+                                                            bool below_toolbar) {
+@@ -361,14 +428,13 @@ void VerticalTabStripRegionView::SetFloa
+         corners[CornerOrientation::kTopTrailing] = rounded_corner;
+       }
+     }
 -
 -    outline.color.color = kColorToolbarContentAreaSeparator;
--    outline.top = true;
--    outline.leading = true;
+-    outline.top = round_top;
+-    outline.leading = round_leading;
 -    outline.bottom = true;
--    outline.trailing = true;
+-    outline.trailing = round_trailing;
    }
  
 +  // helium-fork: `outline` stays empty on purpose. The floating card is
@@ -275,7 +300,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    background->SetCorners(corners);
    background->SetOutline(outline);
    background->SetPaintWithNativeFrameMaterials(floating);
-@@ -772,22 +824,17 @@ void VerticalTabStripRegionView::OnTabSt
+@@ -903,22 +969,23 @@ std::unique_ptr<views::View> VerticalTab
  void VerticalTabStripRegionView::UpdateInteriorMargin() {
    const int padding = GetLayoutConstant(
        LayoutConstant::kVerticalTabStripUncollapsedVerticalPadding);
@@ -286,15 +311,15 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 -    const bool top_chrome_visible_or_pinned =
 -        top_chrome_ratio > 0.0f || browser->IsZenModeTopChromePinned();
 -    const float ratio =
--        zen_mode_floating_style_ || !top_chrome_visible_or_pinned
+-        !browser->IsZenModeSideChromePinned() || !top_chrome_visible_or_pinned
 -            ? 1.0f
 -            : 1.0f - top_chrome_ratio;
 -    top_padding = base::ClampRound(
 -        GetLayoutConstant(LayoutConstant::kVerticalTabCornerRadius) * ratio);
 -  }
  
--  flex_layout_->SetInteriorMargin(
--      gfx::Insets::TLBR(top_padding, 0, padding, 0));
+-  interior_margin_ = gfx::Insets::TLBR(top_padding, 0, padding, 0);
+-  InvalidateLayout();
 +  // helium-fork: the top interior margin is always zero in the Arc shell.
 +  //
 +  // Upstream added up to kVerticalTabCornerRadius here so a floating strip
@@ -304,6 +329,12 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +  // margin in place pushed the whole row down by 8px in zen while the traffic
 +  // lights stayed put, which is one half of the "红绿灯和这一行icon不在一个
 +  // 水平线上" defect; the other half was the caption band height itself.
++  //
++  // The bottom padding goes on the content area's FlexLayout, not on this
++  // view's interior_margin_ (which stays empty, so the content area fills
++  // this view and its children's bounds are in this view's coordinates):
++  // FlexLayout folds it with the bottom row's own margin, as 154's region
++  // FlexLayout did; interior_margin_ would add the two instead.
 +  flex_layout_->SetInteriorMargin(gfx::Insets::TLBR(0, 0, padding, 0));
  }
  
@@ -312,15 +343,23 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -31,6 +31,7 @@
- #include "ui/views/controls/resize_area_delegate.h"
+@@ -35,6 +35,7 @@
  #include "ui/views/focus/focus_manager.h"
+ #include "ui/views/layout/delegating_layout_manager.h"
  
 +class ArcSidebarTopContainer;
  class BrowserView;
  class VerticalTabStripBottomContainer;
  class VerticalTabStripFocusSwipeController;
-@@ -83,9 +84,21 @@ class VerticalTabStripRegionView final
+@@ -45,6 +46,7 @@ class VerticalTabStripStateController;
+ }  // namespace tabs
+ 
+ namespace views {
++class FlexLayout;
+ class ResizeArea;
+ class Separator;
+ class View;
+@@ -88,9 +90,21 @@ class VerticalTabStripRegionView final
      return bottom_button_container_;
    }
  
@@ -339,12 +378,16 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +                                    int min_height,
 +                                    int caption_center,
 +                                    bool on_trailing_edge);
-   void SetZenModeFloatingStyleForLayout(bool floating);
+   // How the tab strip is drawn while it floats over the contents.
+   enum class FloatingStyle {
+     kNone,
+@@ -273,7 +287,11 @@ class VerticalTabStripRegionView final
  
-   void UpdateInteriorMargin();
-@@ -238,6 +251,7 @@ class VerticalTabStripRegionView final
-   bool has_leading_exclusion_ = false;
-   bool zen_mode_floating_style_ = false;
+   // Padding around the content area, set by UpdateInteriorMargin().
+   gfx::Insets interior_margin_;
++  // helium-fork: content_area_view_'s FlexLayout -- the column the Arc shell's
++  // rows live in (on 154 this was the region's own layout).
++  raw_ptr<views::FlexLayout> flex_layout_ = nullptr;
  
 +  raw_ptr<ArcSidebarTopContainer> arc_top_container_ = nullptr;
    raw_ptr<VerticalTabStripBottomContainer> bottom_button_container_ = nullptr;
@@ -511,7 +554,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -2034,16 +2034,21 @@ void ToolbarView::LayoutCommon() {
+@@ -2088,16 +2088,21 @@ void ToolbarView::LayoutCommon() {
        browser_->GetWindow() && (browser_->GetWindow()->IsMaximized() ||
                                  browser_->GetWindow()->IsFullscreen());
  
@@ -536,7 +579,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
      const gfx::Insets button_margin =
          GetLayoutInsets(LayoutInset::TOOLBAR_INTERIOR_MARGIN);
      vertical_tabs_collapse_button_->SetLeadingMargin(
-@@ -2114,7 +2119,10 @@ void ToolbarView::UpdateToolbarLayout()
+@@ -2252,7 +2257,10 @@ void ToolbarView::UpdateToolbarLayout()
    UpdateVerticalTabsCollapseButton();
    UpdateDynamicNewTabButton();
  
@@ -552,8 +595,8 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -198,6 +198,11 @@ class ToolbarView : public views::Access
-     return extensions_container_;
+@@ -203,6 +203,11 @@ class ToolbarView : public views::Access
+     return contextual_tasks_button_;
    }
    ToolbarButton* forward_button() const { return forward_; }
 +  // helium-fork: exposed so BrowserView can move the button between this
@@ -568,7 +611,7 @@ Index: src/chrome/browser/ui/views/frame/browser_frame_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_frame_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_frame_view.cc
-@@ -129,6 +129,9 @@ BrowserLayoutParams BrowserFrameView::Ge
+@@ -134,6 +134,9 @@ BrowserLayoutParams BrowserFrameView::Ge
    }
    const float caption_height =
        caption_bounds.bounds.bottom() - params.visual_client_area.y();
@@ -578,7 +621,7 @@ Index: src/chrome/browser/ui/views/frame/browser_frame_view.cc
    if (CaptionButtonsOnLeadingEdge()) {
      params.leading_exclusion.content = gfx::SizeF(
          caption_bounds.bounds.right() - params.visual_client_area.x(),
-@@ -136,6 +139,7 @@ BrowserLayoutParams BrowserFrameView::Ge
+@@ -141,6 +144,7 @@ BrowserLayoutParams BrowserFrameView::Ge
      params.leading_exclusion.horizontal_padding =
          caption_bounds.margins.right();
      params.leading_exclusion.vertical_padding = caption_bounds.margins.bottom();
@@ -586,7 +629,7 @@ Index: src/chrome/browser/ui/views/frame/browser_frame_view.cc
    } else {
      params.trailing_exclusion.content = gfx::SizeF(
          params.visual_client_area.right() - caption_bounds.bounds.x(),
-@@ -144,6 +148,7 @@ BrowserLayoutParams BrowserFrameView::Ge
+@@ -149,6 +153,7 @@ BrowserLayoutParams BrowserFrameView::Ge
          caption_bounds.margins.left();
      params.trailing_exclusion.vertical_padding =
          caption_bounds.margins.bottom();

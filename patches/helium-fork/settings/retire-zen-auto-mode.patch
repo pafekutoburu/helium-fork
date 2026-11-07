@@ -1,46 +1,16 @@
-Index: src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
-===================================================================
---- src.orig/chrome/browser/resources/settings/appearance_page/appearance_page.ts
-+++ src/chrome/browser/resources/settings/appearance_page/appearance_page.ts
-@@ -260,9 +260,11 @@ export class SettingsAppearancePageEleme
-     {value: 'true', name: loadTimeData.getString('glassEffectModern')},
-  ];
- 
--  // helium-fork: all three forms of the Arc shell. HIDDEN drops the band
--  // entirely and moves the address entry into the sidebar, so it is only
--  // offerable now that the sidebar has somewhere to put it.
-+  // helium-fork: the Arc shell's two surviving forms. HIDDEN drops the
-+  // band entirely and moves the address entry into the sidebar, so it is
-+  // only offerable now that the sidebar has somewhere to put it. AUTO
-+  // (zen) was retired 2026-08-16 and is no longer offered; the enum value
-+  // stays for the C++ mirror, and stale prefs are migrated to DOCKED.
-   protected accessor addressBarModeOptions_: DropdownMenuOptionList = [
-     {
-       value: AddressBarMode.DOCKED,
-@@ -272,10 +274,6 @@ export class SettingsAppearancePageEleme
-       value: AddressBarMode.HIDDEN,
-       name: loadTimeData.getString('addressBarModeHidden'),
-     },
--    {
--      value: AddressBarMode.AUTO,
--      name: loadTimeData.getString('addressBarModeAuto'),
--    },
-   ];
- 
-   // The values in this array must match the BookmarkBarVisibilityState enum
 Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -605,6 +605,7 @@ source_set("tab_dialogs") {
- # circular includes from each other.
- static_library("ui") {
-   sources = [
-+    "helium/arc_address_bar_mode.h",
-     "helium/arc_band_colors.h",
-     "helium/arc_band_tint_store.cc",
-     "helium/arc_band_tint_store.h",
-@@ -4248,6 +4249,8 @@ if (is_mac) {
+@@ -2315,6 +2315,7 @@ static_library("ui") {
+       "browser.h",
+       "browser_tabstrip.cc",
+       "browser_tabstrip.h",
++      "helium/arc_address_bar_mode.h",
+       "helium/arc_band_colors.h",
+       "helium/arc_band_tint_store.cc",
+       "helium/arc_band_tint_store.h",
+@@ -5851,6 +5852,8 @@ if (is_mac) {
  # tabs, and a window is only ever compared by pointer.
  test("helium_workspace_unittests") {
    sources = [
@@ -53,7 +23,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -1867,7 +1867,10 @@ void BrowserCommandController::InitComma
+@@ -1880,7 +1880,10 @@ void BrowserCommandController::InitComma
                                           true);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_DOCKED, true);
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_ADDRESS_BAR_HIDDEN, true);
@@ -214,7 +184,7 @@ Index: src/chrome/browser/ui/tabs/tab_strip_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/tabs/tab_strip_prefs.cc
 +++ src/chrome/browser/ui/tabs/tab_strip_prefs.cc
-@@ -73,16 +73,22 @@ void ApplyArcShellLayoutPrefs(PrefServic
+@@ -77,16 +77,22 @@ void ApplyArcShellLayoutPrefs(PrefServic
                                std::to_underlying(HeliumLayoutType::kVertical));
    }
  
@@ -271,3 +241,33 @@ Index: src/chrome/browser/ui/views/frame/system_menu_model_builder.cc
      browser_layout_menu_contents_->AddSeparator(ui::NORMAL_SEPARATOR);
      browser_layout_menu_contents_->AddCheckItemWithStringId(
          IDC_BROWSER_LAYOUT_VERTICAL_RIGHT, IDS_BROWSER_LAYOUT_VERTICAL_RIGHT);
+Index: src/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
+===================================================================
+--- src.orig/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
++++ src/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
+@@ -67,9 +67,11 @@ export class SettingsAppearanceLayoutPag
+     value: true,
+   };
+ 
+-  // helium-fork: all three forms of the Arc shell. HIDDEN drops the band
+-  // entirely and moves the address entry into the sidebar, so it is only
+-  // offerable now that the sidebar has somewhere to put it.
++  // helium-fork: the Arc shell's two surviving forms. HIDDEN drops the
++  // band entirely and moves the address entry into the sidebar, so it is
++  // only offerable now that the sidebar has somewhere to put it. AUTO
++  // (zen) was retired 2026-08-16 and is no longer offered; the enum value
++  // stays for the C++ mirror, and stale prefs are migrated to DOCKED.
+   protected accessor addressBarModeOptions_: DropdownMenuOptionList = [
+     {
+       value: AddressBarMode.DOCKED,
+@@ -79,10 +81,6 @@ export class SettingsAppearanceLayoutPag
+       value: AddressBarMode.HIDDEN,
+       name: loadTimeData.getString('addressBarModeHidden'),
+     },
+-    {
+-      value: AddressBarMode.AUTO,
+-      name: loadTimeData.getString('addressBarModeAuto'),
+-    },
+   ];
+ 
+   protected accessor showVerticalTabsExpandOnHoverEnabled_: boolean =

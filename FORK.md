@@ -24,20 +24,25 @@ Today section, real folders). Not affiliated with the upstream project.
   但 Claude Code 默认只在工作目录及以上**没有** `CLAUDE.md` 时才读 `AGENTS.md`；工作区根有自己的
   `CLAUDE.md`，删了链接本仓的红线就不进上下文了（2026-10-29 核文档）。合并时它被静默删掉、不报冲突。
 - helium-macos 侧：gitlink、`.gitmodules`（URL→我们的 fork）、`flags.macos.gn`（PCH 关闭 4 行）、
-  `patches/helium/macos/helium-immersive-fullscreen.patch` 里的 11 个 hunk（2026-10-04 起，152→154 同步时改 6 个；
-  2026-10-10 第四十一次再改 1 个；2026-10-29 第四十二次再改 4 个、并把 mac 源列表那段的尾部上下文再改一次）。
-  这个平台补丁排在我们的补丁段之后，会碰到我们改过的 Zen 判断、BrowserView 成员区和 mac 源列表，
-  所以其中 5 个 hunk 改成按我们的代码打；第 6 个是全屏过渡结束、解除暂停时，对隐藏侧栏补一次按光标判断；
-  第 7 个（`FullscreenStateChanging` 里插悬停暂停的那段）只改首行上下文：`return;` → `EndArcComposerEdit();`——
-  layout/arc-visual-r1005-r1017 在同一位置（`IsClosed()` 早退之后）先结束带子的 ⌘L 编辑。
-  第 8–11 个只改上下文：layout/arc-visual-r1014b-r1032 在它的插入点旁边紧挨着加了自己的行——
-  `browser_frame_view_mac.h`（r1025 红绿灯内缩的声明）、`browser_frame_view_mac.mm`（一行 `#import`）、
-  `browser_native_widget_window_mac.{h,mm}`（`setTitlebarWidgetInset:`）；mac 源列表那段的尾部上下文
-  多了 `widget_mouse_events_mac.mm`。
+  `patches/helium/macos/helium-immersive-fullscreen.patch` 里的 6 个 hunk（全在 `browser_view.{h,cc}`；
+  2026-10-04 152→154 同步改 6 个、10-10 再改 1 个、10-29 154→156 同步时把我们挡路的行挪开后回到 6 个）。
+  这个平台补丁排在我们的补丁段之后，会碰到我们改过的 Zen 判断和 BrowserView 成员区：
+  第 22 个（`browser_view.h` 成员区上下文）、第 23–25 个（`StartZenCollapseTimer` /
+  `UpdateZenModeRevealFromCursor` / `UpdateZenModeReveal` 的暂停判断按我们的条件写）、
+  第 29 个（全屏过渡结束、解除暂停时，对隐藏侧栏补一次按光标判断）、
+  第 26 个（`FullscreenStateChanging` 里插悬停暂停那段的首行上下文 `return;` → `EndArcComposerEdit();`——
+  layout/arc-visual-r1005-r1017 在 `IsClosed()` 早退之后先结束带子的 ⌘L 编辑）。
   上游再改这个补丁时 merge 会在这里冲突：取上游新版，再照 `tasks/evidence/sync154/port-log.md`
-  的「macOS 块 #448」重做前 6 处、照 `tools/fold_backup_r10/scripts/step1b_adapt_immersive.py` 重做第 7 处；
-  第 8–11 处与源列表尾部可以整批机械重算：`tools/fold_backup_r1032/scripts/step1b_adapt_immersive.py`
-  （三方合并求「我们的树去掉平台补丁」，只重生成撞上的 hunk，正向重放逐字节回到原树）。
+  的「macOS 块 #448」重做 22–25、29，照 `tools/fold_backup_r10/scripts/step1b_adapt_immersive.py` 重做 26。
+- ⛔ **别把我们的行贴着这个平台补丁的插入点写**（2026-10-29 154→156 同步定）：它在我们的补丁段之后打，
+  我们在它插入点 3 行以内加的任何一行都会变成它的上下文、多一个要携带的 hunk。10-29 因此挪开了
+  `browser_frame_view_mac.h`（r1025 红绿灯内缩的声明）、`browser_frame_view_mac.mm`（一行 `#import`）、
+  `browser_native_widget_window_mac.{h,mm}`（`setTitlebarWidgetInset:`）四处；我们的 mac 源文件
+  （`helium_sf_symbol_image_mac.mm`、`space_swipe_monitor_mac.{h,mm}`、`widget_mouse_events_mac.mm`）
+  也从上游 `chrome/browser/ui/BUILD.gn` 的 `is_mac` 源列表挪进了紧跟其后的我们自己的 `if (is_mac)` 块——
+  新增 mac 源文件放那个块，别放回上游的列表。挪不开的才进携带集，每次同步用
+  `tools/fold_backup_r1032/scripts/step1b_adapt_immersive.py` 机械重算（三方合并求「我们的树去掉平台补丁」，
+  只重生成撞上的 hunk，正向重放逐字节回到原树）。
 
 ## 红线
 

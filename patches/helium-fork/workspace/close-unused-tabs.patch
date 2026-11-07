@@ -2,7 +2,7 @@ Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 ===================================================================
 --- src.orig/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -658,6 +658,7 @@
+@@ -657,6 +657,7 @@
  #include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
  #include "chrome/browser/ui/browser_shortcuts/browser_shortcut_service_factory.h"
  #endif
@@ -10,7 +10,7 @@ Index: src/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
  #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
  
  #if BUILDFLAG(USE_NSS_CERTS)
-@@ -856,6 +857,11 @@ void ChromeBrowserMainExtraPartsProfiles
+@@ -854,6 +855,11 @@ void ChromeBrowserMainExtraPartsProfiles
    browser_shortcuts::BrowserShortcutServiceFactory::GetInstance();
  #endif
    helium_workspace::WorkspaceServiceFactory::GetInstance();
@@ -26,20 +26,20 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -622,6 +622,12 @@ static_library("ui") {
-     "helium/arc_toolbar_host.h",
-     "helium/helium_tab_switcher_controller.cc",
-     "helium/helium_tab_switcher_controller.h",
-+    "helium_workspace/workspace_archive_policy.cc",
-+    "helium_workspace/workspace_archive_policy.h",
-+    "helium_workspace/workspace_archive_service.cc",
-+    "helium_workspace/workspace_archive_service.h",
-+    "helium_workspace/workspace_archive_service_factory.cc",
-+    "helium_workspace/workspace_archive_service_factory.h",
-     "helium_workspace/workspace_entry.cc",
-     "helium_workspace/workspace_entry.h",
-     "helium_workspace/workspace_drag_math.h",
-@@ -4304,6 +4310,8 @@ test("helium_workspace_unittests") {
+@@ -2332,6 +2332,12 @@ static_library("ui") {
+       "helium/arc_toolbar_host.h",
+       "helium/helium_tab_switcher_controller.cc",
+       "helium/helium_tab_switcher_controller.h",
++      "helium_workspace/workspace_archive_policy.cc",
++      "helium_workspace/workspace_archive_policy.h",
++      "helium_workspace/workspace_archive_service.cc",
++      "helium_workspace/workspace_archive_service.h",
++      "helium_workspace/workspace_archive_service_factory.cc",
++      "helium_workspace/workspace_archive_service_factory.h",
+       "helium_workspace/workspace_drag_math.h",
+       "helium_workspace/workspace_entry.cc",
+       "helium_workspace/workspace_entry.h",
+@@ -5907,6 +5913,8 @@ test("helium_workspace_unittests") {
      "helium/arc_toolbar_host_unittest.cc",
      "helium/arc_omnibox_panel.h",
      "helium/arc_omnibox_panel_unittest.cc",

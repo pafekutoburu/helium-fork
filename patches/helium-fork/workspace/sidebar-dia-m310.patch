@@ -2,7 +2,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -12404,6 +12404,9 @@ Check your passwords anytime in <ph name
+@@ -12470,6 +12470,9 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
            Remove
          </message>
@@ -12,7 +12,7 @@ Index: src/chrome/app/generated_resources.grd
          <message name="IDS_TAB_CXMENU_SOUND_MUTE_SITE" desc="The label of the tab context menu item for muting one or more sites. NOTE: If having no explicit # makes the phrasing awkward, feel free to add a # as necessary. [ICU Syntax]">
            {NUM_TABS, plural, =1 {Mute site} other {Mute sites}}
          </message>
-@@ -12562,6 +12565,9 @@ Check your passwords anytime in <ph name
+@@ -12637,6 +12640,9 @@ Check your passwords anytime in <ph name
          <message name="IDS_HELIUM_WS_ENTRY_MENU_REMOVE" desc="In Title Case: The label of the context menu item that deletes a workspace sidebar entry. Any tab already open for it stays open.">
            Remove
          </message>
@@ -26,16 +26,16 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -627,6 +627,8 @@ static_library("ui") {
-     "helium_workspace/workspace_favicon_image.h",
-     "helium_workspace/workspace_grid_math.h",
-     "helium_workspace/workspace_omnibox_match.h",
-+    "helium_workspace/workspace_pin_semantics.cc",
-+    "helium_workspace/workspace_pin_semantics.h",
-     "helium_workspace/workspace_prefs.cc",
-     "helium_workspace/workspace_prefs.h",
-     "helium_workspace/workspace_service.cc",
-@@ -4309,6 +4311,8 @@ test("helium_workspace_unittests") {
+@@ -2337,6 +2337,8 @@ static_library("ui") {
+       "helium_workspace/workspace_favicon_image.h",
+       "helium_workspace/workspace_grid_math.h",
+       "helium_workspace/workspace_omnibox_match.h",
++      "helium_workspace/workspace_pin_semantics.cc",
++      "helium_workspace/workspace_pin_semantics.h",
+       "helium_workspace/workspace_prefs.cc",
+       "helium_workspace/workspace_prefs.h",
+       "helium_workspace/workspace_service.cc",
+@@ -5912,6 +5914,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_grid_math.h",
      "helium_workspace/workspace_omnibox_match.h",
      "helium_workspace/workspace_omnibox_match_unittest.cc",
@@ -2354,7 +2354,7 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
 +++ src/chrome/browser/ui/views/tabs/common/tab_view.h
-@@ -107,6 +107,10 @@ class TabView : public views::View,
+@@ -109,6 +109,10 @@ class TabView : public views::View,
    bool IsActive() const { return active_; }
    bool IsClosing() const { return !collection_node_; }
    bool split() const { return split_; }
@@ -2382,11 +2382,11 @@ Index: src/chrome/browser/ui/views/tabs/common/tab_view_vertical_layout.cc
    }
  
    NOTREACHED() << "Unknown tab child view";
-Index: src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
+Index: src/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
 ===================================================================
---- src.orig/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
-+++ src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
-@@ -154,7 +154,25 @@ void VerticalTabStyleViews::PaintTabBack
+--- src.orig/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
++++ src/chrome/browser/ui/views/tabs/common/vertical_tab_style_views.cc
+@@ -166,7 +166,25 @@ void VerticalTabStyleViews::PaintTabBack
                                      hovered)) {
      cc::PaintFlags flags;
      flags.setAntiAlias(true);
@@ -2413,7 +2413,7 @@ Index: src/chrome/browser/ui/views/tabs/vertical_tab_style_views.cc
      canvas->DrawRect(gfx::ScaleToEnclosingRect(
                           delegate_->GetView()->GetLocalBounds(), scale),
                       flags);
-@@ -183,8 +201,12 @@ bool VerticalTabStyleViews::ShouldPaintT
+@@ -195,8 +213,12 @@ bool VerticalTabStyleViews::ShouldPaintT
      bool hovered) const {
    if (helium::ShouldUseNativeFrameMaterials(
            delegate_->GetBrowserWindowInterface())) {

@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -438,6 +438,14 @@ constexpr base::TimeDelta kZenModeCursor
+@@ -449,6 +449,14 @@ constexpr base::TimeDelta kZenModeCursor
  constexpr base::TimeDelta kZenModeHoverExitGracePeriod =
      base::Milliseconds(150);
  
@@ -17,7 +17,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #if BUILDFLAG(IS_CHROMEOS)
  // UMA histograms that record animation smoothness for tab loading animation.
  constexpr char kTabLoadingSmoothnessHistogramName[] =
-@@ -1950,6 +1958,11 @@ void BrowserView::UpdateZenModeRevealFro
+@@ -2016,6 +2024,11 @@ void BrowserView::UpdateZenModeRevealFro
    if (!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) {
      return;
    }
@@ -29,7 +29,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  
    gfx::Point cursor;
    // When the cursor leaves the window, start a timer before collapsing.
-@@ -1996,6 +2009,11 @@ void BrowserView::UpdateZenModeReveal(bo
+@@ -2062,6 +2075,11 @@ void BrowserView::UpdateZenModeReveal(bo
    if (!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) {
      return;
    }
@@ -41,7 +41,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  
    if (!ShouldDrawVerticalTabStrip()) {
      reveal_side = false;
-@@ -2100,8 +2118,11 @@ void BrowserView::OnSidebarCollapseState
+@@ -2171,8 +2189,11 @@ void BrowserView::OnSidebarCollapseState
      tabs::VerticalTabStripCollapseState state) {
    // helium-fork: keep the reveal ratio in step with the collapse state so the
    // hidden strip conceals/reveals instantly with the toggle. In zen mode the
@@ -55,7 +55,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
    if (state == tabs::VerticalTabStripCollapseState::kExpanded) {
-@@ -2118,6 +2139,98 @@ void BrowserView::OnSidebarCollapseState
+@@ -2189,6 +2210,98 @@ void BrowserView::OnSidebarCollapseState
    InvalidateLayout();
  }
  
@@ -154,7 +154,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::UpdateZenCollapseButtonVisibility() {
    if (toolbar_) {
      toolbar_->UpdateVerticalTabsCollapseButton();
-@@ -6842,6 +6955,17 @@ void BrowserView::AnimationProgressed(co
+@@ -6973,6 +7086,17 @@ void BrowserView::AnimationProgressed(co
  
  void BrowserView::AnimationEnded(const gfx::Animation* animation) {
    AnimationProgressed(animation);
@@ -176,7 +176,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -438,6 +438,12 @@ class BrowserView : public BrowserWindow
+@@ -443,6 +443,12 @@ class BrowserView : public BrowserWindow
  
    // Toggles the side chrome (VTS) visibility in zen mode.
    void ToggleZenModeSideChrome();
@@ -189,7 +189,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    void ToggleZenModeTopChrome();
  
    // Returns the widget for anchoring bubbles and dialogs.
-@@ -959,6 +965,13 @@ class BrowserView : public BrowserWindow
+@@ -971,6 +977,13 @@ class BrowserView : public BrowserWindow
    // helium-fork: keeps the zen side-chrome reveal ratio in step with the
    // collapse state while the hidden sidebar mode is in charge of it.
    void OnSidebarCollapseStateChanged(tabs::VerticalTabStripCollapseState state);
@@ -203,7 +203,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    bool IsPointInZenTopTrigger(const gfx::Point& point) const;
    bool IsPointInZenSideTrigger(const gfx::Point& point) const;
    bool IsPointInZenTopChromeBounds(const gfx::Point& point) const;
-@@ -1489,6 +1502,10 @@ class BrowserView : public BrowserWindow
+@@ -1518,6 +1531,10 @@ class BrowserView : public BrowserWindow
  
    // helium-fork: collapse-state subscription driving the hidden sidebar mode.
    base::CallbackListSubscription sidebar_collapse_subscription_;
@@ -218,7 +218,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -669,6 +669,22 @@ void VerticalTabStripRegionView::Request
+@@ -786,6 +786,22 @@ void VerticalTabStripRegionView::Request
    if (!tab_strip_view()) {
      return;
    }
@@ -245,9 +245,9 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -125,6 +125,12 @@ class VerticalTabStripRegionView final
-   bool IsCollapsing() override;
-   void RequestCollapse(bool collapse) override;
+@@ -146,6 +146,12 @@ class VerticalTabStripRegionView final
+   void SetOrganizerPanelShowPercent(double percent);
+   void UpdatePanelClips();
  
 +  // helium-fork: starts the collapse/expand motion immediately, bypassing the
 +  // BrowserView toggle choreography. RequestCollapse() funnels through the

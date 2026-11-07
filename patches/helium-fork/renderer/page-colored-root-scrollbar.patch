@@ -2,7 +2,7 @@ Index: src/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
 ===================================================================
 --- src.orig/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
 +++ src/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
-@@ -1343,6 +1343,27 @@ mojom::blink::ColorScheme PaintLayerScro
+@@ -1360,6 +1360,27 @@ mojom::blink::ColorScheme PaintLayerScro
                          WebFeature::kUsedColorSchemeRootScrollbarsDark);
        return mojom::blink::ColorScheme::kDark;
      }
@@ -30,7 +30,7 @@ Index: src/third_party/blink/renderer/core/paint/paint_layer_scrollable_area.cc
    }
  
    return GetLayoutBox()->StyleRef().UsedColorScheme();
-@@ -1367,6 +1388,17 @@ bool PaintLayerScrollableArea::UsedColor
+@@ -1384,6 +1405,17 @@ bool PaintLayerScrollableArea::UsedColor
      return true;
    }
  
@@ -52,7 +52,7 @@ Index: src/third_party/blink/renderer/core/scroll/scrollable_area.cc
 ===================================================================
 --- src.orig/third_party/blink/renderer/core/scroll/scrollable_area.cc
 +++ src/third_party/blink/renderer/core/scroll/scrollable_area.cc
-@@ -757,6 +757,19 @@ void ScrollableArea::SetOverlayScrollbar
+@@ -759,6 +759,19 @@ void ScrollableArea::SetOverlayScrollbar
    }
  }
  
@@ -72,7 +72,7 @@ Index: src/third_party/blink/renderer/core/scroll/scrollable_area.cc
  void ScrollableArea::RecalculateOverlayScrollbarColorScheme() {
    mojom::blink::ColorScheme old_overlay_theme =
        GetOverlayScrollbarColorScheme();
-@@ -767,13 +780,9 @@ void ScrollableArea::RecalculateOverlayS
+@@ -769,13 +782,9 @@ void ScrollableArea::RecalculateOverlayS
    // If there is a background color set on the scroller, use the lightness of
    // the background color for the scrollbar overlay color theme.
    if (GetLayoutBox()) {
@@ -125,9 +125,9 @@ Index: src/chrome/browser/chrome_content_browser_client.cc
 ===================================================================
 --- src.orig/chrome/browser/chrome_content_browser_client.cc
 +++ src/chrome/browser/chrome_content_browser_client.cc
-@@ -580,6 +580,9 @@
+@@ -587,6 +587,9 @@
+ #include "chrome/browser/themes/theme_service.h"
  #include "chrome/browser/themes/theme_service_factory.h"
- #include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +// helium-fork: the Arc shell's published band tint, which the root scrollbar
 +// takes as its track color.
@@ -135,7 +135,7 @@ Index: src/chrome/browser/chrome_content_browser_client.cc
  #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
  #include "chrome/browser/ui/chrome_pages.h"
  #include "chrome/browser/ui/dialogs/browser_dialogs.h"
-@@ -4053,6 +4056,26 @@ GetPreferredColorScheme(const WebPrefere
+@@ -4142,6 +4145,26 @@ GetPreferredColorScheme(const WebPrefere
  }
  
  std::optional<SkColor> GetRootScrollbarThemeColor(WebContents* web_contents) {
@@ -166,7 +166,7 @@ Index: src/third_party/blink/renderer/core/scroll/scrollbar.cc
 ===================================================================
 --- src.orig/third_party/blink/renderer/core/scroll/scrollbar.cc
 +++ src/third_party/blink/renderer/core/scroll/scrollbar.cc
-@@ -913,8 +913,12 @@ EScrollbarWidth Scrollbar::CSSScrollbarW
+@@ -915,8 +915,12 @@ EScrollbarWidth Scrollbar::CSSScrollbarW
  }
  
  std::optional<blink::Color> Scrollbar::RootScrollbarThemeColor() const {
@@ -181,7 +181,7 @@ Index: src/third_party/blink/renderer/core/scroll/scrollbar.cc
      if (const auto* layout_box = GetLayoutBox()) {
        if (const auto theme_color = layout_box->GetDocument()
                                         .GetSettings()
-@@ -932,19 +936,59 @@ std::optional<blink::Color> Scrollbar::S
+@@ -934,19 +938,59 @@ std::optional<blink::Color> Scrollbar::S
      return style_source_->StyleRef().ScrollbarThumbColorResolved();
    }
    if (theme_->UsesFluentScrollbars() && !InForcedColorsMode() &&

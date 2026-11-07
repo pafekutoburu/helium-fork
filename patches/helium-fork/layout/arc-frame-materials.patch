@@ -15,7 +15,7 @@ Index: src/chrome/browser/ui/ui_features.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/ui_features.cc
 +++ src/chrome/browser/ui/ui_features.cc
-@@ -35,7 +35,7 @@ BASE_FEATURE(kBookmarkOpenAllConfirmatio
+@@ -36,7 +36,7 @@ BASE_FEATURE(kBookmarkOpenAllConfirmatio
  // Enables the migration of browser commands to Action API.
  BASE_FEATURE(kUseActionsForBrowserCommands, base::FEATURE_DISABLED_BY_DEFAULT);
  
@@ -28,7 +28,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -189,6 +189,7 @@
+@@ -192,6 +192,7 @@
  #include "chrome/browser/ui/views/frame/arc_omnibox_panel_view.h"
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
  #include "chrome/browser/ui/views/frame/shadow_overlay_view.h"
@@ -36,7 +36,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
  #include "chrome/browser/ui/views/frame/tab_modal_dialog_host.h"
  #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
-@@ -2903,6 +2904,12 @@ void BrowserView::UpdateArcAddressBarPla
+@@ -2934,6 +2935,12 @@ void BrowserView::UpdateArcAddressBarPla
                ? toolbar_->background()->AsA<CustomCornersBackground>()
                : nullptr) {
      toolbar_background->SetVisible(host == helium::ArcToolbarHost::kBand);
@@ -49,7 +49,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    }
    toolbar_->SetArcSidebarHosted(sidebar_bound);
    toolbar_->UpdateToolbarLayout();
-@@ -8093,7 +8100,15 @@ void BrowserView::FrameColorsChanged() {
+@@ -8146,7 +8153,15 @@ void BrowserView::FrameColorsChanged() {
      web_app_window_title_->SetBackgroundColor(frame_color);
      web_app_window_title_->SetEnabledColor(caption_color);
    }
@@ -70,7 +70,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -1985,6 +1985,10 @@ void BrowserViewTabbedLayoutImpl::Config
+@@ -2047,6 +2047,10 @@ void BrowserViewTabbedLayoutImpl::Config
    } else {
      background->SetVisible(true);
    }
@@ -81,7 +81,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  
    // helium-fork: in the Arc shell the band is the top strip of the contents
    // card, not a separate bar above it -- rounded where it meets the window,
-@@ -2022,6 +2026,15 @@ void BrowserViewTabbedLayoutImpl::Config
+@@ -2084,6 +2088,15 @@ void BrowserViewTabbedLayoutImpl::Config
      background->SetVisible(true);
      background->SetCorners(corners);
      background->SetPrimaryColor(color);
@@ -97,7 +97,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
      // The toolbar carries its own CustomCornersBackground and covers the top
      // container completely, so tinting only the container underneath paints
      // nothing visible. Give the toolbar the same treatment -- it is the view
-@@ -2037,6 +2050,7 @@ void BrowserViewTabbedLayoutImpl::Config
+@@ -2099,6 +2112,7 @@ void BrowserViewTabbedLayoutImpl::Config
          toolbar_background->SetVisible(true);
          toolbar_background->SetCorners(corners);
          toolbar_background->SetPrimaryColor(color);
@@ -312,16 +312,16 @@ Index: src/chrome/browser/ui/views/infobars/infobar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/infobars/infobar_view.cc
 +++ src/chrome/browser/ui/views/infobars/infobar_view.cc
-@@ -278,8 +278,11 @@ gfx::Size InfoBarView::CalculatePreferre
+@@ -279,8 +279,11 @@ gfx::Size InfoBarView::CalculatePreferre
  void InfoBarView::OnThemeChanged() {
    views::View::OnThemeChanged();
-   const auto* cp = GetColorProvider();
+ 
 +  // helium-fork: an infobar inside the Arc content card belongs to the page's
 +  // panel, not to the glass shell -- see helium::IsInsideArcContentPanel().
    const bool should_use_native_frame_materials =
 -      helium::ShouldUseNativeFrameMaterials(this);
 +      helium::ShouldUseNativeFrameMaterials(this) &&
 +      !helium::IsInsideArcContentPanel(this);
-   const SkColor background_theme_color =
-       should_use_native_frame_materials ? SK_ColorTRANSPARENT
-                                         : cp->GetColor(kColorInfoBarBackground);
+   if (should_use_native_frame_materials) {
+     SetBackground(nullptr);
+   } else {

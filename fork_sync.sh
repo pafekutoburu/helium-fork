@@ -73,10 +73,19 @@ stage2() {  # 树重建
 GUIDE
   read -r -p "继续？[y/N] " a; [ "$a" = y ] || exit 1
   OLDV=$(sed -n '1p' "$HERE/chromium_version.txt" | cut -d. -f1)   # merge 后这是新版本号——挪树名用旧的
-  [ -e "$SRC" ] && { OLD="$PLAT/build/src-old-$(date +%m%d)"; mv "$SRC" "$OLD"; echo "老树 → $OLD"; }
+  # 重跑（上次 presetup 失败，build/src 是它新建的树）时不再挪：目标已存在时 mv 会把新目录挪进老树里
+  # （2026-10-29 下载被 curl 56 打断后差点这样）。老树判据＝有 .pc/（满打态的老树才有）。
+  if [ -d "$SRC/.pc" ]; then
+    OLD="$PLAT/build/src-old-$(date +%m%d)"
+    [ -e "$OLD" ] && { echo "⛔ $OLD 已存在，换个名字手挪"; exit 1; }
+    mv "$SRC" "$OLD"; echo "老树 → $OLD"
+  elif [ -e "$SRC" ]; then
+    echo "ℹ $SRC 没有 .pc/＝上次 presetup 留下的半熟新树，不挪，交给 presetup 重建（它会先 rm -rf）"
+  fi
   say "he presetup（下载/展开/prune/工具链/资源/盖版本）"
   (cd "$PLAT" && zsh -c 'source dev.sh >/dev/null 2>&1 && he presetup') || {
-    echo "⛔ presetup 非零退出：必须 rm -rf build/src 重来（它见 out/ 存在会静默 no-op，半熟树拖到 build 才炸）"; exit 1; }
+    echo "⛔ presetup 非零退出（下载被断＝直接重跑本 stage，curl 会续传）：presetup 见 out/ 存在会静默 no-op，"
+    echo "   若树上已有 out/ 先 rm -rf build/src 再重跑（半熟树拖到 build 才炸）"; exit 1; }
   say "he merge 生成 series.merged"
   (cd "$PLAT" && zsh -c 'source dev.sh >/dev/null 2>&1 && he merge') || exit 1
   N=$(grep -c . "$PLAT/patches/series.merged"); F=$(grep -c '^helium-fork/' "$PLAT/patches/series.merged")

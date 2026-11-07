@@ -27,7 +27,7 @@ Index: src/chrome/app/generated_resources.grd
 ===================================================================
 --- src.orig/chrome/app/generated_resources.grd
 +++ src/chrome/app/generated_resources.grd
-@@ -2012,6 +2012,9 @@ are declared in tools/grit/grit_args.gni
+@@ -2009,6 +2009,9 @@ are declared in tools/grit/grit_args.gni
        <message name="IDS_SHORTCUT_COMMAND_TOGGLE_ZEN_MODE_TOP_CHROME_PIN" desc="Command name shown on the Settings shortcuts page for pinning or unpinning the top toolbar in zen mode.">
          Pin top toolbar
        </message>
@@ -53,20 +53,20 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -616,6 +616,8 @@ static_library("ui") {
-     "helium_workspace/workspace_service.h",
-     "helium_workspace/workspace_service_factory.cc",
-     "helium_workspace/workspace_service_factory.h",
-+    "helium_workspace/workspace_tab_controller.cc",
-+    "helium_workspace/workspace_tab_controller.h",
-     "tab_helpers.cc",
-     "tab_helpers.h",
-   ]
+@@ -2326,6 +2326,8 @@ static_library("ui") {
+       "helium_workspace/workspace_service.h",
+       "helium_workspace/workspace_service_factory.cc",
+       "helium_workspace/workspace_service_factory.h",
++      "helium_workspace/workspace_tab_controller.cc",
++      "helium_workspace/workspace_tab_controller.h",
+     ]
+ 
+     if (enable_dice_support) {
 Index: src/chrome/browser/ui/accelerator_table.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/accelerator_table.cc
 +++ src/chrome/browser/ui/accelerator_table.cc
-@@ -56,7 +56,7 @@ const AcceleratorMapping kAcceleratorMap
+@@ -60,7 +60,7 @@ const AcceleratorMapping kAcceleratorMap
      {ui::VKEY_ESCAPE, ui::EF_NONE, IDC_CLOSE_FIND_OR_STOP},
  
  #if !BUILDFLAG(IS_MAC)
@@ -79,7 +79,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -71,6 +71,7 @@
+@@ -72,6 +72,7 @@
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
@@ -87,7 +87,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  #include "chrome/browser/ui/lens/lens_overlay_controller.h"
  #include "chrome/browser/ui/managed_ui.h"
  #include "chrome/browser/ui/navigator/browser_navigator.h"
-@@ -1539,6 +1540,13 @@ void BrowserCommandController::HandleCom
+@@ -1556,6 +1557,13 @@ void BrowserCommandController::HandleCom
        }
        break;
      }
@@ -101,7 +101,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
      // Hosted App commands
      case IDC_COPY_URL:
        CopyURL(browser_, browser_->tab_strip_model()->GetActiveWebContents());
-@@ -2094,6 +2102,8 @@ void BrowserCommandController::InitComma
+@@ -2098,6 +2106,8 @@ void BrowserCommandController::InitComma
    command_updater_->UpdateCommandEnabled(IDC_HELIUM_SERVICES_OPEN, true);
    command_updater_->UpdateCommandEnabled(IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN,
                                           false);
@@ -127,7 +127,7 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +++ src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
-@@ -84,6 +84,8 @@
+@@ -82,6 +82,8 @@
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/helium/helium_tab_switcher_controller.h"
@@ -136,7 +136,7 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
-@@ -659,6 +661,16 @@ void BrowserWindowFeatures::Init(Browser
+@@ -657,6 +659,16 @@ void BrowserWindowFeatures::Init(Browser
          GetUserDataFactory().CreateInstance<HeliumTabSwitcherController>(
              *browser, browser, profile->GetPrefs());
  
@@ -152,12 +152,12 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +
      vertical_tab_strip_state_controller_ =
          GetUserDataFactory()
-             .CreateInstance<tabs::VerticalTabStripStateController>(
+             .CreateInstance<tabs::VerticalTabStripStateControllerImpl>(
 Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_window/public/browser_window_features.h
 +++ src/chrome/browser/ui/browser_window/public/browser_window_features.h
-@@ -204,6 +204,10 @@ class GlicNudgeController;
+@@ -191,6 +191,10 @@ class GlicIphController;
  class GlicSplitButtonController;
  }  // namespace glic
  
@@ -168,7 +168,7 @@ Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
  namespace lens {
  class LensOverlayEntryPointController;
  class LensRegionSearchController;
-@@ -581,6 +585,8 @@ class BrowserWindowFeatures {
+@@ -471,6 +475,8 @@ class BrowserWindowFeatures {
    std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
    std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;
    std::unique_ptr<HeliumTabSwitcherController> helium_tab_switcher_controller_;
@@ -662,7 +662,7 @@ Index: src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
 +++ src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
-@@ -337,6 +337,7 @@ void BrowserNativeWidgetMac::ValidateUse
+@@ -341,6 +341,7 @@ void BrowserNativeWidgetMac::ValidateUse
      case IDC_RELOAD:
      case IDC_CTRL_S_SHORTCUT:
      case IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN:

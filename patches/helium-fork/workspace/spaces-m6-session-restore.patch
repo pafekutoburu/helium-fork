@@ -53,15 +53,15 @@ Index: src/chrome/browser/sessions/session_restore.cc
  #include "chrome/browser/sessions/session_restore_delegate.h"
  #include "chrome/browser/sessions/session_service.h"
  #include "chrome/browser/sessions/session_service_factory.h"
-@@ -75,6 +76,7 @@
- #include "chrome/browser/ui/startup/startup_types.h"
+@@ -76,6 +77,7 @@
  #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
+ #include "chrome/browser/ui/tabs/tab_enums.h"
  #include "chrome/browser/ui/tabs/tab_group_model.h"
 +#include "chrome/browser/ui/helium_workspace/workspace_tab_state.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model_selection_state.h"
  #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
-@@ -950,6 +952,7 @@ class SessionRestoreImpl : public Browse
+@@ -963,6 +965,7 @@ class SessionRestoreImpl : public Browse
      if (last_normal_browser && !startup_tabs_.empty()) {
        browser_to_activate = OpenStartupUrls(last_normal_browser, startup_tabs_);
      }
@@ -69,7 +69,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
  
  #if BUILDFLAG(IS_CHROMEOS)
      ash::BootTimesRecorder::Get()->AddLoginTimeMarker(
-@@ -1044,20 +1047,112 @@ class SessionRestoreImpl : public Browse
+@@ -1069,20 +1072,112 @@ class SessionRestoreImpl : public Browse
                   did_show_browser);
      };
  
@@ -188,7 +188,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
          restore_tab_at_index(source_index, next_insertion_index,
                               /*select=*/false);
        }
-@@ -1169,6 +1264,16 @@ class SessionRestoreImpl : public Browse
+@@ -1195,6 +1290,16 @@ class SessionRestoreImpl : public Browse
                               web_contents));
    }
  
@@ -205,7 +205,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
    void RestoreSplitTabVisualData(
        BrowserWindowInterface* browser,
        const std::vector<std::unique_ptr<sessions::SessionSplitTab>>&
-@@ -1364,6 +1469,31 @@ class SessionRestoreImpl : public Browse
+@@ -1408,6 +1513,31 @@ class SessionRestoreImpl : public Browse
          continue;
        }
  #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
@@ -237,7 +237,7 @@ Index: src/chrome/browser/sessions/session_restore.cc
        int add_types = AddTabTypes::ADD_FORCE_INDEX;
        if (is_first_tab) {
          add_types |= AddTabTypes::ADD_ACTIVE;
-@@ -1486,6 +1616,8 @@ class SessionRestoreImpl : public Browse
+@@ -1530,6 +1660,8 @@ class SessionRestoreImpl : public Browse
  
    // Set of URLs to open in addition to those restored from the session.
    StartupTabs startup_tabs_;
@@ -316,20 +316,19 @@ Index: src/chrome/browser/sessions/session_service.cc
 ===================================================================
 --- src.orig/chrome/browser/sessions/session_service.cc
 +++ src/chrome/browser/sessions/session_service.cc
-@@ -590,8 +590,11 @@ bool SessionService::RestoreIfNecessary(
-         *base::CommandLine::ForCurrentProcess(), profile());
+@@ -607,8 +607,11 @@ bool SessionService::RestoreIfNecessary(
      sessions::TabRestoreService* tab_restore_service =
          TabRestoreServiceFactory::GetForProfileIfExisting(profile());
--    if (pref.ShouldRestoreLastSession() &&
--        (!tab_restore_service || !tab_restore_service->IsRestoring())) {
+ 
 +    // helium-fork 2a-r1 / 2a-r5: every startup type restores (the sidebar's
 +    // Today lives in the session; the tabs come back asleep), not only LAST
 +    // -- see StartupBrowserCreatorImpl::DetermineBrowserOpenBehavior. This is
 +    // the path a first window takes after the last one was closed (the Dock).
-+    if ((!tab_restore_service || !tab_restore_service->IsRestoring())) {
+     if (ShouldTriggerSessionRestoreForBrowser(browser) &&
+-        pref.ShouldRestoreLastSession() &&
+         (!tab_restore_service || !tab_restore_service->IsRestoring())) {
        SessionRestore::RestoreSession(
            profile(), browser,
-           SessionRestore::RESTORE_BROWSER |
 Index: src/chrome/browser/ui/browser_ui_prefs.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_ui_prefs.cc
@@ -823,7 +822,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
  #include "components/helium_services/pref_names.h"
  #include "components/prefs/pref_service.h"
  #include "components/sessions/core/serialized_navigation_entry.h"
-@@ -519,6 +521,15 @@ void StartupBrowserCreatorImpl::Determin
+@@ -513,6 +515,15 @@ void StartupBrowserCreatorImpl::Determin
    const bool is_incognito_or_guest = profile_->IsOffTheRecord();
    bool is_post_crash_launch = HasPendingUncleanExit(profile_);
  
@@ -839,7 +838,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
    // Defer adding info bars until the browser window is ready. The observer
    // will delete itself once the infobars are added.
    // It is safe to store Profile* in the callback as callback will be destroyed
-@@ -579,6 +590,9 @@ void StartupBrowserCreatorImpl::Determin
+@@ -573,6 +584,9 @@ void StartupBrowserCreatorImpl::Determin
    if (is_post_crash_launch) {
      behavior_options |= IS_POST_CRASH_LAUNCH;
    }
@@ -849,7 +848,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
    if (command_line_->HasSwitch(switches::kOpenInNewWindow)) {
      behavior_options |= HAS_NEW_WINDOW_SWITCH;
    }
-@@ -617,6 +631,18 @@ void StartupBrowserCreatorImpl::Determin
+@@ -611,6 +625,18 @@ void StartupBrowserCreatorImpl::Determin
    BrowserWindowInterface* browser = RestoreOrCreateBrowser(
        tabs, behavior, restore_options, process_startup, is_post_crash_launch);
  
@@ -868,7 +867,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
    tab_groups::MaybeShowSharedTabGroupVersionOutOfDateModal(browser);
    tab_groups::MaybeShowSharedTabGroupVersionUpToDateToast(browser);
  
-@@ -790,10 +816,12 @@ BrowserWindowInterface* StartupBrowserCr
+@@ -784,10 +810,12 @@ BrowserWindowInterface* StartupBrowserCr
      bool is_post_crash_launch) {
    BrowserWindowInterface* browser = nullptr;
    if (behavior == BrowserOpenBehavior::SYNCHRONOUS_RESTORE) {
@@ -885,7 +884,7 @@ Index: src/chrome/browser/ui/startup/startup_browser_creator_impl.cc
      if (ShouldRestoreApps(StartupBrowserCreator::WasRestarted(), profile_)) {
        restore_options |= SessionRestore::RESTORE_APPS;
      }
-@@ -856,12 +884,27 @@ StartupBrowserCreatorImpl::DetermineBrow
+@@ -850,12 +878,27 @@ StartupBrowserCreatorImpl::DetermineBrow
      return BrowserOpenBehavior::NEW;
    }
  
@@ -1007,8 +1006,8 @@ Index: src/components/sessions/core/command_storage_backend.cc
 ===================================================================
 --- src.orig/components/sessions/core/command_storage_backend.cc
 +++ src/components/sessions/core/command_storage_backend.cc
-@@ -801,6 +801,28 @@ CommandStorageBackend::FindLastSessionFi
-   return std::nullopt;
+@@ -809,6 +809,29 @@ CommandStorageBackend::FindLastSessionFi
+   return base::unexpected(invalid_file_status);
  }
  
 +// static
@@ -1022,11 +1021,12 @@ Index: src/components/sessions/core/command_storage_backend.cc
 +    if (session.timestamp > not_newer_than) {
 +      continue;
 +    }
-+    // Same predicate as CanUseFileForLastSession(); the header is never
-+    // encrypted, so no encryptor is needed to tell a truncated file apart.
-+    const SessionFileReader::MarkerStatus status =
-+        SessionFileReader::GetMarkerStatus(session.path, /*encryptor=*/nullptr);
-+    if (!status.is_header_valid || status.has_marker) {
++    // Same predicate as FindLastSessionFile() (156: a file counts only with a
++    // valid header and its marker); the header is never encrypted, so no
++    // encryptor is needed to tell a truncated file apart.
++    if (SessionFileReader::GetMarkerStatus(session.path,
++                                           /*encryptor=*/nullptr) ==
++        CommandStorageReadStatus::kSuccess) {
 +      return session.path;
 +    }
 +  }
@@ -1040,7 +1040,7 @@ Index: src/components/sessions/core/command_storage_backend.h
 ===================================================================
 --- src.orig/components/sessions/core/command_storage_backend.h
 +++ src/components/sessions/core/command_storage_backend.h
-@@ -120,6 +120,22 @@ class SESSIONS_EXPORT CommandStorageBack
+@@ -124,6 +124,22 @@ class SESSIONS_EXPORT CommandStorageBack
    // Parses out the timestamp from a path pointing to a session file.
    static bool TimestampFromPath(const base::FilePath& path, base::Time& result);
  

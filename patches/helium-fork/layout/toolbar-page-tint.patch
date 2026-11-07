@@ -2,33 +2,33 @@ Index: src/chrome/browser/ui/views/frame/custom_corners.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/custom_corners.cc
 +++ src/chrome/browser/ui/views/frame/custom_corners.cc
-@@ -73,13 +73,19 @@ void CustomCorners::PaintPath(gfx::Canva
-               ? ThemedBackground::ThemeChoice::kToolbarTheme
-               : ThemedBackground::ThemeChoice::kFrameTheme);
-     } else {
--      ui::ColorId color_id = std::get<ui::ColorId>(choice.color);
-+      // helium-fork: a page tint carries its color directly; every other
-+      // choice resolves through the color provider.
-+      const SkColor base_color =
-+          std::holds_alternative<PageTint>(choice.color)
-+              ? std::get<PageTint>(choice.color).value()
-+              : GetView().GetColorProvider()->GetColor(
-+                    std::get<ui::ColorId>(choice.color));
+@@ -62,13 +62,19 @@ void CustomCorners::PaintPath(gfx::Canva
+             ? ThemedBackground::ThemeChoice::kToolbarTheme
+             : ThemedBackground::ThemeChoice::kFrameTheme);
+   } else {
+-    ui::ColorId color_id = std::get<ui::ColorId>(color_choice.color);
++    // helium-fork: a page tint carries its color directly; every other
++    // choice resolves through the color provider.
++    const SkColor base_color =
++        std::holds_alternative<PageTint>(color_choice.color)
++            ? std::get<PageTint>(color_choice.color).value()
++            : GetView().GetColorProvider()->GetColor(
++                  std::get<ui::ColorId>(color_choice.color));
  
-       cc::PaintFlags flags;
-       flags.setAntiAlias(anti_alias);
-       flags.setStyle(cc::PaintFlags::kFill_Style);
-       flags.setColor(SkColorSetA(
--          GetView().GetColorProvider()->GetColor(color_id),
-+          base_color,
-           std::clamp(static_cast<int>(255 * choice.opacity), 0, 255)));
-       canvas->DrawPath(path, flags);
-     }
+     cc::PaintFlags flags;
+     flags.setAntiAlias(anti_alias);
+     flags.setStyle(cc::PaintFlags::kFill_Style);
+     flags.setColor(SkColorSetA(
+-        GetView().GetColorProvider()->GetColor(color_id),
++        base_color,
+         std::clamp(static_cast<int>(255 * color_choice.opacity), 0, 255)));
+     canvas->DrawPath(path, flags);
+   }
 Index: src/chrome/browser/ui/views/frame/custom_corners.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/custom_corners.h
 +++ src/chrome/browser/ui/views/frame/custom_corners.h
-@@ -69,8 +69,15 @@ class CustomCorners : public views::View
+@@ -68,8 +68,15 @@ class CustomCorners : public views::View
    // Designates that the toolbar theme background should be used.
    using ToolbarTheme = base::StrongAlias<class ToolbarThemeTag, std::monostate>;
  
@@ -49,7 +49,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h
-@@ -61,6 +61,12 @@ class BrowserViewLayoutDelegate {
+@@ -64,6 +64,12 @@ class BrowserViewLayoutDelegate {
    virtual float GetSideChromeRevealRatio() const { return 1.f; }
    virtual bool IsZenModeSideChromePinned() const { return false; }
    virtual bool IsZenModeTopChromePinned() const { return false; }
@@ -92,7 +92,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
  #include "ui/gfx/geometry/rect.h"
  #include "ui/views/view.h"
  
-@@ -281,6 +286,54 @@ bool BrowserViewLayoutDelegateImpl::IsZe
+@@ -300,6 +305,54 @@ bool BrowserViewLayoutDelegateImpl::IsZe
    return browser_view_->IsZenModeSideChromePinned();
  }
  
@@ -151,7 +151,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_imp
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_layout_delegate_impl.h
-@@ -49,6 +49,7 @@ class BrowserViewLayoutDelegateImpl : pu
+@@ -48,6 +48,7 @@ class BrowserViewLayoutDelegateImpl : pu
    float GetSideChromeRevealRatio() const override;
    bool IsZenModeSideChromePinned() const override;
    bool IsZenModeTopChromePinned() const override;
@@ -163,7 +163,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -36,6 +36,7 @@
+@@ -38,6 +38,7 @@
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl.h"
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
  #include "chrome/browser/ui/views/frame/multi_contents_view.h"
@@ -171,7 +171,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  #include "chrome/browser/ui/views/frame/shadow_frame_view.h"
  #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
  #include "chrome/browser/ui/views/frame/vertical_tab_strip_background_blur_backdrop.h"
-@@ -1875,6 +1876,62 @@ void BrowserViewTabbedLayoutImpl::Config
+@@ -1937,6 +1938,62 @@ void BrowserViewTabbedLayoutImpl::Config
      background->SetVisible(true);
    }
  
@@ -793,7 +793,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -3033,6 +3033,15 @@ void BrowserView::OnActiveTabChanged(con
+@@ -3045,6 +3045,15 @@ void BrowserView::OnActiveTabChanged(con
                                       int reason) {
    DCHECK(new_contents);
    TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");
@@ -813,10 +813,10 @@ Index: src/chrome/browser/ui/views/frame/multi_contents_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/multi_contents_view.cc
 +++ src/chrome/browser/ui/views/frame/multi_contents_view.cc
-@@ -993,7 +993,20 @@ void MultiContentsView::UpdateContentsBo
-         use_system_top_left_radius && is_first_view,
-         use_system_top_right_radius && is_last_view,
-         use_system_bottom_left_radius && is_first_view,
+@@ -997,7 +997,20 @@ void MultiContentsView::UpdateContentsBo
+             (is_side_by_side ? is_last_view : is_first_view),
+         use_system_bottom_left_radius &&
+             (is_side_by_side ? is_first_view : is_last_view),
 -        use_system_bottom_right_radius && is_last_view);
 +        use_system_bottom_right_radius && is_last_view,
 +        // helium-fork: `fuse_top_edge` -- the band sits flush on top of the
@@ -847,7 +847,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
  #include "content/public/browser/web_contents.h"
  #include "ui/accessibility/accessibility_features.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
-@@ -198,7 +199,9 @@ void ContentsContainerView::UpdateBorder
+@@ -200,7 +201,9 @@ void ContentsContainerView::UpdateBorder
                                                     bool round_top_left,
                                                     bool round_top_right,
                                                     bool round_bottom_left,
@@ -858,7 +858,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
    const bool split_changed = is_in_split != is_in_split_;
    const bool rounded_contents_changed =
        should_round_contents != should_round_contents_;
-@@ -206,7 +209,12 @@ void ContentsContainerView::UpdateBorder
+@@ -208,7 +211,12 @@ void ContentsContainerView::UpdateBorder
        round_top_left_window_corner_ != round_top_left ||
        round_top_right_window_corner_ != round_top_right ||
        round_bottom_left_window_corner_ != round_bottom_left ||
@@ -872,7 +872,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
    is_in_split_ = is_in_split;
    should_round_contents_ = should_round_contents;
    round_top_left_window_corner_ = round_top_left;
-@@ -225,25 +233,36 @@ void ContentsContainerView::UpdateBorder
+@@ -227,25 +235,36 @@ void ContentsContainerView::UpdateBorder
        }
      }
    } else {
@@ -912,7 +912,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
        container_outline_->SetVisible(false);
      }
      if (capture_contents_border_view_) {
-@@ -343,16 +362,28 @@ void ContentsContainerView::UpdateBorder
+@@ -345,16 +364,28 @@ void ContentsContainerView::UpdateBorder
        round_bottom_left_window_corner_ ? frame_radius : generic_radius;
    const int lower_right_radius =
        round_bottom_right_window_corner_ ? frame_radius : generic_radius;
@@ -944,7 +944,7 @@ Index: src/chrome/browser/ui/views/frame/contents_container_view.cc
    const gfx::RoundedCornersF inner_rounded_corners(
        upper_left_radius - inner_padding, upper_right_radius - inner_padding,
        lower_right_radius - inner_padding, lower_left_radius - inner_padding);
-@@ -488,6 +519,30 @@ void ContentsContainerView::SetTargetCon
+@@ -490,6 +521,30 @@ void ContentsContainerView::SetTargetCon
  
    target_content_bounds_ = target_content_bounds;
    InvalidateLayout(/*avoid_propagate_during_layout=*/true);

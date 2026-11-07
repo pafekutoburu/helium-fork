@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -902,6 +902,16 @@ void BrowserCommandController::HandleCom
+@@ -909,6 +909,16 @@ void BrowserCommandController::HandleCom
      case IDC_BROWSER_LAYOUT_VERTICAL_RIGHT:
        ToggleVerticalTabStripRightAligned(browser_);
        break;
@@ -19,8 +19,8 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  
  #if BUILDFLAG(IS_CHROMEOS)
      case IDC_TAKE_SCREENSHOT:
-@@ -1844,13 +1854,20 @@ void BrowserCommandController::InitComma
-   command_updater_->UpdateCommandEnabled(IDC_SHOW_AI_MODE_OMNIBOX_BUTTON, true);
+@@ -1857,13 +1867,20 @@ void BrowserCommandController::InitComma
+   command_updater_->UpdateCommandEnabled(IDC_BROWSE_SKILLS, true);
  
    // Helium layout menu
 +  // helium-fork: the submenu now carries the address bar modes; the stock
@@ -103,7 +103,7 @@ Index: src/chrome/browser/ui/browser_commands.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_commands.cc
 +++ src/chrome/browser/ui/browser_commands.cc
-@@ -2630,6 +2630,16 @@ void SetBrowserLayout(BrowserWindowInter
+@@ -2646,6 +2646,16 @@ void SetBrowserLayout(BrowserWindowInter
    }
  }
  
@@ -124,7 +124,7 @@ Index: src/chrome/browser/ui/browser_commands.h
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_commands.h
 +++ src/chrome/browser/ui/browser_commands.h
-@@ -302,6 +302,9 @@ void ToggleVerticalTabs(BrowserWindowInt
+@@ -304,6 +304,9 @@ void ToggleVerticalTabs(BrowserWindowInt
  void ToggleVerticalTabsExpandOnHover(BrowserWindowInterface* browser);
  void ToggleCollapseVerticalTabs(BrowserWindowInterface* browser);
  void SetBrowserLayout(BrowserWindowInterface* browser, HeliumLayoutType layout);

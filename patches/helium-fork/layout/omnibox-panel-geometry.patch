@@ -2,16 +2,16 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -612,6 +612,7 @@ static_library("ui") {
-     "helium/arc_caption_opacity.h",
-     "helium/arc_card_layout.h",
-     "helium/arc_minimal_field_state.h",
-+    "helium/arc_omnibox_panel.h",
-     "helium/helium_tab_switcher_controller.cc",
-     "helium/helium_tab_switcher_controller.h",
-     "helium_workspace/workspace_entry.cc",
-@@ -2633,6 +2634,8 @@ static_library("ui") {
-       "views/frame/vertical_tab_strip_background_blur_backdrop.h",
+@@ -2322,6 +2322,7 @@ static_library("ui") {
+       "helium/arc_caption_opacity.h",
+       "helium/arc_card_layout.h",
+       "helium/arc_minimal_field_state.h",
++      "helium/arc_omnibox_panel.h",
+       "helium/helium_tab_switcher_controller.cc",
+       "helium/helium_tab_switcher_controller.h",
+       "helium_workspace/workspace_entry.cc",
+@@ -3579,6 +3580,8 @@ static_library("ui") {
+       "views/frame/horizontal_tab_strip_region_view.h",
        "views/frame/vertical_tab_strip_region_view.cc",
        "views/frame/vertical_tab_strip_region_view.h",
 +      "views/helium/arc_omnibox_panel_painter.cc",
@@ -19,7 +19,7 @@ Index: src/chrome/browser/ui/BUILD.gn
        "views/helium/frame_corner_radius.cc",
        "views/helium/frame_corner_radius.h",
        "views/helium/native_frame_materials.cc",
-@@ -4261,6 +4264,8 @@ test("helium_workspace_unittests") {
+@@ -5864,6 +5867,8 @@ test("helium_workspace_unittests") {
      "helium/arc_card_layout_unittest.cc",
      "helium/arc_minimal_field_state.h",
      "helium/arc_minimal_field_state_unittest.cc",
@@ -407,7 +407,7 @@ Index: src/chrome/browser/ui/location_bar/location_bar.h
  #include "ui/base/page_transition_types.h"
  #include "ui/base/window_open_disposition.h"
  #include "ui/gfx/geometry/rect.h"
-@@ -159,6 +161,13 @@ class LocationBar {
+@@ -163,6 +165,13 @@ class LocationBar {
    // the Views location bar ever returns true.
    virtual bool IsArcHoverUrlPreview() const;
  
@@ -601,7 +601,7 @@ Index: src/chrome/browser/ui/views/location_bar/location_bar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/location_bar/location_bar_view.cc
 +++ src/chrome/browser/ui/views/location_bar/location_bar_view.cc
-@@ -2555,6 +2555,22 @@ bool LocationBarView::IsArcHoverUrlPrevi
+@@ -2698,6 +2698,22 @@ bool LocationBarView::IsArcHoverUrlPrevi
           !GetOmniboxController()->edit_model()->user_input_in_progress();
  }
  
@@ -646,7 +646,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
 +++ src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
-@@ -743,12 +743,16 @@ gfx::Rect OmniboxPopupViewViews::GetTarg
+@@ -744,12 +744,16 @@ gfx::Rect OmniboxPopupViewViews::GetTarg
    // Add enough space on the top and bottom so it looks like there is the same
    // amount of space between the text and the popup border as there is in the
    // interior between each row of text.
@@ -666,7 +666,7 @@ Index: src/chrome/browser/ui/views/omnibox/omnibox_popup_view_views.cc
    content_rect.set_height(popup_height);
  
    if (omnibox::IsWebUIOmniboxPopupEnabled() &&
-@@ -762,7 +766,8 @@ gfx::Rect OmniboxPopupViewViews::GetTarg
+@@ -763,7 +767,8 @@ gfx::Rect OmniboxPopupViewViews::GetTarg
    }
  
    // Finally, expand the widget to accommodate the custom-drawn shadows.
@@ -680,15 +680,15 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
 +++ src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
-@@ -15,6 +15,7 @@
+@@ -14,6 +14,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
  #include "chrome/browser/ui/layout_constants.h"
- #include "chrome/browser/ui/omnibox/omnibox_next_features.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
 +#include "chrome/browser/ui/views/helium/arc_omnibox_panel_painter.h"
  #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
  #include "chrome/browser/ui/views/omnibox/omnibox_aim_popup_webui_content.h"
  #include "chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.h"
-@@ -26,6 +27,7 @@
+@@ -25,6 +26,7 @@
  #include "ui/base/pointer/touch_ui_controller.h"
  #include "ui/compositor/layer.h"
  #include "ui/gfx/geometry/rounded_corners_f.h"
@@ -696,7 +696,7 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
  #include "ui/views/bubble/bubble_border.h"
  #include "ui/views/layout/layout_provider.h"
  #include "ui/views/metadata/view_factory.h"
-@@ -170,9 +172,19 @@ class TopBackgroundView : public views::
+@@ -169,9 +171,19 @@ class TopBackgroundView : public views::
      // underlying antialiased location bar/toolbar edge.  The round rect here is
      // not antialiased, since the goal is to completely cover the underlying
      // pixels, and AA would let those on the edge partly bleed through.
@@ -717,7 +717,7 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
    }
  
  #if !defined(USE_AURA)
-@@ -234,8 +246,15 @@ RoundedOmniboxResultsFrame::RoundedOmnib
+@@ -233,8 +245,15 @@ RoundedOmniboxResultsFrame::RoundedOmnib
      views::View* contents,
      LocationBar* location_bar,
      bool forward_mouse_events)
@@ -733,11 +733,11 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
 +  const int corner_radius =
 +      arc_metrics.enabled ? arc_metrics.panel_radius : 12;
    auto* webui_content = GetOmniboxPopupWebUIBaseContent();
-   const bool masks_to_bounds =
-       webui_content && webui_content->ShouldSizeWebViewToPreferredHeight();
-@@ -313,6 +332,55 @@ gfx::Insets RoundedOmniboxResultsFrame::
-   return views::BubbleBorder::GetBorderAndShadowInsets(kDefaultElevation);
+   // When the page paints the popup's shadow, this frame must not paint a
+   // background, rounded corners or a shadow: the renderer draws all of them,
+@@ -329,6 +348,55 @@ gfx::Insets RoundedOmniboxResultsFrame::
  }
+ // LINT.ThenChange(//chrome/browser/resources/omnibox_popup/omnibox_popup_document_style.css:ShadowMargin)
  
 +namespace {
 +
@@ -791,7 +791,7 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
  std::unique_ptr<views::View> RoundedOmniboxResultsFrame::ExtractContents() {
    auto contents = std::exchange(contents_, nullptr);
    return contents_host_->RemoveChildViewT<views::View>(contents);
-@@ -342,6 +410,15 @@ void RoundedOmniboxResultsFrame::SetCuto
+@@ -358,6 +426,15 @@ void RoundedOmniboxResultsFrame::SetCuto
  }
  
  void RoundedOmniboxResultsFrame::SetElevation(int elevation) {
@@ -807,7 +807,7 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
    const int corner_radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
        views::ShapeContextTokens::kOmniboxExpandedRadius);
    auto border = std::make_unique<views::BubbleBorder>(
-@@ -365,8 +442,8 @@ void RoundedOmniboxResultsFrame::Layout(
+@@ -381,8 +458,8 @@ void RoundedOmniboxResultsFrame::Layout(
  
    if (top_background_->GetVisible()) {
      gfx::Rect top_bounds(contents_host_->GetContentsBounds());
@@ -818,7 +818,7 @@ Index: src/chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.cc
      top_background_->SetBoundsRect(top_bounds);
    }
  
-@@ -442,7 +519,26 @@ void RoundedOmniboxResultsFrame::OnMouse
+@@ -472,7 +549,26 @@ void RoundedOmniboxResultsFrame::OnMouse
  // Insets used to position |contents_| within |contents_host_|.
  gfx::Insets RoundedOmniboxResultsFrame::GetContentInsets() {
    return gfx::Insets::TLBR(
@@ -909,7 +909,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.cc
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.cc
-@@ -2337,6 +2337,17 @@ bool ToolbarView::IsArcBandHosted() cons
+@@ -2473,6 +2473,17 @@ bool ToolbarView::IsArcBandHosted() cons
  }
  
  // static
@@ -931,7 +931,7 @@ Index: src/chrome/browser/ui/views/toolbar/toolbar_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/toolbar/toolbar_view.h
 +++ src/chrome/browser/ui/views/toolbar/toolbar_view.h
-@@ -226,6 +226,10 @@ class ToolbarView : public views::Access
+@@ -231,6 +231,10 @@ class ToolbarView : public views::Access
    // helium-fork: true while this toolbar *is* the Arc shell's band, i.e. the
    // top strip of the contents card.
    bool IsArcBandHosted() const;

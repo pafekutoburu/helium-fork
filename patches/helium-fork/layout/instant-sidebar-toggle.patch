@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/animations/tab_strip_animations.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/animations/tab_strip_animations.cc
 +++ src/chrome/browser/ui/views/animations/tab_strip_animations.cc
-@@ -53,7 +53,20 @@ TabStripAnimations::TabStripAnimations()
+@@ -54,7 +54,20 @@ TabStripAnimations::TabStripAnimations()
  TabStripAnimations::~TabStripAnimations() = default;
  
  TabStripAnimations::GroupInfos TabStripAnimations::GenerateAnimations() const {
@@ -28,8 +28,8 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -950,9 +950,35 @@ BrowserViewTabbedLayoutImpl::CalculatePr
-       }
+@@ -1014,11 +1014,37 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+               : 0.0);
  
        vertical_tab_strip_width = vertical_tab_strip_bounds.width();
 +      // helium-fork: the toggle is instant (see tab_strip_animations.cc), but
@@ -45,9 +45,12 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 +          vertical_tab_strip_animation.current_motion ==
 +              TabStripAnimations::kCollapse;
        if (!zen.floating_vertical_tab_strip) {
--        const int inset_amount =
--            vertical_tab_strip_width - GetVerticalTabStripContentOverlap();
-+        int inset_amount = vertical_tab_strip_width;
+         // Expand on hover overlaps the contents instead of resizing them.
+-        const int inset_amount = vertical_tab_strip_width -
+-                                 vertical_tab_strip_hover_width -
+-                                 GetVerticalTabStripContentOverlap();
++        int inset_amount =
++            vertical_tab_strip_width - vertical_tab_strip_hover_width;
 +        if (sidebar_toggle_in_progress) {
 +          const int target_width =
 +              vertical_tab_strip_animation.current_motion ==

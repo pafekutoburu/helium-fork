@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controlle
 ===================================================================
 --- src.orig/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
 +++ src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.cc
-@@ -40,6 +40,7 @@
+@@ -39,6 +39,7 @@ DEFINE_USER_DATA(DownloadToolbarUIContro
  #include "chrome/browser/ui/views/download/bubble/download_bubble_contents_view.h"
  #include "chrome/browser/ui/views/download/bubble/download_bubble_started_animation_views.h"
  #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -10,7 +10,7 @@ Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controlle
  #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h"
  #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions.h"
  #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-@@ -472,7 +473,29 @@
+@@ -474,7 +475,29 @@ void DownloadToolbarUIController::TearDo
    browser_view_ = nullptr;
  }
  
@@ -40,7 +40,7 @@ Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controlle
    auto* container = GetPinnedToolbarActions(browser_view_);
    if (!container) {
      return;
-@@ -482,6 +505,10 @@
+@@ -484,6 +507,10 @@ void DownloadToolbarUIController::Show()
  
  void DownloadToolbarUIController::Hide() {
    HideDetails();
@@ -51,7 +51,7 @@ Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controlle
    auto* container = GetPinnedToolbarActions(browser_view_);
    if (!container) {
      return;
-@@ -490,6 +517,12 @@
+@@ -492,6 +519,12 @@ void DownloadToolbarUIController::Hide()
  }
  
  bool DownloadToolbarUIController::IsShowing() const {
@@ -64,7 +64,7 @@ Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controlle
    auto* button = GetDownloadsButton(browser_view_);
    return button && button->GetVisible();
  }
-@@ -946,6 +979,13 @@
+@@ -959,6 +992,13 @@ void DownloadToolbarUIController::ShowBu
      return;
    }
  
@@ -78,7 +78,7 @@ Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controlle
    auto* container = GetPinnedToolbarActions(browser_view_);
    if (!container) {
      return;
-@@ -981,8 +1021,13 @@
+@@ -994,8 +1034,13 @@ void DownloadToolbarUIController::OnBubb
            ImmersiveModeController::ANIMATE_REVEAL_YES);
      }
    }
@@ -97,15 +97,15 @@ Index: src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controlle
 ===================================================================
 --- src.orig/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h
 +++ src/chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h
-@@ -41,6 +41,7 @@
- class BrowserView;
- class DownloadDisplayController;
+@@ -40,6 +40,7 @@ class BrowserView;
+ class DownloadBubbleContentsView;
  class DownloadBubbleUIController;
+ class DownloadDisplayController;
 +class VerticalTabStripRegionView;
  class ProfileBrowserCollection;
+ enum class GetAnchorFailureReason;
  
- // DownloadToolbarUIController is a controller for the downloads button shown in
-@@ -210,6 +211,12 @@
+@@ -217,6 +218,12 @@ class DownloadToolbarUIController
  
    bool ShouldShowBubbleAsInactive() const;
  

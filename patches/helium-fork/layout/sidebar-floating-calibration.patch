@@ -2,15 +2,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -613,6 +613,7 @@ static_library("ui") {
-     "helium/arc_card_layout.h",
-     "helium/arc_composer.h",
-     "helium/arc_favorite_accent.h",
-+    "helium/arc_floating_sidebar.h",
-     "helium/arc_loading_bar.h",
-     "helium/arc_media_strip.h",
-     "helium/arc_minimal_field_state.h",
-@@ -4286,6 +4287,8 @@ test("helium_workspace_unittests") {
+@@ -2323,6 +2323,7 @@ static_library("ui") {
+       "helium/arc_card_layout.h",
+       "helium/arc_composer.h",
+       "helium/arc_favorite_accent.h",
++      "helium/arc_floating_sidebar.h",
+       "helium/arc_loading_bar.h",
+       "helium/arc_media_strip.h",
+       "helium/arc_minimal_field_state.h",
+@@ -5889,6 +5890,8 @@ test("helium_workspace_unittests") {
      "helium/arc_composer_unittest.cc",
      "helium/arc_favorite_accent.h",
      "helium/arc_favorite_accent_unittest.cc",
@@ -19,7 +19,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_loading_bar.h",
      "helium/arc_loading_bar_unittest.cc",
      "helium/arc_media_strip.h",
-@@ -4341,6 +4344,9 @@ test("helium_workspace_unittests") {
+@@ -5944,6 +5947,9 @@ test("helium_workspace_unittests") {
      # helium-fork: same deal for arc_card_layout.h -- gfx::Rect/Insets only,
      # no //ui/views, so the card's geometry contract is assertable here.
      "//ui/gfx/geometry",
@@ -33,7 +33,7 @@ Index: src/chrome/browser/ui/color/chrome_color_id.h
 ===================================================================
 --- src.orig/chrome/browser/ui/color/chrome_color_id.h
 +++ src/chrome/browser/ui/color/chrome_color_id.h
-@@ -461,6 +461,9 @@
+@@ -472,6 +472,9 @@
    /* the magnifier beside it are the same colour there. Dark is */ \
    /* UNMEASURED and falls back to upstream's dimmed id. */ \
    E_CPONLY(kColorOmniboxArcComposerHint) \
@@ -56,7 +56,7 @@ Index: src/chrome/browser/ui/color/material_chrome_color_mixer.cc
  #include "base/feature_list.h"
  #include "chrome/browser/ui/color/chrome_color_id.h"
  #include "chrome/browser/ui/color/chrome_color_provider_utils.h"
-@@ -528,6 +530,14 @@ void AddMaterialChromeColorMixer(ui::Col
+@@ -558,6 +560,14 @@ void AddMaterialChromeColorMixer(ui::Col
                  : (use_helium_app_surface
                         ? ui::ColorTransform(helium::kArcAppSurfaceLight)
                         : ui::ColorTransform(ui::kColorSysBase))};
@@ -382,7 +382,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  #include "chrome/browser/ui/helium/arc_omnibox_panel.h"
  #include "chrome/browser/ui/helium/arc_toolbar_host.h"
  #include "chrome/browser/ui/global_error/global_error.h"
-@@ -453,14 +454,13 @@ namespace {
+@@ -460,14 +461,13 @@ namespace {
  // The visible height of the shadow above the tabs. Clicks in this area are
  // treated as clicks to the frame, rather than clicks to the tab.
  const int kTabShadowSize = 2;
@@ -400,7 +400,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  
  // helium-fork: how many BeginFrames viz may hold the sidebar-toggle flip
  // waiting for the renderer's resized frame. Within the hold the previous
-@@ -1108,8 +1108,9 @@ BrowserView::BrowserView(BrowserWindowIn
+@@ -1123,8 +1123,9 @@ BrowserView::BrowserView(BrowserWindowIn
    zen_top_chrome_animation_.SetTweenType(gfx::Tween::FAST_OUT_SLOW_IN_3);
    zen_top_chrome_animation_.Reset(1);
    zen_side_chrome_animation_.SetSlideDuration(
@@ -412,7 +412,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    zen_side_chrome_animation_.Reset(1);
  
    browser_->GetTabStripModel()->AddObserver(this);
-@@ -2142,7 +2143,7 @@ void BrowserView::UpdateZenModeState() {
+@@ -2173,7 +2174,7 @@ void BrowserView::UpdateZenModeState() {
        zen_top_chrome_animation_.Show();
      }
      if (!zen_side_chrome_animation_.IsShowing()) {
@@ -421,7 +421,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      }
    }
  
-@@ -2167,7 +2168,13 @@ void BrowserView::UpdateZenModeEventMoni
+@@ -2198,7 +2199,13 @@ void BrowserView::UpdateZenModeEventMoni
  }
  
  void BrowserView::StartZenCollapseTimer(base::TimeDelta delay) {
@@ -436,7 +436,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
    zen_cursor_exit_timer_.Start(
-@@ -2210,11 +2217,12 @@ void BrowserView::UpdateZenModeRevealFro
+@@ -2241,11 +2248,12 @@ void BrowserView::UpdateZenModeRevealFro
    // Brief cursor excursions outside the window shouldn't collapse
    // the chrome.
    gfx::Rect zen_hover_bounds = GetLocalBounds();
@@ -451,7 +451,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
  
-@@ -2233,17 +2241,48 @@ void BrowserView::UpdateZenModeRevealFro
+@@ -2264,17 +2272,48 @@ void BrowserView::UpdateZenModeRevealFro
    // the card shut the moment the cursor touched either.
    const bool suppress_side_for_top = zen_mode_enabled_ && reveal_top;
    const bool in_side_trigger = IsPointInZenSideTrigger(cursor);
@@ -502,7 +502,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      return;
    }
  
-@@ -2251,6 +2290,14 @@ void BrowserView::UpdateZenModeRevealFro
+@@ -2282,6 +2321,14 @@ void BrowserView::UpdateZenModeRevealFro
    UpdateZenModeReveal(reveal_top, reveal_side);
  }
  
@@ -517,7 +517,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::UpdateZenModeReveal(bool reveal_top, bool reveal_side) {
    if (!zen_mode_enabled_ && !IsSidebarHiddenModeActive()) {
      return;
-@@ -2350,9 +2397,29 @@ void BrowserView::UpdateZenModeReveal(bo
+@@ -2381,9 +2428,29 @@ void BrowserView::UpdateZenModeReveal(bo
  
    if (reveal_side) {
      if (!zen_side_chrome_animation_.IsShowing()) {
@@ -548,7 +548,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      zen_side_chrome_animation_.Hide();
    }
  }
-@@ -3300,7 +3367,7 @@ bool BrowserView::MaybeHandleSidebarColl
+@@ -3331,7 +3398,7 @@ bool BrowserView::MaybeHandleSidebarColl
      UpdateArcSidebarControlPlacement();
      DeprecatedLayoutImmediately();
      DisarmContentsResizeHold();
@@ -557,20 +557,19 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    } else {
      // SHOW: one atomic flip -- the docked sidebar and the resized contents
      // land on glass in the same activation, with nothing sliding first. A
-@@ -3410,11 +3477,7 @@ bool BrowserView::IsPointInZenSideTrigge
+@@ -3441,10 +3508,7 @@ bool BrowserView::IsPointInZenSideTrigge
    }
    auto* controller = tabs::VerticalTabStripStateController::From(browser_);
    const bool right_aligned = controller && controller->IsTabStripRightAligned();
 -  if (right_aligned) {
--    return point.x() >= width() - kZenModeRevealTriggerThickness &&
--           point.x() < width();
+-    return point.x() >= width() - kZenModeRevealTriggerThickness;
 -  }
--  return point.x() >= 0 && point.x() < kZenModeRevealTriggerThickness;
+-  return point.x() < kZenModeRevealTriggerThickness;
 +  return helium::IsInFloatingSidebarTrigger(point.x(), width(), right_aligned);
  }
  
  namespace {
-@@ -3517,8 +3580,8 @@ bool BrowserView::IsPointInZenSideChrome
+@@ -3547,8 +3611,8 @@ bool BrowserView::IsPointInZenSideChrome
    gfx::Rect bounds = views::View::ConvertRectToTarget(
        vertical_tab_strip_region_view_->parent(), this,
        vertical_tab_strip_region_view_->bounds());
@@ -581,7 +580,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    return bounds.Contains(point);
  }
  
-@@ -8241,7 +8304,7 @@ void BrowserView::OnEvent(const ui::Even
+@@ -8294,7 +8358,7 @@ void BrowserView::OnEvent(const ui::Even
        return;
      }
      zen_last_cursor_.reset();
@@ -594,7 +593,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -1027,6 +1027,12 @@ class BrowserView : public BrowserWindow
+@@ -1037,6 +1037,12 @@ class BrowserView : public BrowserWindow
                             const gfx::Point& point) const;
    void UpdateZenModeRevealFromCursor();
    void UpdateZenModeReveal(bool reveal_top, bool reveal_side);
@@ -607,7 +606,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    void RevealZenModeTopChromeImmediately();
    bool IsZenModeEnabled() const;
    // helium-fork: true when the vertical tab strip is collapsed outside zen
-@@ -1679,6 +1685,9 @@ class BrowserView : public BrowserWindow
+@@ -1699,6 +1705,9 @@ class BrowserView : public BrowserWindow
    gfx::SlideAnimation zen_top_chrome_animation_;
    gfx::SlideAnimation zen_side_chrome_animation_;
    base::OneShotTimer zen_cursor_exit_timer_;
@@ -737,7 +736,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/layout_constants.h"
-@@ -77,12 +78,15 @@ constexpr int kVerticalTabsGrabHandleSiz
+@@ -81,12 +82,15 @@ constexpr int kVerticalTabsGrabHandleSiz
  // against the frame controls when it is the top-most row.
  constexpr int kTopToolbarExclusion = 10;
  
@@ -755,11 +754,28 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  
  struct ZenModeLayoutState {
    bool enabled = false;
+@@ -1806,11 +1810,12 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+     int floating_corner_radius = GetGenericFrameRadius();
+     if (zen.floating_vertical_tab_strip) {
+       floating_style = FloatingStyle::kDetached;
+-      // helium-fork: the floating card sits kContentCardInset from the window
+-      // edges, so its radius must be concentric with the system window radius
+-      // -- the same padded value the contents card uses. The generic 8 visibly
++      // helium-fork: the floating card sits kFloatingSidebarGap from the
++      // window edges, so its radius must be concentric with the system window
++      // radius (window radius minus that gap). The generic 8 visibly
+       // mismatched the window's corners ("侧边栏的R角和app窗口的R角没有匹配").
+-      floating_corner_radius = GetPaddedFrameRadius();
++      floating_corner_radius =
++          helium::FloatingSidebarCornerRadius(GetSystemWindowRadius());
+     } else if (vertical_tab_strip_animation.expand_on_hover_width > 0.0) {
+       floating_style = vertical_right_aligned ? FloatingStyle::kAttachedTrailing
+                                               : FloatingStyle::kAttachedLeading;
 Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -53,6 +53,7 @@
+@@ -60,6 +60,7 @@
  #include "chrome/browser/ui/views/tabs/vertical/arc_sidebar_top_container.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
  #include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_focus_swipe_controller.h"
@@ -767,7 +783,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "chrome/browser/ui/helium/arc_media_strip.h"
  #include "chrome/browser/ui/helium/arc_sidebar_surface.h"
  #include "chrome/browser/ui/views/tabs/vertical/helium_media_strip_controller.h"
-@@ -96,6 +97,9 @@ constexpr int kDefaultWidthSnapDistance
+@@ -104,6 +105,9 @@ constexpr int kDefaultWidthSnapDistance
  
  // Shadow is used in expand-on-hover mode. Shadow radius and opacity are dynamic
  // and set by the layout.
@@ -777,7 +793,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  constexpr int kExpandOnHoverShadowElevation = 4;
  constexpr ShadowFrameView::ShadowAlpha kExpandOnHoverShadowAlpha(
      {.light_key = 0.3,
-@@ -273,6 +277,17 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -310,6 +314,17 @@ VerticalTabStripRegionView::VerticalTabS
        AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
    active_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
    active_row_shadow_->SetVisible(false);
@@ -795,25 +811,8 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    pinned_row_shadow_ =
        AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
    pinned_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
-@@ -504,33 +519,38 @@ void VerticalTabStripRegionView::SetZenM
-   if (floating) {
-     CustomCornersBackground::Corner rounded_corner;
-     rounded_corner.type = CustomCornersBackground::CornerType::kRounded;
--    // helium-fork: the floating card sits kContentCardInset from the window
--    // edges, so its radius must be concentric with the system window radius --
--    // the same padded value the contents card uses. The generic 8 visibly
--    // mismatched the window's corners ("侧边栏的R角和app窗口的R角没有匹配").
--    rounded_corner.radius = GetPaddedFrameRadius();
-+    // helium-fork: the floating card sits kFloatingSidebarGap from the window
-+    // edges, so its radius must be concentric with the system window radius
-+    // (window radius minus that gap). The generic 8 visibly mismatched the
-+    // window's corners ("侧边栏的R角和app窗口的R角没有匹配").
-+    rounded_corner.radius =
-+        helium::FloatingSidebarCornerRadius(GetSystemWindowRadius());
-     corners[CornerOrientation::kTopLeading] = rounded_corner;
-     corners[CornerOrientation::kTopTrailing] = rounded_corner;
-     corners[CornerOrientation::kBottomLeading] = rounded_corner;
-     corners[CornerOrientation::kBottomTrailing] = rounded_corner;
+@@ -557,22 +572,25 @@ void VerticalTabStripRegionView::SetFloa
+     }
    }
  
 -  // helium-fork: `outline` stays empty on purpose. The floating card is
@@ -825,7 +824,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +  // levels lighter than its fill -- so faint it only registers as the card
 +  // having a crisp edge. Replicated at matched contrast
 +  // (kColorArcFloatingSidebarRim); the switch is in the header.
-+  if (floating && helium::kFloatingSidebarRimEnabled) {
++  if (style == FloatingStyle::kDetached && helium::kFloatingSidebarRimEnabled) {
 +    outline.color = {.color = kColorArcFloatingSidebarRim, .opacity = 1.0f};
 +    outline.top = outline.leading = outline.bottom = outline.trailing = true;
 +  }
@@ -838,20 +837,19 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 -  // shadow), but SetShadowVisible() had no caller anywhere in the tree, so the
 -  // card read as a flat panel butted against the page.
 -  if (shadow_frame_) {
--    shadow_frame_->SetShadowCornerRadius(GetPaddedFrameRadius());
--    shadow_frame_->SetShadowVisible(floating);
+-    shadow_frame_->SetShadowCornerRadius(corner_radius);
+-    shadow_frame_->SetShadowVisible(style == FloatingStyle::kDetached);
 +  // helium-fork: the floating card casts a shadow. It used to be the
 +  // expand-on-hover ShadowFrameView (MD elevation 4: gone within 5pt); Dia's
 +  // is a 16pt halo, which only the self-painted pass model can draw
 +  // (M3.9d, helium/arc_floating_sidebar.h).
 +  if (floating_card_shadow_) {
-+    floating_card_shadow_->SetShadowCornerRadius(
-+        helium::FloatingSidebarCornerRadius(GetSystemWindowRadius()));
-+    floating_card_shadow_->SetVisible(floating);
++    floating_card_shadow_->SetShadowCornerRadius(corner_radius);
++    floating_card_shadow_->SetVisible(style == FloatingStyle::kDetached);
    }
  }
  
-@@ -566,6 +586,9 @@ void VerticalTabStripRegionView::Layout(
+@@ -659,6 +677,9 @@ void VerticalTabStripRegionView::Layout(
    resize_area_->SetBoundsRect(
        gfx::Rect(resize_area_x, 0, resize_area_width_, bounds().height()));
    shadow_frame_->SetBoundsRect(GetLocalBounds());
@@ -859,18 +857,18 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +    floating_card_shadow_->SetCardBounds(GetLocalBounds());
 +  }
  
-   // Lazy injection: TabStripView (and its containers) may not exist yet at
-   // construction time. Re-calling is a cheap resync.
+   // helium-fork: the Arc shell's region math reads content-area children's
+   // bounds as this view's coordinates; that holds because UpdateInteriorMargin
 Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -327,6 +327,8 @@ class VerticalTabStripRegionView final
+@@ -367,6 +367,8 @@ class VerticalTabStripRegionView final
    int MaxMediaPanelHeightFor(const gfx::Rect& anchor, size_t hovered_index) const;
    raw_ptr<views::ResizeArea> resize_area_ = nullptr;
    raw_ptr<ShadowFrameView> shadow_frame_ = nullptr;
 +  // helium-fork M3.9d: the floating sidebar card's halo shadow.
 +  raw_ptr<HeliumCardShadowView> floating_card_shadow_ = nullptr;
    int resize_area_width_;
-   raw_ptr<views::FlexLayout> flex_layout_ = nullptr;
  
+   const raw_ptr<tabs::VerticalTabStripStateController> state_controller_;

@@ -2,29 +2,29 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -604,6 +604,8 @@ source_set("tab_dialogs") {
- # circular includes from each other.
- static_library("ui") {
-   sources = [
-+    "helium/helium_tab_switcher_controller.cc",
-+    "helium/helium_tab_switcher_controller.h",
-     "tab_helpers.cc",
-     "tab_helpers.h",
-   ]
-@@ -2619,6 +2621,8 @@ static_library("ui") {
-       "views/session_crashed_bubble_view.h",
-       "views/tab_search_bubble_host.cc",
-       "views/tab_search_bubble_host.h",
+@@ -2314,6 +2314,8 @@ static_library("ui") {
+       "browser.h",
+       "browser_tabstrip.cc",
+       "browser_tabstrip.h",
++      "helium/helium_tab_switcher_controller.cc",
++      "helium/helium_tab_switcher_controller.h",
+     ]
+ 
+     if (enable_dice_support) {
+@@ -3559,6 +3561,8 @@ static_library("ui") {
+       "views/helium/frame_corner_radius.h",
+       "views/helium/native_frame_materials.cc",
+       "views/helium/native_frame_materials.h",
 +      "views/tabs/switcher/tab_switcher_hud_view.cc",
 +      "views/tabs/switcher/tab_switcher_hud_view.h",
-       "views/web_apps/create_shortcut_confirmation_view.cc",
-       "views/web_apps/create_shortcut_confirmation_view.h",
-       "views/web_apps/frame_toolbar/web_app_frame_toolbar_view.cc",
+     ]
+ 
+     sources += get_target_outputs(":webui_name_variants")
 Index: src/chrome/browser/ui/browser_command_controller.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_command_controller.cc
 +++ src/chrome/browser/ui/browser_command_controller.cc
-@@ -70,6 +70,7 @@
+@@ -71,6 +71,7 @@
  #include "chrome/browser/ui/dialogs/browser_dialogs.h"
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
@@ -32,7 +32,7 @@ Index: src/chrome/browser/ui/browser_command_controller.cc
  #include "chrome/browser/ui/lens/lens_overlay_controller.h"
  #include "chrome/browser/ui/managed_ui.h"
  #include "chrome/browser/ui/navigator/browser_navigator.h"
-@@ -678,6 +679,17 @@ void BrowserCommandController::HandleCom
+@@ -685,6 +686,17 @@ void BrowserCommandController::HandleCom
      base::TimeTicks time_stamp) {
    DCHECK(IsCommandEnabled(id)) << "Invalid/disabled command " << id;
  
@@ -68,7 +68,7 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +++ src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
-@@ -83,6 +83,7 @@
+@@ -81,6 +81,7 @@
  #include "chrome/browser/ui/focus/browser_focus_controller_webui.h"
  #include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
  #include "chrome/browser/ui/helium/helium_layout_state_controller.h"
@@ -76,7 +76,7 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
  #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
  #include "chrome/browser/ui/omnibox/ai_mode_page_action_controller.h"
-@@ -654,6 +655,10 @@ void BrowserWindowFeatures::Init(Browser
+@@ -652,6 +653,10 @@ void BrowserWindowFeatures::Init(Browser
          GetUserDataFactory().CreateInstance<HeliumLayoutStateController>(
              *browser, browser, profile->GetPrefs());
  
@@ -86,12 +86,12 @@ Index: src/chrome/browser/ui/browser_window/internal/browser_window_features.cc
 +
      vertical_tab_strip_state_controller_ =
          GetUserDataFactory()
-             .CreateInstance<tabs::VerticalTabStripStateController>(
+             .CreateInstance<tabs::VerticalTabStripStateControllerImpl>(
 Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
 ===================================================================
 --- src.orig/chrome/browser/ui/browser_window/public/browser_window_features.h
 +++ src/chrome/browser/ui/browser_window/public/browser_window_features.h
-@@ -84,6 +84,7 @@ class FindBarController;
+@@ -80,6 +80,7 @@ class FindBarController;
  class FindBarOwner;
  class FullscreenControlHost;
  class HeliumLayoutStateController;
@@ -99,7 +99,7 @@ Index: src/chrome/browser/ui/browser_window/public/browser_window_features.h
  class HistoryClustersSidePanelCoordinator;
  class HistorySidePanelCoordinator;
  class ImmersiveModeController;
-@@ -579,6 +580,7 @@ class BrowserWindowFeatures {
+@@ -469,6 +470,7 @@ class BrowserWindowFeatures {
        send_tab_to_self_iph_controller_;
    std::unique_ptr<VerticalTabIphController> vertical_tab_iph_controller_;
    std::unique_ptr<HeliumLayoutStateController> helium_layout_state_controller_;

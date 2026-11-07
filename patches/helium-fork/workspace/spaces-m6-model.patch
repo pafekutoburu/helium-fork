@@ -10,7 +10,7 @@ Index: src/chrome/browser/sessions/BUILD.gn
      "session_common_utils.h",
      "session_restore.h",
      "session_restore_observer.h",
-@@ -108,6 +109,7 @@ source_set("impl") {
+@@ -111,6 +112,7 @@ source_set("impl") {
        "app_session_service_factory.cc",
        "exit_type_service.cc",
        "exit_type_service_factory.cc",
@@ -123,7 +123,7 @@ Index: src/chrome/browser/sessions/session_service_base.cc
  #include <stddef.h>
  
  #include <memory>
-@@ -671,6 +673,18 @@ void SessionServiceBase::BuildCommandsFo
+@@ -672,6 +674,18 @@ void SessionServiceBase::BuildCommandsFo
          sessions::CreatePinnedStateCommand(session_id, true));
    }
  
@@ -140,29 +140,29 @@ Index: src/chrome/browser/sessions/session_service_base.cc
 +  }
 +
    // Record the association between the sessionStorage namespace and the tab.
-   content::SessionStorageNamespace* session_storage_namespace =
+   content::SessionStorageNamespaceHandle* session_storage_namespace =
        tab->GetController().GetDefaultSessionStorageNamespace();
 Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -643,8 +643,12 @@ static_library("ui") {
-     "helium_workspace/workspace_service.h",
-     "helium_workspace/workspace_service_factory.cc",
-     "helium_workspace/workspace_service_factory.h",
-+    "helium_workspace/workspace_space.cc",
-+    "helium_workspace/workspace_space.h",
-     "helium_workspace/workspace_tab_controller.cc",
-     "helium_workspace/workspace_tab_controller.h",
-+    "helium_workspace/workspace_tab_restore_data.cc",
-+    "helium_workspace/workspace_tab_restore_data.h",
-     "helium_workspace/workspace_url_drop.h",
-     "tab_helpers.cc",
-     "tab_helpers.h",
-@@ -2617,6 +2621,12 @@ static_library("ui") {
-       "views/frame/custom_floating_corner.h",
-       "views/frame/find_bar_owner_views.cc",
-       "views/frame/find_bar_owner_views.h",
+@@ -2353,8 +2353,12 @@ static_library("ui") {
+       "helium_workspace/workspace_service.h",
+       "helium_workspace/workspace_service_factory.cc",
+       "helium_workspace/workspace_service_factory.h",
++      "helium_workspace/workspace_space.cc",
++      "helium_workspace/workspace_space.h",
+       "helium_workspace/workspace_tab_controller.cc",
+       "helium_workspace/workspace_tab_controller.h",
++      "helium_workspace/workspace_tab_restore_data.cc",
++      "helium_workspace/workspace_tab_restore_data.h",
+       "helium_workspace/workspace_url_drop.h",
+     ]
+ 
+@@ -3604,6 +3608,12 @@ static_library("ui") {
+       "views/frame/browser_view.cc",
+       "views/frame/helium_card_shadow_view.cc",
+       "views/frame/helium_card_shadow_view.h",
 +      "views/frame/helium_sidebar_menu_data.cc",
 +      "views/frame/helium_sidebar_menu_data.h",
 +      "views/frame/helium_sidebar_menu_view.cc",
@@ -171,17 +171,17 @@ Index: src/chrome/browser/ui/BUILD.gn
 +      "views/frame/helium_sidebar_submenu_view.h",
        "views/frame/horizontal_tab_strip_region_view.cc",
        "views/frame/horizontal_tab_strip_region_view.h",
-       "views/frame/immersive_mode_controller_factory_views.cc",
-@@ -2683,6 +2693,8 @@ static_library("ui") {
+       "views/frame/vertical_tab_strip_region_view.cc",
+@@ -3622,6 +3632,8 @@ static_library("ui") {
        "views/tabs/vertical/helium_media_strip_view.h",
        "views/tabs/vertical/helium_undo_bar_view.cc",
        "views/tabs/vertical/helium_undo_bar_view.h",
 +      "views/tabs/vertical/workspace_space_bar_view.cc",
 +      "views/tabs/vertical/workspace_space_bar_view.h",
-       "views/web_apps/create_shortcut_confirmation_view.cc",
-       "views/web_apps/create_shortcut_confirmation_view.h",
-       "views/web_apps/frame_toolbar/web_app_frame_toolbar_view.cc",
-@@ -4308,6 +4320,8 @@ test("helium_workspace_unittests") {
+     ]
+ 
+     sources += get_target_outputs(":webui_name_variants")
+@@ -5911,6 +5923,8 @@ test("helium_workspace_unittests") {
      "helium/arc_media_strip_unittest.cc",
      "helium/arc_minimal_field_state.h",
      "helium/arc_minimal_field_state_unittest.cc",
@@ -190,7 +190,7 @@ Index: src/chrome/browser/ui/BUILD.gn
      "helium/arc_sidebar_split.h",
      "helium/arc_sidebar_split_unittest.cc",
      "helium/arc_sidebar_surface.h",
-@@ -4335,6 +4349,9 @@ test("helium_workspace_unittests") {
+@@ -5938,6 +5952,9 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_service.cc",
      "helium_workspace/workspace_service.h",
      "helium_workspace/workspace_service_unittest.cc",
@@ -2694,7 +2694,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
    }
  }
  
-@@ -762,7 +1294,8 @@ void WorkspaceTabController::OnTabPinned
+@@ -761,7 +1293,8 @@ void WorkspaceTabController::OnTabPinned
          content::WebContents* contents = tab->GetContents();
          const std::string id = service_->AddEntry(
              WorkspaceEntry::Section::kPinned, url,
@@ -2892,7 +2892,7 @@ Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
    // TabStripModelObserver:
    void OnTabStripModelChanged(
        TabStripModel* tab_strip_model,
-@@ -202,6 +315,26 @@ class WorkspaceTabController : public Ta
+@@ -201,6 +314,26 @@ class WorkspaceTabController : public Ta
    // -- RestoreEntries() refuses ids that exist again.
    std::vector<WorkspaceEntry> folder_undo_snapshot_;
    SessionID folder_undo_watermark_ = SessionID::InvalidValue();

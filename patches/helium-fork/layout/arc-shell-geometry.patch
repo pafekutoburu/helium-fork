@@ -2,7 +2,7 @@ Index: src/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
 +++ src/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
-@@ -369,6 +369,10 @@ void BrowserFrameViewMac::SetCaptionButt
+@@ -367,6 +367,10 @@ void BrowserFrameViewMac::SetCaptionButt
         {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
      NSButton* button_view = [window standardWindowButton:button];
      [button_view setAlphaValue:opacity];
@@ -13,7 +13,7 @@ Index: src/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
    }
  }
  
-@@ -490,6 +494,19 @@ BrowserFrameViewMac::GetCaptionButtonBou
+@@ -492,6 +496,19 @@ BrowserFrameViewMac::GetCaptionButtonBou
    }
    // LINT.ThenChange(//chrome/browser/ui/views/frame/immersive_mode_controller_mac.mm:MacTabStripInsets)
  
@@ -37,7 +37,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.cc
 +++ src/chrome/browser/ui/views/frame/browser_view.cc
-@@ -1704,6 +1704,11 @@ float BrowserView::GetTopChromeRevealRat
+@@ -1729,6 +1729,11 @@ float BrowserView::GetTopChromeRevealRat
    return zen_top_chrome_animation_.GetCurrentValue();
  }
  
@@ -49,7 +49,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  float BrowserView::GetSideChromeRevealRatio() const {
    // helium-fork: the hidden sidebar (collapsed, zen off) floats exactly like
    // zen's unpinned strip and reuses the same slide animation for its reveal.
-@@ -1807,8 +1812,10 @@ void BrowserView::OnVerticalTabStripMode
+@@ -1832,8 +1837,10 @@ void BrowserView::OnVerticalTabStripMode
    UpdateArcSidebarControlPlacement();
  
    // helium-fork: the hidden sidebar mode's hover monitor follows the
@@ -61,7 +61,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  
    GetFrameView()->OnTabStripStateChanged();
  
-@@ -1935,9 +1942,10 @@ void BrowserView::UpdateZenModeState() {
+@@ -1961,9 +1968,10 @@ void BrowserView::UpdateZenModeState() {
    UpdateZenCollapseButtonVisibility();
  
    if (!zen_mode_enabled_) {
@@ -75,7 +75,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
      if (!zen_top_chrome_animation_.IsShowing()) {
        zen_top_chrome_animation_.Show();
      }
-@@ -2027,12 +2035,17 @@ void BrowserView::UpdateZenModeRevealFro
+@@ -2053,12 +2061,17 @@ void BrowserView::UpdateZenModeRevealFro
  
    // Top bar takes precedence: don't reveal side chrome when the cursor
    // is in the top trigger zone or over the revealed top chrome.
@@ -94,7 +94,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
        (in_side_trigger || in_side_chrome);
  
    // Defer the collapse briefly so quick excursions don't cause the
-@@ -2161,6 +2174,66 @@ bool BrowserView::IsSidebarHiddenModeAct
+@@ -2187,6 +2200,66 @@ bool BrowserView::IsSidebarHiddenModeAct
                             tabs::VerticalTabStripCollapseState::kExpanded;
  }
  
@@ -161,7 +161,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  void BrowserView::UpdateArcSidebarControlPlacement() {
    if (!toolbar_ || !vertical_tab_strip_region_view_) {
      return;
-@@ -2222,6 +2295,9 @@ void BrowserView::OnSidebarCollapseState
+@@ -2248,6 +2321,9 @@ void BrowserView::OnSidebarCollapseState
    // for one), and re-evaluating now would pop the card straight back out.
    // The monitor re-evaluates on the next mouse move anyway.
    UpdateZenModeEventMonitor();
@@ -171,7 +171,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
    InvalidateLayout();
  }
  
-@@ -2279,6 +2355,8 @@ void BrowserView::RunSidebarDockFlip() {
+@@ -2305,6 +2381,8 @@ void BrowserView::RunSidebarDockFlip() {
    DisarmContentsResizeHold();
    sidebar_toggle_phase_ = SidebarTogglePhase::kIdle;
    UpdateZenModeEventMonitor();
@@ -180,7 +180,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  }
  
  void BrowserView::ArmContentsResizeHold() {
-@@ -6149,12 +6227,8 @@ void BrowserView::OnThemeChanged() {
+@@ -6176,12 +6254,8 @@ void BrowserView::OnThemeChanged() {
    FrameColorsChanged();
  
    // Theme changes may recreate caption buttons, resetting their opacity.
@@ -195,7 +195,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.cc
  }
  
  bool BrowserView::GetDropFormats(
-@@ -7070,14 +7144,10 @@ void BrowserView::AnimationProgressed(co
+@@ -7118,14 +7192,10 @@ void BrowserView::AnimationProgressed(co
        multi_contents_view_->MaybeUpdateBorderForZenReveal();
      }
      InvalidateLayout();
@@ -218,7 +218,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_view.h
 +++ src/chrome/browser/ui/views/frame/browser_view.h
-@@ -431,6 +431,20 @@ class BrowserView : public BrowserWindow
+@@ -438,6 +438,20 @@ class BrowserView : public BrowserWindow
    bool IsZenModeEnabledForLayout() const;
    float GetTopChromeRevealRatio() const;
    float GetSideChromeRevealRatio() const;
@@ -239,7 +239,7 @@ Index: src/chrome/browser/ui/views/frame/browser_view.h
    bool IsZenModeSideChromePinned() const;
    bool IsZenModeTopChromePinned() const;
  
-@@ -968,6 +982,10 @@ class BrowserView : public BrowserWindow
+@@ -978,6 +992,10 @@ class BrowserView : public BrowserWindow
    // button) into the Arc shell top row while the vertical layout is active,
    // and returns them to their recorded toolbar slots otherwise.
    void UpdateArcSidebarControlPlacement();
@@ -254,7 +254,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
-@@ -73,7 +73,12 @@ constexpr int kVerticalTabsGrabHandleSiz
+@@ -77,7 +77,12 @@ constexpr int kVerticalTabsGrabHandleSiz
  // against the frame controls when it is the top-most row.
  constexpr int kTopToolbarExclusion = 10;
  
@@ -268,7 +268,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  
  struct ZenModeLayoutState {
    bool enabled = false;
-@@ -85,6 +90,14 @@ struct ZenModeLayoutState {
+@@ -89,6 +94,14 @@ struct ZenModeLayoutState {
  
    bool TopChromeVisible() const { return top_chrome_ratio > 0.0f; }
  
@@ -283,7 +283,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
    bool ShouldLayoutVerticalTabStrip() const {
      return !floating_vertical_tab_strip || side_chrome_ratio > 0.0f;
    }
-@@ -146,17 +159,17 @@ ZenModeLayoutState GetZenModeLayoutState
+@@ -150,17 +163,17 @@ ZenModeLayoutState GetZenModeLayoutState
    }
  
    state.vertical_tab_strip_padding = kZenModeVTSPadding;
@@ -312,7 +312,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
    return state;
  }
  
-@@ -432,13 +445,8 @@ BrowserViewTabbedLayoutImpl::GetMinimumT
+@@ -443,13 +456,8 @@ BrowserViewTabbedLayoutImpl::GetMinimumT
        auto result = views().vertical_tab_strip_region_view->GetMinimumSize();
        if (GetVerticalTabStripCollapsedState() ==
            VerticalTabStripCollapsedState::kCollapsed) {
@@ -328,7 +328,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
          // Reserve enough width to uncollapse the tabstrip even if it's
          // collapsed, or else uncollapsing the tabstrip will break the browser.
          result.set_width(std::max(
-@@ -781,12 +789,15 @@ BrowserViewTabbedLayoutImpl::GetVertical
+@@ -803,12 +811,15 @@ BrowserViewTabbedLayoutImpl::GetVertical
  }
  
  bool BrowserViewTabbedLayoutImpl::IsVerticalTabStripHiddenFloating() const {
@@ -350,7 +350,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
      return false;
    }
    const VerticalTabStripCollapsedState state =
-@@ -883,9 +894,29 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -905,9 +916,29 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    const bool infobar_visible = delegate().IsInfobarVisible();
    const bool should_use_rounded_frame =
        views().multi_contents_view->ShouldUseRoundedFrame();
@@ -379,9 +379,9 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 +    needs_exclusion = false;
 +  }
  
-   // Lay out horizontal tab strip region if present.
-   if (!dynamic_tab_strip &&
-@@ -977,10 +1008,13 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+   if (IsParentedTo(views().organizer_tray, views().browser_view)) {
+     const bool show_organizer_tray =
+@@ -1035,10 +1066,13 @@ BrowserViewTabbedLayoutImpl::CalculatePr
                : params.visual_client_area.x() +
                      zen.vertical_tab_strip_padding;
  
@@ -399,8 +399,8 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  
        const int vertical_tab_strip_height =
            std::max(0, params.visual_client_area.height() - top_offset -
-@@ -1084,6 +1118,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
-     layout.AddChild(views().organizer_panel_container, organizer_panel_bounds);
+@@ -1119,6 +1153,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+                 0.0f);
    }
  
 +  // helium-fork: the band's laid-out height, which is what decides whether it
@@ -411,7 +411,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
    // When the tabstrip isn't at the top or in constrained widths, the top
    // container is laid out before all side panels.
    if (horizontal_layout.force_top_container_to_top &&
-@@ -1092,10 +1131,23 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1127,10 +1166,23 @@ BrowserViewTabbedLayoutImpl::CalculatePr
          layout.AddChild(views().top_container, gfx::Rect());
  
      // Calculate the params for laying out the top container.
@@ -438,7 +438,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
      auto top_container_params =
          parent_params.InLocalCoordinates(parent_params.visual_client_area);
  
-@@ -1103,33 +1155,20 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1138,33 +1190,20 @@ BrowserViewTabbedLayoutImpl::CalculatePr
          top_container_layout, top_container_params, needs_exclusion);
      top_container_layout.bounds = GetTopContainerBoundsInParent(
          top_container_local_bounds, parent_params);
@@ -485,7 +485,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
      }
  
      if (dynamic_tab_strip &&
-@@ -1149,30 +1188,29 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1184,30 +1223,29 @@ BrowserViewTabbedLayoutImpl::CalculatePr
        }
      }
  
@@ -533,7 +533,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
    }
  
    if (dynamic_tab_strip) {
-@@ -1326,16 +1364,9 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1361,16 +1399,9 @@ BrowserViewTabbedLayoutImpl::CalculatePr
      params.SetTop(top_container_layout.bounds.bottom());
    }
  
@@ -553,7 +553,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  
    // Lay out infobar container.
    if (IsParentedTo(views().infobar_container, views().browser_view)) {
-@@ -1370,10 +1401,26 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1405,10 +1436,26 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    // especially obvious in split view, where turning the separator off provides
    // the required top padding.
    const auto& separator_info = layout_data_->separator_info;
@@ -582,7 +582,7 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
  
    // Updating the top, left and right insets for contents container view when
    // in split view. This is dependent on a number of other browser states.
-@@ -1417,8 +1464,20 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1452,11 +1499,25 @@ BrowserViewTabbedLayoutImpl::CalculatePr
    // Update the multi-contents view about if we will be animating content
    // bounds. This is to make optimizations during animations e.g. avoid
    // repositioning status bubble.
@@ -596,15 +596,21 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 +  // strip that used to lift off the bottom of the page while the band
 +  // collapsed. This flag is what flips the resize back to the default deadline
 +  // (ContentsWebView::SetIsAnimatingBounds), which is exactly what upstream
-+  // already does for the side panel and the vertical tab strip.
++  // already does for the side panel and the vertical tab strip. Since 156 the
++  // flip also needs `is_origin_changing`, and the band moves the origin.
+   const bool is_origin_changing =
+       (side_panel_is_animating && !views().side_panel->IsRightAligned()) ||
+-      (vertical_tab_strip_animation.current_motion && !base::i18n::IsRTL());
++      (vertical_tab_strip_animation.current_motion && !base::i18n::IsRTL()) ||
++      zen.TopChromeAnimating();
    views().multi_contents_view->SetIsAnimatingContent(
--      side_panel_is_animating || vertical_tab_strip_animation.current_motion);
+-      side_panel_is_animating || vertical_tab_strip_animation.current_motion,
 +      side_panel_is_animating || vertical_tab_strip_animation.current_motion ||
-+      zen.TopChromeAnimating());
++          zen.TopChromeAnimating(),
+       is_origin_changing);
  
    // Lay out contents container. The contents container contains the multi-
-   // contents view when multi-contents are enabled. The checks here are to
-@@ -1448,44 +1507,99 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1487,44 +1548,99 @@ BrowserViewTabbedLayoutImpl::CalculatePr
                                  params.visual_client_area.height()));
  
    // Maybe expand and clip the web contents to avoid issues during animation.
@@ -624,27 +630,6 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 -        }
 -        unclipped_contents_region.Outset(gfx::Outsets::TLBR(
 -            top_inset, 0, shadow_overlay_insets.bottom(), 0));
--      }
--
--      // Avoid cases where these areas are somehow misaligned (shouldn't happen,
--      // but want to avoid visual artifacts if they are).
--      contents_layout.bounds.Intersect(unclipped_contents_region);
--      const auto clip_insets =
--          unclipped_contents_region.InsetsFrom(contents_layout.bounds);
--
--      // Set the target size of the contents.
--      views().multi_contents_view->SetTargetContentBounds(
--          MultiContentsView::TargetContentBounds(
--              unclipped_contents_region.size(), clip_insets));
--
--      // Paint the main background during animations when clipping is
--      // required. This prevents "cracking" at the edge of the contents area
--      // as the clip region is manipulated.
--      if (main_background_layout) {
--        main_background_layout->visibility = true;
--      }
--    } else {
--      views().multi_contents_view->SetTargetContentBounds(std::nullopt);
 +  //
 +  // helium-fork: the zen band's *collapse* joins this path. Upstream built the
 +  // mechanism for the side panel flyover -- pin the web contents to the size
@@ -709,11 +694,30 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
 +      int top_inset = shadow_overlay_insets.top();
 +      if (layout_data_->separator_info.adjust_for_missing_separator) {
 +        top_inset = std::max(0, top_inset - views::Separator::kThickness);
-+      }
+       }
 +      unclipped_contents_region.Outset(gfx::Outsets::TLBR(
 +          top_inset, 0, shadow_overlay_insets.bottom(), 0));
 +    }
-+
+ 
+-      // Avoid cases where these areas are somehow misaligned (shouldn't happen,
+-      // but want to avoid visual artifacts if they are).
+-      contents_layout.bounds.Intersect(unclipped_contents_region);
+-      const auto clip_insets =
+-          unclipped_contents_region.InsetsFrom(contents_layout.bounds);
+-
+-      // Set the target size of the contents.
+-      views().multi_contents_view->SetTargetContentBounds(
+-          MultiContentsView::TargetContentBounds(
+-              unclipped_contents_region.size(), clip_insets));
+-
+-      // Paint the main background during animations when clipping is
+-      // required. This prevents "cracking" at the edge of the contents area
+-      // as the clip region is manipulated.
+-      if (main_background_layout) {
+-        main_background_layout->visibility = true;
+-      }
+-    } else {
+-      views().multi_contents_view->SetTargetContentBounds(std::nullopt);
 +    // Avoid cases where these areas are somehow misaligned (shouldn't happen,
 +    // but want to avoid visual artifacts if they are).
 +    contents_layout.bounds.Intersect(unclipped_contents_region);
@@ -741,7 +745,19 @@ Index: src/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.
    }
  
    // If the window goes out of glass mode, these changes won't hurt anything.
-@@ -1569,8 +1683,17 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+@@ -1579,6 +1695,11 @@ BrowserViewTabbedLayoutImpl::CalculatePr
+     int floating_corner_radius = GetGenericFrameRadius();
+     if (zen.floating_vertical_tab_strip) {
+       floating_style = FloatingStyle::kDetached;
++      // helium-fork: the floating card sits kContentCardInset from the window
++      // edges, so its radius must be concentric with the system window radius
++      // -- the same padded value the contents card uses. The generic 8 visibly
++      // mismatched the window's corners ("侧边栏的R角和app窗口的R角没有匹配").
++      floating_corner_radius = GetPaddedFrameRadius();
+     } else if (vertical_tab_strip_animation.expand_on_hover_width > 0.0) {
+       floating_style = vertical_right_aligned ? FloatingStyle::kAttachedTrailing
+                                               : FloatingStyle::kAttachedLeading;
+@@ -1624,8 +1745,17 @@ BrowserViewTabbedLayoutImpl::CalculatePr
                (side_exclusion.content_top + side_exclusion.content.height()) /
                2.f) -
            tabstrip_bounds->y();
@@ -764,7 +780,7 @@ Index: src/chrome/browser/ui/views/frame/multi_contents_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/multi_contents_view.cc
 +++ src/chrome/browser/ui/views/frame/multi_contents_view.cc
-@@ -58,10 +58,22 @@ namespace {
+@@ -60,10 +60,22 @@ namespace {
  constexpr int kSnapDistance = 15;
  constexpr float kZenTopChromeAttachedThreshold = 0.5f;
  
@@ -880,7 +896,7 @@ Index: src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
 +++ src/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
-@@ -223,6 +223,19 @@ void BrowserNativeWidgetMac::GetWindowFr
+@@ -227,6 +227,19 @@ void BrowserNativeWidgetMac::GetWindowFr
    if (browser_view_ && browser_view_->browser_widget() &&
        browser_view_->browser_widget()->GetFrameView()) {
      *override_titlebar_height = true;
@@ -904,20 +920,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -369,7 +369,11 @@ void VerticalTabStripRegionView::SetZenM
-   if (floating) {
-     CustomCornersBackground::Corner rounded_corner;
-     rounded_corner.type = CustomCornersBackground::CornerType::kRounded;
--    rounded_corner.radius = GetGenericFrameRadius();
-+    // helium-fork: the floating card sits kContentCardInset from the window
-+    // edges, so its radius must be concentric with the system window radius --
-+    // the same padded value the contents card uses. The generic 8 visibly
-+    // mismatched the window's corners ("侧边栏的R角和app窗口的R角没有匹配").
-+    rounded_corner.radius = GetPaddedFrameRadius();
-     corners[CornerOrientation::kTopLeading] = rounded_corner;
-     corners[CornerOrientation::kTopTrailing] = rounded_corner;
-     corners[CornerOrientation::kBottomLeading] = rounded_corner;
-@@ -384,6 +388,15 @@ void VerticalTabStripRegionView::SetZenM
+@@ -432,6 +432,15 @@ void VerticalTabStripRegionView::SetFloa
    background->SetCorners(corners);
    background->SetOutline(outline);
    background->SetPaintWithNativeFrameMaterials(floating);
@@ -927,8 +930,8 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +  // shadow), but SetShadowVisible() had no caller anywhere in the tree, so the
 +  // card read as a flat panel butted against the page.
 +  if (shadow_frame_) {
-+    shadow_frame_->SetShadowCornerRadius(GetPaddedFrameRadius());
-+    shadow_frame_->SetShadowVisible(floating);
++    shadow_frame_->SetShadowCornerRadius(corner_radius);
++    shadow_frame_->SetShadowVisible(style == FloatingStyle::kDetached);
 +  }
  }
  

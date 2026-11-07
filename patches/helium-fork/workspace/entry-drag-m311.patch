@@ -2,15 +2,15 @@ Index: src/chrome/browser/ui/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/BUILD.gn
 +++ src/chrome/browser/ui/BUILD.gn
-@@ -624,6 +624,7 @@ static_library("ui") {
-     "helium/helium_tab_switcher_controller.h",
-     "helium_workspace/workspace_entry.cc",
-     "helium_workspace/workspace_entry.h",
-+    "helium_workspace/workspace_drag_math.h",
-     "helium_workspace/workspace_favicon_image.h",
-     "helium_workspace/workspace_grid_math.h",
-     "helium_workspace/workspace_omnibox_match.h",
-@@ -4308,6 +4309,8 @@ test("helium_workspace_unittests") {
+@@ -2332,6 +2332,7 @@ static_library("ui") {
+       "helium/arc_toolbar_host.h",
+       "helium/helium_tab_switcher_controller.cc",
+       "helium/helium_tab_switcher_controller.h",
++      "helium_workspace/workspace_drag_math.h",
+       "helium_workspace/workspace_entry.cc",
+       "helium_workspace/workspace_entry.h",
+       "helium_workspace/workspace_favicon_image.h",
+@@ -5911,6 +5912,8 @@ test("helium_workspace_unittests") {
      "helium_workspace/workspace_entry.cc",
      "helium_workspace/workspace_entry.h",
      "helium_workspace/workspace_entry_unittest.cc",
@@ -655,7 +655,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
-@@ -9,6 +9,7 @@
+@@ -10,6 +10,7 @@
  
  #include "base/callback_list.h"
  #include "base/functional/bind.h"
@@ -663,17 +663,17 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
  #include "base/i18n/number_formatting.h"
  #include "base/i18n/rtl.h"
  #include "base/metrics/histogram_functions.h"
-@@ -42,6 +43,9 @@
- #include "chrome/browser/ui/views/helium/frame_corner_radius.h"
+@@ -47,6 +48,9 @@
+ #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
  #include "chrome/browser/ui/views/tabs/common/pinned_tab_container_view.h"
  #include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_overlay.h"
 +#include "chrome/browser/ui/views/tabs/common/workspace_entry_drag_data.h"
 +#include "ui/base/dragdrop/drag_drop_types.h"
  #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
+ #include "chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h"
  #include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
- #include "chrome/browser/ui/views/tabs/common/tab_drag_handler.h"
-@@ -288,6 +292,17 @@ VerticalTabStripRegionView::VerticalTabS
+@@ -325,6 +329,17 @@ VerticalTabStripRegionView::VerticalTabS
    floating_card_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
    floating_card_shadow_->SetShadowSpec(helium::kFloatingSidebarShadowSpec);
    floating_card_shadow_->SetVisible(false);
@@ -691,17 +691,17 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
    pinned_row_shadow_ =
        AddChildViewAt(std::make_unique<HeliumCardShadowView>(), 0);
    pinned_row_shadow_->SetProperty(views::kViewIgnoredByLayoutKey, true);
-@@ -442,7 +457,8 @@ bool VerticalTabStripRegionView::IsPosit
-     // treating them as UI here would eat the window-drag area around every
-     // floating card.
-     if (views::IsViewClass<HeliumCardShadowView>(child) ||
--        views::IsViewClass<HeliumMediaScrimView>(child)) {
-+        views::IsViewClass<HeliumMediaScrimView>(child) ||
-+        views::IsViewClass<WorkspaceEntryDragOverlay>(child)) {
-       continue;
-     }
+@@ -475,7 +490,8 @@ bool VerticalTabStripRegionView::IsPosit
+   // area's, so both loops skip them.)
+   const auto is_decoration = [](const views::View* view) {
+     return views::IsViewClass<HeliumCardShadowView>(view) ||
+-           views::IsViewClass<HeliumMediaScrimView>(view);
++           views::IsViewClass<HeliumMediaScrimView>(view) ||
++           views::IsViewClass<WorkspaceEntryDragOverlay>(view);
+   };
  
-@@ -575,6 +591,124 @@ void VerticalTabStripRegionView::Removed
+   // For any of the other children, absorb the click as non window caption.
+@@ -625,6 +641,124 @@ void VerticalTabStripRegionView::Removed
    BaseTabStripRegionView::RemovedFromWidget();
  }
  
@@ -823,10 +823,10 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
 +  return today ? today->GetWorkspaceEntryDropCallback() : base::NullCallback();
 +}
 +
- void VerticalTabStripRegionView::Layout(PassKey) {
-   LayoutSuperclass<views::AccessiblePaneView>(this);
- 
-@@ -604,6 +738,15 @@ void VerticalTabStripRegionView::Layout(
+ views::ProposedLayout VerticalTabStripRegionView::CalculateProposedLayout(
+     const views::SizeBounds& size_bounds) const {
+   views::ProposedLayout layout;
+@@ -712,6 +846,15 @@ void VerticalTabStripRegionView::Layout(
        if (WorkspaceSidebarView* const sidebar =
                pinned_container->workspace_view()) {
          sidebar->SetCardShadowFrame(pinned_row_shadow_);
@@ -846,7 +846,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 ===================================================================
 --- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
-@@ -40,6 +40,7 @@ class HeliumMediaStripView;
+@@ -44,6 +44,7 @@ class HeliumMediaStripView;
  class VerticalTabStripBottomContainer;
  class VerticalTabStripFocusSwipeController;
  class HeliumCardShadowView;
@@ -854,7 +854,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class ShadowFrameView;
  
  namespace tabs {
-@@ -55,6 +56,9 @@ class FlexLayout;
+@@ -59,6 +60,9 @@ class View;
  
  // Container for the vertical tabstrip and the other views sharing space with
  // it, excluding the caption buttons.
@@ -864,7 +864,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
  class VerticalTabStripRegionView final
      : public BaseTabStripRegionView,
        public views::ResizeAreaDelegate,
-@@ -117,6 +121,30 @@ class VerticalTabStripRegionView final
+@@ -138,6 +142,30 @@ class VerticalTabStripRegionView final
    void AddedToWidget() override;
    void RemovedFromWidget() override;
    void Layout(PassKey) override;
@@ -895,7 +895,7 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
    views::View* GetDefaultFocusableChild() override;
    gfx::Size GetMinimumSize() const override;
    gfx::Size CalculatePreferredSize(
-@@ -329,6 +357,10 @@ class VerticalTabStripRegionView final
+@@ -369,6 +397,10 @@ class VerticalTabStripRegionView final
    raw_ptr<ShadowFrameView> shadow_frame_ = nullptr;
    // helium-fork M3.9d: the floating sidebar card's halo shadow.
    raw_ptr<HeliumCardShadowView> floating_card_shadow_ = nullptr;
@@ -904,13 +904,13 @@ Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
 +  raw_ptr<HeliumCardShadowView> entry_drag_shadow_ = nullptr;
 +  raw_ptr<WorkspaceEntryDragOverlay> entry_drag_overlay_ = nullptr;
    int resize_area_width_;
-   raw_ptr<views::FlexLayout> flex_layout_ = nullptr;
  
+   const raw_ptr<tabs::VerticalTabStripStateController> state_controller_;
 Index: src/chrome/browser/ui/views/tabs/common/BUILD.gn
 ===================================================================
 --- src.orig/chrome/browser/ui/views/tabs/common/BUILD.gn
 +++ src/chrome/browser/ui/views/tabs/common/BUILD.gn
-@@ -83,6 +83,10 @@ source_set("impl") {
+@@ -91,6 +91,10 @@ source_set("impl") {
      # take without a cycle.
      "workspace_entry_view.cc",
      "workspace_entry_view.h",
@@ -1918,7 +1918,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    if (animation == &folder_animation_) {
      folder_prev_layout_valid_ = false;
    }
-@@ -561,6 +753,7 @@ void WorkspaceSidebarView::SyncEntryView
+@@ -560,6 +752,7 @@ void WorkspaceSidebarView::SyncEntryView
      if (it == entry_views_.end()) {
        view = AddChildView(
            std::make_unique<WorkspaceEntryView>(this, profile_.get()));
@@ -1926,7 +1926,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
        entry_views_[entry.id] = view;
        structure_changed = true;
      } else {
-@@ -586,6 +779,12 @@ void WorkspaceSidebarView::SyncEntryView
+@@ -585,6 +778,12 @@ void WorkspaceSidebarView::SyncEntryView
    ordered_entries_ = std::move(ordered);
    favorite_count_ = favorites;
  
@@ -1939,7 +1939,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    SyncBindings();
  
    // A title or favicon write-back fires this method too; only a change in
-@@ -593,6 +792,8 @@ void WorkspaceSidebarView::SyncEntryView
+@@ -592,6 +791,8 @@ void WorkspaceSidebarView::SyncEntryView
    if (structure_changed) {
      PreferredSizeChanged();
      InvalidateLayout();
@@ -1948,7 +1948,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    }
  }
  
-@@ -635,13 +836,18 @@ void WorkspaceSidebarView::SyncBindings(
+@@ -634,13 +835,18 @@ void WorkspaceSidebarView::SyncBindings(
        }
        if (view->active()) {
          surfaced_changed |= surfaced_entry_ids_.insert(view->entry_id()).second;
@@ -1970,7 +1970,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    }
    if (surfaced_changed) {
      PreferredSizeChanged();
-@@ -674,7 +880,8 @@ int WorkspaceSidebarView::FavoritesPlace
+@@ -673,7 +879,8 @@ int WorkspaceSidebarView::FavoritesPlace
  
  WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::ComputeLayout(
      int width,
@@ -1980,7 +1980,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    SidebarLayout out;
    out.entry_bounds.resize(ordered_entries_.size());
    out.entry_visible.assign(ordered_entries_.size(), false);
-@@ -686,51 +893,67 @@ WorkspaceSidebarView::SidebarLayout Work
+@@ -685,51 +892,67 @@ WorkspaceSidebarView::SidebarLayout Work
        0,
        width - GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding));
    const int row_width = std::max(available_width, min_child_width);
@@ -2082,7 +2082,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    }
  
    y += FavoriteGridGap();
-@@ -741,17 +964,35 @@ WorkspaceSidebarView::SidebarLayout Work
+@@ -740,17 +963,35 @@ WorkspaceSidebarView::SidebarLayout Work
    // step from the header (Dia), each as tall as it asks to be (a row showing
    // its hint is two lines), and laid out only while they are visible.
    const int child_width = std::max(0, row_width - kFolderChildIndent);
@@ -2118,7 +2118,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    }
  
    out.height = y;
-@@ -775,6 +1016,26 @@ gfx::Rect LerpRect(const gfx::Rect& from
+@@ -774,6 +1015,26 @@ gfx::Rect LerpRect(const gfx::Rect& from
  WorkspaceSidebarView::SidebarLayout WorkspaceSidebarView::CurrentLayout(
      int width) const {
    SidebarLayout target = ComputeLayout(width, space_collapsed_);
@@ -2145,7 +2145,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    if (!folder_animation_.is_animating() || !folder_prev_layout_valid_ ||
        folder_prev_layout_.entry_bounds.size() != target.entry_bounds.size()) {
      // The size guard is for an entry arriving or leaving mid-tween: the two
-@@ -819,7 +1080,14 @@ gfx::Size WorkspaceSidebarView::Calculat
+@@ -818,7 +1079,14 @@ gfx::Size WorkspaceSidebarView::Calculat
    const int width = available_size.width().is_bounded()
                          ? available_size.width().value()
                          : GetLayoutConstant(LayoutConstant::kVerticalTabMinWidth);
@@ -2161,7 +2161,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  }
  
  gfx::Size WorkspaceSidebarView::GetMinimumSize() const {
-@@ -844,6 +1112,9 @@ gfx::Size WorkspaceSidebarView::GetMinim
+@@ -843,6 +1111,9 @@ gfx::Size WorkspaceSidebarView::GetMinim
  }
  
  void WorkspaceSidebarView::Layout(PassKey) {
@@ -2171,7 +2171,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
    const SidebarLayout layout = CurrentLayout(width());
  
    // helium-fork M3.10-r2: this view's own bounds can trail the layout it is
-@@ -880,12 +1151,21 @@ void WorkspaceSidebarView::Layout(PassKe
+@@ -879,12 +1150,21 @@ void WorkspaceSidebarView::Layout(PassKe
                               (bounds_trail_layout && view->layer());
      view->SetFolderMotion(visible && needs_layer,
                            visible ? layout.entry_fade[i] : 1.0f);
@@ -2194,7 +2194,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
  }
  
  void WorkspaceSidebarView::SetCardShadowFrame(
-@@ -1016,5 +1296,811 @@ bool WorkspaceSidebarView::CanEntryBecom
+@@ -1015,5 +1295,811 @@ bool WorkspaceSidebarView::CanEntryBecom
               helium_workspace::WorkspaceService::kMaxFavorites;
  }
  
@@ -3086,7 +3086,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
    // views::AnimationDelegateViews:
    void AnimationProgressed(const gfx::Animation* animation) override;
-@@ -91,6 +124,86 @@ class WorkspaceSidebarView : public view
+@@ -90,6 +123,86 @@ class WorkspaceSidebarView : public view
    // only aims it, because it knows the rows and the scroll offset.
    void SetCardShadowFrame(HeliumCardShadowView* card_shadow);
  
@@ -3173,7 +3173,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
    // WorkspaceEntryView::Delegate:
    void OnEntryActivated(const std::string& entry_id) override;
    void OnEntryToggleFavorite(const std::string& entry_id) override;
-@@ -98,6 +211,7 @@ class WorkspaceSidebarView : public view
+@@ -97,6 +210,7 @@ class WorkspaceSidebarView : public view
    void OnEntryCloseRequested(const std::string& entry_id) override;
    void OnEntryResetRequested(const std::string& entry_id) override;
    bool CanEntryBecomeFavorite(const std::string& entry_id) const override;
@@ -3181,7 +3181,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
  
   private:
    // Geometry of one layout pass, shared by Layout() and the preferred-size
-@@ -111,6 +225,9 @@ class WorkspaceSidebarView : public view
+@@ -110,6 +224,9 @@ class WorkspaceSidebarView : public view
      gfx::Rect placeholder_bounds;
      gfx::Rect header_bounds;
      bool placeholder_visible = false;
@@ -3191,7 +3191,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
    };
  
    // Resolves the browser this sidebar belongs to; only valid once the widget
-@@ -130,7 +247,14 @@ class WorkspaceSidebarView : public view
+@@ -129,7 +246,14 @@ class WorkspaceSidebarView : public view
  
    // The layout of one settled state. |as_collapsed| is asked for rather than
    // read off space_collapsed_ so the folder animation can have both.
@@ -3207,7 +3207,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
    // What to actually lay out right now: the settled target, or -- while the
    // folder animates -- that blended with the state it is leaving.
    SidebarLayout CurrentLayout(int width) const;
-@@ -141,6 +265,137 @@ class WorkspaceSidebarView : public view
+@@ -140,6 +264,137 @@ class WorkspaceSidebarView : public view
    // Pushes |tab|'s title and at-home state onto |view|.
    void PushLiveState(WorkspaceEntryView* view, tabs::TabInterface* tab);
  
@@ -3345,7 +3345,7 @@ Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
    // Re-aims the card shadow at the active pinned row (or hides it). Called
    // wherever the answer can change: bindings sync, layout, scroll.
    void UpdateCardShadow();
-@@ -188,6 +443,38 @@ class WorkspaceSidebarView : public view
+@@ -187,6 +442,38 @@ class WorkspaceSidebarView : public view
    // SetCardShadowFrame).
    raw_ptr<HeliumCardShadowView> card_shadow_ = nullptr;
    base::CallbackListSubscription card_shadow_scroll_subscription_;
@@ -3388,18 +3388,10 @@ Index: src/ui/views/cocoa/drag_drop_client_mac.mm
 ===================================================================
 --- src.orig/ui/views/cocoa/drag_drop_client_mac.mm
 +++ src/ui/views/cocoa/drag_drop_client_mac.mm
-@@ -97,9 +97,19 @@ void DragDropClientMac::StartDragAndDrop
-     }
+@@ -114,6 +114,15 @@ void DragDropClientMac::StartDragAndDrop
+     return;
    }
  
--  [bridge_->ns_view() beginDraggingSessionWithItems:drag_items
--                                              event:event
--                                             source:bridge_->ns_view()];
-+  NSDraggingSession* session =
-+      [bridge_->ns_view() beginDraggingSessionWithItems:drag_items
-+                                                 event:event
-+                                                source:bridge_->ns_view()];
-+
 +  // helium-fork M3.11: a caller that hands over a 1x1 image is drawing the
 +  // dragged thing itself (the workspace sidebar paints a card that morphs,
 +  // which a static bitmap cannot do). Sliding that invisible pixel back to
@@ -3408,6 +3400,7 @@ Index: src/ui/views/cocoa/drag_drop_client_mac.mm
 +  if (image.size.width <= 1 && image.size.height <= 1) {
 +    session.animatesToStartingPositionsOnCancelOrFail = NO;
 +  }
- 
++
    // Since Drag and drop is asynchronous on the Mac, spin a nested run loop for
    // consistency with other platforms.
+   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
