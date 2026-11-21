@@ -1,0 +1,749 @@
+Index: src/chrome/browser/ui/helium_workspace/workspace_close_landing.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_close_landing.h
++++ src/chrome/browser/ui/helium_workspace/workspace_close_landing.h
+@@ -43,6 +43,67 @@
+   return std::nullopt;
+ }
+ 
++// helium-fork sync156 feedback (2026-11-08; unit-tested since the 2026-11-20
++// review): which tab a space shows when it comes up --
++// WorkspaceTabController::FindTabToShowForSpace, the tab ActivateSpaceTab
++// switches to and the one the space carousel's pictures paint as selected.
++// One entry per tab, in strip order.
++struct SpaceLandingTab {
++  // Of the space coming up: not a favorite's (global), not another space's,
++  // not untagged.
++  bool of_space = false;
++  // Asleep (discarded, or restored and never loaded): no path wakes a row on
++  // the user's behalf (3a-r1 / 3a-r8).
++  bool asleep = false;
++  // A blank new tab page (only read for a sleeping tab).
++  bool blank = false;
++};
++
++enum class SpaceLandingPick {
++  kActive,  // the window's active tab: a favorite's, it belongs to every space
++  kTab,     // the strip index in SpaceLanding::index
++  kNone,    // nothing to show: the caller makes a blank page
++};
++
++struct SpaceLanding {
++  SpaceLandingPick pick = SpaceLandingPick::kNone;
++  int index = -1;
++};
++
++// |active_is_global|: the window's active tab is a favorite's -- it simply
++// stays (Arc g8c). |remembered|: the strip index of the tab the space was on
++// when the window last left it, when that tab is still this window's, of the
++// space and in the strip. Otherwise the space's first awake tab in strip
++// order; else its first sleeping blank page (reused rather than a new one);
++// else none.
++inline SpaceLanding PickSpaceLanding(bool active_is_global,
++                                     std::optional<int> remembered,
++                                     const std::vector<SpaceLandingTab>& tabs) {
++  if (active_is_global) {
++    return {SpaceLandingPick::kActive, -1};
++  }
++  if (remembered) {
++    return {SpaceLandingPick::kTab, *remembered};
++  }
++  std::optional<int> sleeping_blank;
++  for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
++    if (!tabs[i].of_space) {
++      continue;
++    }
++    if (tabs[i].asleep) {
++      if (!sleeping_blank && tabs[i].blank) {
++        sleeping_blank = i;
++      }
++      continue;
++    }
++    return {SpaceLandingPick::kTab, i};
++  }
++  if (sleeping_blank) {
++    return {SpaceLandingPick::kTab, *sleeping_blank};
++  }
++  return {SpaceLandingPick::kNone, -1};
++}
++
+ }  // namespace helium_workspace
+ 
+ #endif  // CHROME_BROWSER_UI_HELIUM_WORKSPACE_WORKSPACE_CLOSE_LANDING_H_
+Index: src/chrome/browser/ui/helium_workspace/workspace_close_landing_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_close_landing_unittest.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_close_landing_unittest.cc
+@@ -32,5 +32,58 @@
+   EXPECT_EQ(TodayRowToCloseBeforeBlank({}), std::nullopt);
+ }
+ 
++// sync156 feedback (2026-11-08): the tab a space comes up on
++// (FindTabToShowForSpace -- ActivateSpaceTab and the carousel's pictures).
++constexpr SpaceLandingTab kOther{.of_space = false};
++constexpr SpaceLandingTab kAwake{.of_space = true};
++constexpr SpaceLandingTab kAsleepPage{.of_space = true, .asleep = true};
++constexpr SpaceLandingTab kAsleepBlank{
++    .of_space = true, .asleep = true, .blank = true};
++
++bool Is(const SpaceLanding& landing, SpaceLandingPick pick, int index = -1) {
++  return landing.pick == pick && landing.index == index;
++}
++
++TEST(WorkspaceSpaceLandingTest, AFavoritesTabStaysWhateverTheSpaceHas) {
++  EXPECT_TRUE(Is(PickSpaceLanding(true, 2, {kAwake, kAwake, kAwake}),
++                 SpaceLandingPick::kActive));
++  EXPECT_TRUE(Is(PickSpaceLanding(true, std::nullopt, {}),
++                 SpaceLandingPick::kActive));
++}
++
++TEST(WorkspaceSpaceLandingTest, TheTabTheSpaceWasOnComesBack) {
++  // Even past an awake tab earlier in the strip, and even asleep: it is the
++  // caller that checked it is still this window's, of the space, in the strip.
++  EXPECT_TRUE(Is(PickSpaceLanding(false, 2, {kAwake, kOther, kAsleepPage}),
++                 SpaceLandingPick::kTab, 2));
++}
++
++TEST(WorkspaceSpaceLandingTest, ElseItsFirstAwakeTabNotASleepingOne) {
++  EXPECT_TRUE(Is(PickSpaceLanding(false, std::nullopt,
++                                  {kOther, kAsleepPage, kAsleepBlank, kAwake,
++                                   kAwake}),
++                 SpaceLandingPick::kTab, 3));
++  // Another space's awake tab is not this one's.
++  EXPECT_TRUE(Is(PickSpaceLanding(false, std::nullopt, {kOther, kAwake}),
++                 SpaceLandingPick::kTab, 1));
++}
++
++TEST(WorkspaceSpaceLandingTest, ElseItsFirstSleepingBlankPage) {
++  EXPECT_TRUE(Is(PickSpaceLanding(false, std::nullopt,
++                                  {kAsleepPage, kAsleepBlank, kOther,
++                                   kAsleepBlank}),
++                 SpaceLandingPick::kTab, 1));
++}
++
++TEST(WorkspaceSpaceLandingTest, ElseNothing) {
++  EXPECT_TRUE(Is(PickSpaceLanding(false, std::nullopt, {}),
++                 SpaceLandingPick::kNone));
++  EXPECT_TRUE(Is(PickSpaceLanding(false, std::nullopt, {kOther, kOther}),
++                 SpaceLandingPick::kNone));
++  // A sleeping page that is not blank is not woken up for it.
++  EXPECT_TRUE(Is(PickSpaceLanding(false, std::nullopt, {kAsleepPage}),
++                 SpaceLandingPick::kNone));
++}
++
+ }  // namespace
+ }  // namespace helium_workspace
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -30,6 +30,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_archive_policy.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_blank_tab.h"
++#include "chrome/browser/ui/helium_workspace/workspace_close_landing.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_prefs.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_space.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_restore_data.h"
+@@ -985,72 +986,115 @@
+   }
+ }
+ 
+-void WorkspaceTabController::ActivateSpaceTab(const std::string& space_id) {
++tabs::TabInterface* WorkspaceTabController::shown_active_tab() const {
+   TabStripModel* const model = browser_window_->GetTabStripModel();
+   if (!model || model->empty()) {
+-    return;
++    return nullptr;
+   }
+-  // A favorite's tab belongs to every space, so it simply stays active
+-  // (Arc g8c: letterboxd kept the focus across a switch).
+-  if (const tabs::TabInterface* active = model->GetActiveTab();
+-      active && service_->GetSpaceForTab(active->GetHandle()) == kGlobalSpaceId) {
+-    return;
++  if (view_space_override_.empty()) {
++    return model->GetActiveTab();
+   }
++  return FindTabToShowForSpace(view_space_override_);
++}
+ 
+-  const auto activate = [&](tabs::TabInterface* tab) {
+-    const int index = model->GetIndexOfTab(tab);
+-    if (index < 0) {
+-      return false;
+-    }
+-    model->ActivateTabAt(
+-        index, TabStripUserGestureDetails(
+-                   TabStripUserGestureDetails::GestureType::kOther));
+-    last_active_by_space_[space_id] = tab->GetHandle();
+-    return true;
+-  };
+-
+-  // 1. What the space was looking at when the window last left it.
++tabs::TabInterface* WorkspaceTabController::FindTabToShowForSpace(
++    const std::string& space_id) const {
++  TabStripModel* const model = browser_window_->GetTabStripModel();
++  if (!model || model->empty() || !service_) {
++    return nullptr;
++  }
++  // The order is PickSpaceLanding's (workspace_close_landing.h, unit-tested):
++  // a favorite's tab belongs to every space, so it simply stays active (Arc
++  // g8c: letterboxd kept the focus across a switch); 1. what the space was
++  // looking at when the window last left it; 2. its first tab in strip order
++  // -- a tab of its own, not a global or an untagged one -- that is not
++  // asleep (3a-r1 / 3a-r8: no path wakes a row on the user's behalf; the
++  // reasons are on ActivateSpaceTab); 3. a sleeping *blank* page of the
++  // space, reused.
++  tabs::TabInterface* const active = model->GetActiveTab();
++  const bool active_is_global =
++      active &&
++      service_->GetSpaceForTab(active->GetHandle()) == kGlobalSpaceId;
++  std::optional<int> remembered;
+   if (const auto it = last_active_by_space_.find(space_id);
+-      it != last_active_by_space_.end()) {
++      !active_is_global && it != last_active_by_space_.end()) {
+     tabs::TabInterface* const tab = it->second.Get();
+     if (tab && tab->GetBrowserWindowInterface() == browser_window_ &&
+-        service_->GetSpaceForTab(it->second) == space_id && activate(tab)) {
+-      return;
++        service_->GetSpaceForTab(it->second) == space_id) {
++      if (const int index = model->GetIndexOfTab(tab); index >= 0) {
++        remembered = index;
++      }
+     }
+   }
+-  // 2. Its first tab in strip order -- a tab of its own, not a global or an
+-  //    untagged one.
+-  //    3a-r1 (user 2026-09-18 #4; 2a-r5: a restart brings every Today row
+-  //    back asleep): and not a sleeping one. After a relaunch step 1 knows
+-  //    nothing, so this step used to pick -- and thereby load -- whichever
+-  //    restored row came first ("切换 Space 的时候，它会跳到我上一次打开的那个标签页").
+-  //    No path wakes a row on the user's behalf; a space with nothing loaded
+-  //    gets a blank page (step 3). One exception: a sleeping *blank* page is
+-  //    this space's own landing page from before the restart -- reusing it
+-  //    costs nothing and keeps blank rows from piling up, one per restart.
+-  //    3a-r8 (user 2026-09-20 #6, startup = "continue where you left off":
+-  //    "我 command + W 把这个标签关闭之后，再切到其他 space，app打开了其他 space
+-  //    之前打开的标签。我关了之后，它又打开了一个标签 ... 只要App重启或者App窗口
+-  //    关掉，只对用户设置中的启动页那一项负责，其他的所有标签页的状态都恢复默认"):
+-  //    that setting used to be a second exception here -- read as "the user
+-  //    wants the old pages back" -- and woke this space's first row on every
+-  //    visit. It answers for the one page the window comes up on
+-  //    (SessionRestore loads the session's selected tab) and nothing else.
+-  tabs::TabInterface* sleeping_blank = nullptr;
+-  for (int i = 0; i < model->count(); ++i) {
+-    tabs::TabInterface* const tab = model->GetTabAtIndex(i);
+-    if (!tab || service_->GetSpaceForTab(tab->GetHandle()) != space_id) {
+-      continue;
+-    }
+-    content::WebContents* const contents = tab->GetContents();
+-    if (helium_workspace::IsSleepingTab(contents)) {
+-      if (!sleeping_blank &&
+-          helium_workspace::IsBlankNewTabContents(contents)) {
+-        sleeping_blank = tab;
++  std::vector<helium_workspace::SpaceLandingTab> tabs;
++  if (!active_is_global && !remembered) {
++    tabs.reserve(model->count());
++    for (int i = 0; i < model->count(); ++i) {
++      tabs::TabInterface* const tab = model->GetTabAtIndex(i);
++      helium_workspace::SpaceLandingTab entry;
++      entry.of_space =
++          tab && service_->GetSpaceForTab(tab->GetHandle()) == space_id;
++      if (entry.of_space) {
++        content::WebContents* const contents = tab->GetContents();
++        entry.asleep = helium_workspace::IsSleepingTab(contents);
++        entry.blank =
++            entry.asleep && helium_workspace::IsBlankNewTabContents(contents);
+       }
+-      continue;
++      tabs.push_back(entry);
+     }
+-    if (activate(tab)) {
++  }
++  const helium_workspace::SpaceLanding landing =
++      helium_workspace::PickSpaceLanding(active_is_global, remembered, tabs);
++  switch (landing.pick) {
++    case helium_workspace::SpaceLandingPick::kActive:
++      return active;
++    case helium_workspace::SpaceLandingPick::kTab:
++      return model->GetTabAtIndex(landing.index);
++    case helium_workspace::SpaceLandingPick::kNone:
++      return nullptr;
++  }
++  return nullptr;
++}
++
++void WorkspaceTabController::ActivateSpaceTab(const std::string& space_id) {
++  TabStripModel* const model = browser_window_->GetTabStripModel();
++  if (!model || model->empty()) {
++    return;
++  }
++  // The choice is FindTabToShowForSpace()'s (sync156 feedback: the carousel's
++  // pictures paint the same tab's row as selected). Its order, and why:
++  //  - A favorite's tab belongs to every space, so it simply stays active
++  //    (Arc g8c: letterboxd kept the focus across a switch).
++  //  1. What the space was looking at when the window last left it.
++  //  2. Its first tab in strip order -- a tab of its own, not a global or an
++  //     untagged one.
++  //     3a-r1 (user 2026-09-18 #4; 2a-r5: a restart brings every Today row
++  //     back asleep): and not a sleeping one. After a relaunch step 1 knows
++  //     nothing, so this step used to pick -- and thereby load -- whichever
++  //     restored row came first ("切换 Space 的时候，它会跳到我上一次打开的那个标签页").
++  //     No path wakes a row on the user's behalf; a space with nothing loaded
++  //     gets a blank page (step 3). One exception: a sleeping *blank* page is
++  //     this space's own landing page from before the restart -- reusing it
++  //     costs nothing and keeps blank rows from piling up, one per restart.
++  //     3a-r8 (user 2026-09-20 #6, startup = "continue where you left off":
++  //     "我 command + W 把这个标签关闭之后，再切到其他 space，app打开了其他 space
++  //     之前打开的标签。我关了之后，它又打开了一个标签 ... 只要App重启或者App窗口
++  //     关掉，只对用户设置中的启动页那一项负责，其他的所有标签页的状态都恢复默认"):
++  //     that setting used to be a second exception here -- read as "the user
++  //     wants the old pages back" -- and woke this space's first row on every
++  //     visit. It answers for the one page the window comes up on
++  //     (SessionRestore loads the session's selected tab) and nothing else.
++  if (tabs::TabInterface* const tab = FindTabToShowForSpace(space_id)) {
++    if (service_ &&
++        service_->GetSpaceForTab(tab->GetHandle()) == kGlobalSpaceId) {
++      return;  // the favorite stays active
++    }
++    const int index = model->GetIndexOfTab(tab);
++    if (index >= 0) {
++      model->ActivateTabAt(
++          index, TabStripUserGestureDetails(
++                     TabStripUserGestureDetails::GestureType::kOther));
++      last_active_by_space_[space_id] = tab->GetHandle();
+       return;
+     }
+   }
+@@ -1062,9 +1106,6 @@
+   //    function: the user's "除了 Favorite 区域".) Tagged to the space through
+   //    the kInserted handler (the same call DeleteFolder uses to keep a
+   //    window from emptying).
+-  if (sleeping_blank && activate(sleeping_blank)) {
+-    return;
+-  }
+   pending_space_tag_ = space_id;
+   chrome::AddTabAt(browser_window_, GURL(), /*index=*/-1, /*foreground=*/true);
+   pending_space_tag_.clear();
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -247,6 +247,18 @@
+   void SetViewSpaceOverride(const std::string& space_id) {
+     view_space_override_ = space_id;
+   }
++  // sync156 feedback (user 2026-11-08, leaving Arc g38 / g39: 「胶囊在原本的
++  // Space 中是什么状态，在切换的过程中也保持什么状态」): the tab whose row wears
++  // the white card in the list shown_space_id() names -- the model's active
++  // tab, or, while the carousel photographs another space, that space's
++  // FindTabToShowForSpace(). Same two readers as shown_space_id().
++  tabs::TabInterface* shown_active_tab() const;
++  // The tab ActivateSpaceTab(|space_id|) would activate, without activating
++  // anything: a favorite that is active stays (it is every space's); else
++  // the space's last-active tab; else its first loaded tab in strip order;
++  // else its sleeping blank page; else null -- the space would get a new
++  // blank page, so no row of it can wear the card yet.
++  tabs::TabInterface* FindTabToShowForSpace(const std::string& space_id) const;
+ 
+   // Makes |space_id| current: the views re-filter, then the space's
+   // last-active tab is activated -- or its first tab in strip order, or a
+Index: src/chrome/browser/ui/views/frame/browser_frame_view_mac.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_frame_view_mac.h
++++ src/chrome/browser/ui/views/frame/browser_frame_view_mac.h
+@@ -100,6 +100,12 @@
+   // otherwise. Only when it changes.
+   void UpdateArcTitlebarWidgetInset();
+   float arc_titlebar_widget_inset_ = -1;
++  // helium-fork sync156 feedback (2026-11-08): the opacity the Arc shell last
++  // gave the traffic lights (SetCaptionButtonsOpacity). In full screen
++  // Helium's own controls stand in for AppKit's lights and take this one --
++  // hidden sidebar collapsed = 0, the reveal fading them in -- not the top
++  // chrome's reveal ratio.
++  float arc_caption_buttons_opacity_ = 1.f;
+ 
+   // Toggle the visibility of the web_app_frame_toolbar_view() for PWAs with
+   // window controls overlay display override when entering full screen or when
+Index: src/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
++++ src/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+@@ -365,6 +365,9 @@
+   if (!window) {
+     return;
+   }
++  // helium-fork: what UpdateHeliumFullscreenWindowControls() gives Helium's
++  // full-screen lights in the Arc shell (sync156 feedback, 2026-11-08).
++  arc_caption_buttons_opacity_ = opacity;
+   for (NSWindowButton button :
+        {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
+     NSButton* button_view = [window standardWindowButton:button];
+@@ -524,13 +527,14 @@
+     result.bounds.set_y((arc_caption_band - result.bounds.height()) / 2.f);
+     // ⛔ r1025 (the user, 2026-10-14, mock-up B′): "红绿灯可以往右移一点，尽量
+     // 把上左边距对齐" -- as far in from the window's left as from its top.
+-    // AppKit is told the same (UpdateArcTitlebarWidgetInset). Not in
+-    // fullscreen: the lights there are Helium's own controls hosted in the
+-    // toolbar row at this rect (UpdateHeliumFullscreenWindowControls), and
+-    // nothing asked them to move (reviewer r1025 diff r0).
+-    if (!GetBrowserView()->IsFullscreen()) {
+-      result.bounds.set_x(result.bounds.y());
+-    }
++    // AppKit is told the same (UpdateArcTitlebarWidgetInset). ⛔ In full
++    // screen too (sync156 feedback, the user 2026-11-08: "当我在全屏之间切换的
++    // 时候，侧边栏顶部的红绿灯和隐藏侧边栏的 icon 图标会跳"): Helium's own
++    // full-screen lights stand at this rect as well
++    // (UpdateHeliumFullscreenWindowControls), and the collapse button makes
++    // way by it -- r1025 kept full screen at the old x, so both jumped 8pt
++    // on every switch, the button a layout later than the lights.
++    result.bounds.set_x(result.bounds.y());
+   }
+ 
+   // Mirror for when caption buttons are on the "wrong" side.
+@@ -583,8 +587,9 @@
+   // circle starts on macOS 26+, a point short of that before
+   // (browser_native_widget_window_mac.mm).
+   float inset = -1;
+-  if (GetBrowserView()->GetArcShellCaptionBandHeight() > 0 &&
+-      !GetBrowserView()->IsFullscreen()) {
++  // Kept in full screen too (sync156 feedback): AppKit's lights come back on
++  // the way out already at the inset Helium's full-screen ones stood at.
++  if (GetBrowserView()->GetArcShellCaptionBandHeight() > 0) {
+     inset = GetCaptionButtonBounds().bounds.y();
+     if (@available(macOS 26, *)) {
+     } else {
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -1984,10 +1984,58 @@
+   }
+   if (UnpinnedTabContainerView* const today = TodayDropContainer();
+       today && !today->IsDragging()) {
++    // sync156 feedback (user 2026-11-08, leaving Arc g38 / g39): a picture of
++    // another space shows that space's selected row with its card, as it
++    // looks when that space is current (the pinned rows read the same tab in
++    // WorkspaceSidebarView::SyncBindings); back on the live space every row
++    // reads the model again.
++    const helium_workspace::WorkspaceTabController* const controller =
++        CarouselController();
++    if (controller &&
++        controller->shown_space_id() != controller->current_space_id()) {
++      today->BeginCaptureActiveTab(controller->shown_active_tab());
++    } else {
++      today->EndCaptureActiveTab();
++    }
+     today->SnapLayoutToTarget();
+   }
+ }
+ 
++std::vector<std::unique_ptr<HeliumViewSnapshotLayer>>
++VerticalTabStripRegionView::CarouselCaptureRowShadows() {
++  std::vector<std::unique_ptr<HeliumViewSnapshotLayer>> pictures;
++  if (!row_shadow_host_ || !row_shadow_host_->layer()) {
++    return pictures;
++  }
++  // The strip has just been laid out for the photographed space
++  // (CarouselFitStrip): the pinned shadow followed in the sidebar's layout,
++  // Today's is re-derived here. Both stand at their rows' landed places --
++  // the live list's offset is the region's per-frame transform, never their
++  // bounds -- so a picture of either rides its slot's transform like the
++  // list's own pictures (SpaceCarousel::Apply), clipped by the host as the
++  // live shadows are.
++  if (UnpinnedTabContainerView* const today = TodayDropContainer()) {
++    today->UpdateCardShadowNow();
++  }
++  const float scale = row_shadow_host_->layer()->device_scale_factor();
++  for (HeliumCardShadowView* const shadow :
++       {pinned_row_shadow_.get(), active_row_shadow_.get()}) {
++    if (!shadow || !shadow->GetVisible() || shadow->bounds().IsEmpty()) {
++      continue;
++    }
++    std::unique_ptr<HeliumViewSnapshotLayer> picture =
++        HeliumViewSnapshotLayer::Capture(shadow, shadow->GetLocalBounds(),
++                                         scale);
++    if (!picture) {
++      continue;
++    }
++    picture->layer()->SetBounds(shadow->bounds());
++    row_shadow_host_->layer()->Add(picture->layer());
++    pictures.push_back(std::move(picture));
++  }
++  return pictures;
++}
++
+ void VerticalTabStripRegionView::CarouselFitStrip() {
+   TabStripView* const strip = tab_strip_view();
+   if (!strip) {
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -472,9 +472,11 @@
+   // M6-r4: the two row shadows' host. Its layer masks to the strip's
+   // x-range widened by the shadow's own overhang and the region's full
+   // height (Layout), so a shadow riding the space carousel is clipped where
+-  // the list is, while at rest nothing is cut. (M6 轮4: the leaving list's
+-  // shadow snapshot is gone -- the lists the carousel shows as pictures
+-  // have no active row, so no card and no shadow; Arc g38.)
++  // the list is, while at rest nothing is cut. (M6 轮4 removed the leaving
++  // list's shadow snapshot -- Arc g38's pictures have no active row; ⛔
++  // sync156 feedback, the user 2026-11-08, brought it back for every
++  // picture: each list keeps its own selected row's card and shadow,
++  // CarouselCaptureRowShadows.)
+   raw_ptr<views::View> row_shadow_host_ = nullptr;
+   // M6 轮4: the space switch's motion (decisions 「M6 轮4」④).
+   std::unique_ptr<SpaceCarousel> carousel_;
+@@ -568,6 +570,8 @@
+   std::vector<std::string> CarouselSpaceOrder() override;
+   void CarouselResyncViews() override;
+   void CarouselFitStrip() override;
++  std::vector<std::unique_ptr<HeliumViewSnapshotLayer>>
++  CarouselCaptureRowShadows() override;
+   void OnCarouselFrame(float live_dx) override;
+   void OnCarouselBlend(const std::map<std::string, float>& greys) override;
+   void OnCarouselEnded() override;
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.cc
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+@@ -150,9 +150,12 @@
+       wanted.emplace_back(slot, std::move(space));
+     }
+   }
+-  // Photographed now: the new space's tab is already active, so none of
+-  // these lists has an active row -- no white card, no card shadow (Arc g38
+-  // f_00203) -- and the old space's untouched blank page is not yet closed.
++  // Photographed now -- the old space's untouched blank page is not yet
++  // closed. ⛔ sync156 feedback (the user 2026-11-08: 「胶囊在原本的 Space 中是
++  // 什么状态，在切换的过程中也保持什么状态」): each list wears its own selected
++  // row's card and shadow -- for the space being left, the tab it was on
++  // (WorkspaceTabController::FindTabToShowForSpace). Arc g38 f_00203 drops
++  // the old card on the first frame; we no longer do.
+   for (auto& [slot, space] : wanted) {
+     Slot picture;
+     picture.space_id = space;
+@@ -317,7 +320,15 @@
+   delegate_->CarouselFitStrip();
+   picture_bottom_ = std::max(picture_bottom_, strip->height());
+   ApplyScroll(space_id);
+-  return strip->CaptureListSnapshot();
++  std::vector<std::unique_ptr<HeliumViewSnapshotLayer>> layers =
++      strip->CaptureListSnapshot();
++  // sync156 feedback: the photographed space's selected row wears its card
++  // (the views read WorkspaceTabController::shown_active_tab) -- and casts
++  // its shadow, photographed too.
++  for (auto& shadow : delegate_->CarouselCaptureRowShadows()) {
++    layers.push_back(std::move(shadow));
++  }
++  return layers;
+ }
+ 
+ void SpaceCarousel::RestoreLiveViews(const std::string& live_space) {
+@@ -573,8 +584,10 @@
+     if (space.empty()) {
+       continue;
+     }
+-    // Nothing is committed while the fingers are on, so the neighbour has no
+-    // active row either: no white card (Arc g39, the arriving list).
++    // Nothing is committed while the fingers are on, yet the neighbour shows
++    // its own selected row with its card and shadow, the one it will land on
++    // (⛔ sync156 feedback, the user 2026-11-08 -- Arc g39's arriving list
++    // has none).
+     Slot picture;
+     picture.space_id = std::move(space);
+     picture.layers = CaptureSpace(picture.space_id);
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.h
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.h
+@@ -54,6 +54,13 @@
+     // space the views show now -- it is as tall as its contents -- and lays
+     // it out.
+     virtual void CarouselFitStrip() = 0;
++    // sync156 feedback (user 2026-11-08): pictures of the row shadows the
++    // space the views show now casts under its selected row (none when no
++    // row of it is selected), placed where the shadows stand -- outside the
++    // strip, which would clip their overhang. They ride the slot with the
++    // list's own pictures.
++    virtual std::vector<std::unique_ptr<HeliumViewSnapshotLayer>>
++    CarouselCaptureRowShadows() = 0;
+     // Every frame: the live list's offset (the row shadows ride it).
+     virtual void OnCarouselFrame(float live_dx) = 0;
+     // The bottom bar's cross-fade: how grey each icon the motion involves
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -1159,6 +1159,29 @@
+   InvalidateLayout();
+ }
+ 
++void TabView::SetActiveForCapture(bool active) {
++  if (!collection_node_ || (active_ == active && !active_for_capture_)) {
++    return;
++  }
++  active_for_capture_ = true;
++  active_ = active;
++  // The same three steps OnTabStateChanged takes for the active bit
++  // (reviewer --final 2026-11-08: the z-order too).
++  UpdateColors();
++  UpdateZOrder();
++  SchedulePaint();
++}
++
++void TabView::EndActiveForCapture() {
++  if (!active_for_capture_) {
++    return;
++  }
++  active_for_capture_ = false;
++  if (collection_node_) {
++    OnTabStateChanged();
++  }
++}
++
+ void TabView::UpdateZOrder() {
+   using ZOrderLevel = TabCollectionZOrderManager::ZOrderLevel;
+   ZOrderLevel target_z = ZOrderLevel::kDefault;
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_view.h
+@@ -113,6 +113,15 @@
+   float radial_highlight_opacity() { return radial_highlight_opacity_; }
+   const tabs::TabData& data() const { return tab_data_; }
+   bool IsActive() const { return active_; }
++  // helium-fork sync156 feedback (user 2026-11-08, leaving Arc g38 / g39):
++  // the space carousel photographs another space's list with that space's
++  // selected row wearing the card, though the model has its active tab
++  // elsewhere. Sets the active bit for the picture -- white card, title
++  // colour, z-order, as OnTabStateChanged would -- until
++  // EndActiveForCapture() reads the model again. Only the carousel's
++  // capture calls these, inside one task.
++  void SetActiveForCapture(bool active);
++  void EndActiveForCapture();
+   bool IsClosing() const { return !collection_node_; }
+   bool split() const { return split_; }
+   // helium-fork M3.10: the hovered bit itself (UpdateHovered()), which the
+@@ -253,6 +262,8 @@
+ 
+   tabs::TabData tab_data_;
+   bool active_ = false;
++  // SetActiveForCapture() set active_ against the model.
++  bool active_for_capture_ = false;
+   bool selected_ = false;
+   bool hovered_ = false;
+   bool split_ = false;
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+@@ -846,6 +846,55 @@
+   }
+ }
+ 
++namespace {
++
++// Every TabView under |root| (rows nest in groups and splits).
++void ForEachTabView(views::View* root,
++                    const base::RepeatingCallback<void(TabView*)>& visit) {
++  for (views::View* child : root->children()) {
++    if (auto* const tab_view = views::AsViewClass<TabView>(child)) {
++      visit.Run(tab_view);
++    }
++    ForEachTabView(child, visit);
++  }
++}
++
++}  // namespace
++
++void UnpinnedTabContainerView::BeginCaptureActiveTab(
++    const tabs::TabInterface* tab) {
++  if (!capturing_active_tab_) {
++    capturing_active_tab_ = true;
++    shadow_target_before_capture_.SetView(
++        card_shadow_tracker_ ? card_shadow_tracker_->target() : nullptr);
++  }
++  views::View* target = nullptr;
++  ForEachTabView(this, base::BindRepeating(
++                           [](const tabs::TabInterface* tab,
++                              views::View** target, TabView* view) {
++                             const bool selected =
++                                 tab && view->tab_interface() == tab;
++                             view->SetActiveForCapture(selected);
++                             if (selected) {
++                               *target = view;
++                             }
++                           },
++                           tab, &target));
++  SetCardShadowTarget(target);
++}
++
++void UnpinnedTabContainerView::EndCaptureActiveTab() {
++  if (!capturing_active_tab_) {
++    return;
++  }
++  capturing_active_tab_ = false;
++  ForEachTabView(this, base::BindRepeating([](TabView* view) {
++                   view->EndActiveForCapture();
++                 }));
++  SetCardShadowTarget(shadow_target_before_capture_.view());
++  shadow_target_before_capture_.SetView(nullptr);
++}
++
+ void UnpinnedTabContainerView::SetArcRowInsets(int left, int right) {
+   if (left == arc_row_left_ && right == arc_row_right_) {
+     return;
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+@@ -210,6 +210,17 @@
+   // would clip the ring off edge rows. This container just aims it.
+   void SetCardShadowFrame(HeliumCardShadowView* card_shadow);
+ 
++  // helium-fork sync156 feedback (user 2026-11-08, leaving Arc g38 / g39):
++  // the space carousel photographs another space's list with that space's
++  // selected row wearing the card and its shadow. Begin: the row of |tab|
++  // (null: none of them) is the active one for the picture
++  // (TabView::SetActiveForCapture) and the card shadow is aimed at it;
++  // End: every row reads the model again and the shadow goes back where it
++  // was. UpdateCardShadowNow: re-derive the shadow after the capture's layout.
++  void BeginCaptureActiveTab(const tabs::TabInterface* tab);
++  void EndCaptureActiveTab();
++  void UpdateCardShadowNow() { UpdateCardShadow(); }
++
+   // helium-fork r1025: Today's rows' insets from this view's sides
+   // (TabStripView::SetArcRowInsets). Negative: the stock padding.
+   void SetArcRowInsets(int left, int right);
+@@ -339,6 +350,10 @@
+   std::optional<bool> saved_overflow_indicator_;
+   raw_ptr<HeliumCardShadowView> card_shadow_ = nullptr;
+   std::unique_ptr<CardShadowTracker> card_shadow_tracker_;
++  // Between BeginCaptureActiveTab and EndCaptureActiveTab: where the shadow
++  // was aimed before (the live active row), to aim it back.
++  bool capturing_active_tab_ = false;
++  views::ViewTracker shadow_target_before_capture_;
+   // helium-fork r5: watches WorkspaceService binding flips so the layout's
+   // IsWorkspaceEntryTab() filter is re-evaluated the moment a tab is claimed
+   // or released -- the view tree itself never changes on a bind.
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -1892,6 +1892,14 @@
+   tabs::TabInterface* active_tab =
+       (model && !model->empty()) ? model->GetTabAtIndex(model->active_index())
+                                  : nullptr;
++  // sync156 feedback (user 2026-11-08): while the carousel photographs
++  // another space, that space's own selected row wears the card -- the tab
++  // ActivateSpaceTab would land on (WorkspaceTabController::shown_active_tab;
++  // the model's active tab otherwise).
++  if (const auto* const controller =
++          helium_workspace::WorkspaceTabController::From(browser)) {
++    active_tab = controller->shown_active_tab();
++  }
+ 
+   for (size_t i = 0; i < ordered_entries_.size(); ++i) {
+     WorkspaceEntryView* const view = SiteRowAt(i);
