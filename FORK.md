@@ -30,16 +30,18 @@ Today section, real folders). Not affiliated with the upstream project.
   这个平台补丁排在我们的补丁段之后，会碰到我们改过的 Zen 判断和 BrowserView 成员区，另有一段是它自己加的
   代码、我们必须改在里面：
   第 19 个（`UpdateHeliumFullscreenWindowControls`：Arc 外壳里全屏的红绿灯替身用窗口态同一个 caption 矩形、
-  同一个透明度——sync156 反馈问题 1；整个函数是这个平台补丁加的，我们的改动只能住在它里面）、
+  同一个透明度——sync156 反馈问题 1；退出全屏 `restoreTitlebarButtons` 之后立刻重放外壳给的透明度——
+  全屏与横滑收尾第 1 条；整个函数是这个平台补丁加的，我们的改动只能住在它里面）、
   第 22 个（`browser_view.h` 成员区上下文）、第 23–25 个（`StartZenCollapseTimer` /
   `UpdateZenModeRevealFromCursor` / `UpdateZenModeReveal` 的暂停判断按我们的条件写）、
-  第 29 个（全屏过渡结束、解除暂停时，对隐藏侧栏补一次按光标判断）、
+  第 29 个（全屏过渡结束、解除暂停时，对隐藏侧栏补一次按光标判断，再把外壳给红绿灯的透明度重放一次
+  ——全屏与横滑收尾第 1 条，11-21 第四十四次）、
   第 26 个（`FullscreenStateChanging` 里插悬停暂停那段的首行上下文 `return;` → `EndArcComposerEdit();`——
   layout/arc-visual-r1005-r1017 在 `IsClosed()` 早退之后先结束带子的 ⌘L 编辑）。
   上游再改这个补丁时 merge 会在这里冲突：取上游新版，再照 `tasks/evidence/sync154/port-log.md`
   的「macOS 块 #448」重做 22–25、29，照 `tools/fold_backup_r10/scripts/step1b_adapt_immersive.py` 重做 26，
-  照 `tools/fold_backup_fsp/scripts/step1b_split_immersive.py` 重做 19（三方合并里落在平台补丁自己那段
-  代码里的改动归平台补丁，其余进我们的层）。
+  照 `tools/fold_backup_fsp/scripts/step1b_split_immersive.py` 重做 19 和 29 里 11-21 加的那一行（三方合并里
+  落在平台补丁自己那段代码里的改动归平台补丁，其余进我们的层）。
 - ⛔ **别把我们的行贴着这个平台补丁的插入点写**（2026-10-29 154→156 同步定）：它在我们的补丁段之后打，
   我们在它插入点 3 行以内加的任何一行都会变成它的上下文、多一个要携带的 hunk。10-29 因此挪开了
   `browser_frame_view_mac.h`（r1025 红绿灯内缩的声明）、`browser_frame_view_mac.mm`（一行 `#import`）、

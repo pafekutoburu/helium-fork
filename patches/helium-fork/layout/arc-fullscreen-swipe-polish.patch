@@ -1,0 +1,712 @@
+Index: src/chrome/browser/ui/helium/arc_space_motion.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_space_motion.h
++++ src/chrome/browser/ui/helium/arc_space_motion.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_HELIUM_ARC_SPACE_MOTION_H_
+ 
+ #include <algorithm>
++#include <array>
+ #include <cmath>
+ #include <numbers>
+ 
+@@ -210,10 +211,73 @@
+ // The origin (seconds, on the caller's clock) that frame is evaluated
+ // against: |origin_seconds|, or one step back from |now_seconds| when the
+ // frame came later than that.
+-inline double CapFirstStepOrigin(double origin_seconds, double now_seconds) {
+-  return std::max(origin_seconds, now_seconds - kSpaceSpringMaxFirstStep);
++inline double CapFirstStepOrigin(double origin_seconds,
++                                 double now_seconds,
++                                 double max_step = kSpaceSpringMaxFirstStep) {
++  return std::max(origin_seconds, now_seconds - max_step);
+ }
+ 
++// ⛔ helium-fork (2026-11-20, the user: 「横滑……冻住 50–75 ms 没有新画面，接着一帧跳过
++// 42–55% 的行程」; 「手感不要动……是过程中掉帧」): every frame of a spring, not only the
++// first after an aim, shows at most one display frame's step of the curve: a frame
++// that comes late (a stall on the main thread) shows that step on from where the
++// motion was shown, and the motion ends that much later. The user's swipes fit a
++// spring that had run 55-72 ms at the first frame after the freeze -- the first-step
++// cap (CapFirstStepOrigin) had been spent on a frame before it. The step is the
++// display's own: 1.5 x the median of the last 8 gaps between steps that came on
++// time (a gap over 25 ms is a stall, not a frame; before any, a 120 Hz frame), and
++// never more than a 60 Hz frame's -- 12.5 ms at 120 Hz, 16.7 ms at 60 Hz -- so
++// frames on time are untouched (the curve is the same) and a stall shows at most
++// that much of it (120 Hz: the Cmd+S / reveal cover, launched, 16%; 60 Hz: the
++// swipe 19% -- reviewer 2026-11-21: 1/60 s for the cover was 21%, r3: 1.5 x 1/60 s
++// for the swipe 28%). ⚠ Ours.
++struct SpringFrameCap {
++  // A new aim: the step clock starts over; the frame measured so far stays
++  // (it is the display's).
++  void Aim() { last = -1.0; }
++  // The display's frame: the median of the last kGaps gaps between steps
++  // that came on time (a window moved to another display is followed within
++  // a few frames); a 120 Hz frame before any.
++  double Frame() const {
++    if (count == 0) {
++      return 1.0 / 120.0;
++    }
++    std::array<double, kGaps> sorted = gaps;
++    std::sort(sorted.begin(), sorted.begin() + count);
++    return count % 2 ? sorted[count / 2]
++                     : (sorted[count / 2 - 1] + sorted[count / 2]) / 2.0;
++  }
++  double MaxStep() const {
++    return std::min(1.5 * Frame(), kSpaceSpringMaxFirstStep);
++  }
++  // The step at |now| (seconds, the spring's clock): how far to move the
++  // spring's origin forward so that it shows at most MaxStep() of the curve.
++  double Step(double now) {
++    double stall = 0.0;
++    if (last >= 0.0 && now >= last) {
++      const double gap = now - last;
++      // Capped by the frame known so far: the first gap after an aim is the
++      // stall a switch makes.
++      stall = std::max(0.0, gap - MaxStep());
++      // Not two steps in one frame, and not a stall: neither is a frame.
++      if (gap >= 1.0 / 480.0 && gap <= kLongestFrame) {
++        gaps[next] = gap;
++        next = (next + 1) % kGaps;
++        count = std::min(count + 1, kGaps);
++      }
++    }
++    last = now;
++    return stall;
++  }
++
++  static constexpr int kGaps = 8;
++  static constexpr double kLongestFrame = 1.0 / 40.0;
++  double last = -1.0;
++  std::array<double, kGaps> gaps{};
++  int next = 0;
++  int count = 0;
++};
++
+ // Where a released swipe goes, in slots. |x| is the carousel's position,
+ // |live| the committed space's slot, |flick| the direction x was heading
+ // when macOS carried the gesture on with inertia (+1 toward higher slots, -1
+Index: src/chrome/browser/ui/helium/arc_space_motion_unittest.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium/arc_space_motion_unittest.cc
++++ src/chrome/browser/ui/helium/arc_space_motion_unittest.cc
+@@ -118,6 +118,74 @@
+   EXPECT_DOUBLE_EQ(1.0, CapFirstStepOrigin(1.0, 1.01));
+ }
+ 
++TEST(ArcSpaceMotionTest, ALateFrameLaterOnTakesOneDisplayFrameToo) {
++  SpringFrameCap cap;
++  // Before any gap: a 120 Hz frame's step and a half.
++  EXPECT_NEAR(1.5 / 120.0, cap.MaxStep(), 1e-12);
++  // A new window's first steps stall: each shows 12.5 ms of the curve, and
++  // a stall is not taken for the frame (reviewer 2026-11-21 r3).
++  EXPECT_DOUBLE_EQ(0.0, cap.Step(10.0));
++  EXPECT_NEAR(0.042 - 1.5 / 120.0, cap.Step(10.042), 1e-12);
++  EXPECT_NEAR(0.040 - 1.5 / 120.0, cap.Step(10.082), 1e-12);
++  EXPECT_NEAR(1.5 / 120.0, cap.MaxStep(), 1e-12);
++  // 120 Hz frames on time keep the spring's clock...
++  cap.Aim();
++  double t = 0.0;
++  EXPECT_DOUBLE_EQ(0.0, cap.Step(t));
++  for (int i = 0; i < 5; ++i) {
++    t += 1.0 / 120.0;
++    EXPECT_DOUBLE_EQ(0.0, cap.Step(t));
++  }
++  EXPECT_NEAR(1.5 / 120.0, cap.MaxStep(), 1e-12);
++  // ...one dropped 120 Hz frame shows 12.5 ms of the curve, 4.2 ms on...
++  t += 1.0 / 60.0;
++  EXPECT_NEAR(1.0 / 60.0 - 1.5 / 120.0, cap.Step(t), 1e-12);
++  // ...a 66.7 ms freeze too: the origin moves on by the rest.
++  t += 4.0 / 60.0;
++  EXPECT_NEAR(4.0 / 60.0 - 1.5 / 120.0, cap.Step(t), 1e-12);
++  // The next aim keeps the frame, and its first gap is capped by it -- a
++  // switch's stall comes right after an aim.
++  cap.Aim();
++  EXPECT_NEAR(1.5 / 120.0, cap.MaxStep(), 1e-12);
++  EXPECT_DOUBLE_EQ(0.0, cap.Step(0.5));
++  EXPECT_NEAR(0.050 - 1.5 / 120.0, cap.Step(0.550), 1e-12);
++  // A window moved to a 60 Hz display: a gap there is 16.7 ms, over 12.5 --
++  // 4.2 ms each until the median of the last 8 gaps moves (at most four
++  // frames), then 60 Hz frames on time keep the clock.
++  cap.Aim();
++  t = 1.0;
++  EXPECT_DOUBLE_EQ(0.0, cap.Step(t));
++  int late = 0;
++  for (int i = 0; i < 4; ++i) {
++    t += 1.0 / 60.0;
++    late += cap.Step(t) > 1e-9;
++  }
++  EXPECT_LE(late, 4);
++  for (int i = 0; i < 10; ++i) {
++    t += 1.0 / 60.0;
++    EXPECT_NEAR(0.0, cap.Step(t), 1e-9);
++  }
++  // ...and a 60 Hz stall shows one 60 Hz frame of the curve, not 1.5.
++  EXPECT_NEAR(kSpaceSpringMaxFirstStep, cap.MaxStep(), 1e-9);
++  t += 0.050;
++  EXPECT_NEAR(0.050 - kSpaceSpringMaxFirstStep, cap.Step(t), 1e-9);
++  // Worst place on each curve, one capped step: the cover's launched spring
++  // at 120 Hz, the swipe's spring at 60 Hz -- at most 20% of the way.
++  double cover = 0.0;
++  double swipe = 0.0;
++  for (double s = 0.0; s < 0.3; s += 0.0005) {
++    const SpringState from = LaunchCriticalSpring({0.0, 0.0}, 1.0, 30.0, 0.4);
++    cover = std::max(cover, StepCriticalSpring(from, 1.0, 30.0, s + 1.5 / 120.0).x -
++                                StepCriticalSpring(from, 1.0, 30.0, s).x);
++    swipe = std::max(
++        swipe, StepCriticalSpring({0.0, 0.0}, 1.0, kSpaceSlideOmega,
++                                  s + kSpaceSpringMaxFirstStep).x -
++                   StepCriticalSpring({0.0, 0.0}, 1.0, kSpaceSlideOmega, s).x);
++  }
++  EXPECT_LT(cover, 0.20);
++  EXPECT_LT(swipe, 0.20);
++}
++
+ TEST(ArcSpaceMotionTest, ASlowReleaseGoesToTheNearerSpace) {
+   // Arc g40 / g44 / g39 (live = 2): 26% / 44% / 47% went back, 53.7% / 70% /
+   // 71% completed -- either way.
+Index: src/chrome/browser/ui/views/frame/browser_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.cc
++++ src/chrome/browser/ui/views/frame/browser_view.cc
+@@ -4850,6 +4850,7 @@
+     arc_sidebar_cover_clock_.Stop();
+   }
+   arc_sidebar_cover_origin_seconds_ = 0.0;
++  arc_sidebar_cover_frame_cap_.Aim();
+   arc_sidebar_cover_clock_.Start();
+   arc_sidebar_cover_watchdog_.Start(
+       FROM_HERE, kArcSidebarCoverWatchdog,
+@@ -4877,8 +4878,16 @@
+   const double now = GetArcSidebarCoverClockSeconds();
+   if (arc_sidebar_cover_cap_first_step_) {
+     arc_sidebar_cover_cap_first_step_ = false;
+-    arc_sidebar_cover_origin_seconds_ =
+-        helium::CapFirstStepOrigin(arc_sidebar_cover_origin_seconds_, now);
++    arc_sidebar_cover_origin_seconds_ = helium::CapFirstStepOrigin(
++        arc_sidebar_cover_origin_seconds_, now,
++        arc_sidebar_cover_frame_cap_.MaxStep());
++    arc_sidebar_cover_frame_cap_.Step(now);
++  } else {
++    // ⛔ 2026-11-20 (item 2): a later frame that comes late takes one display
++    // frame's step too, not the stretch of the curve the stall took (the
++    // user's reveal: 33 ms gaps, then 25% of the way in one frame).
++    arc_sidebar_cover_origin_seconds_ +=
++        arc_sidebar_cover_frame_cap_.Step(now);
+   }
+   const helium::SpringState state = helium::StepCriticalSpring(
+       arc_sidebar_cover_origin_, arc_sidebar_cover_target_,
+Index: src/chrome/browser/ui/views/frame/browser_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/browser_view.h
++++ src/chrome/browser/ui/views/frame/browser_view.h
+@@ -1937,6 +1937,9 @@
+   helium::SpringState arc_sidebar_cover_origin_;
+   double arc_sidebar_cover_origin_seconds_ = 0.0;
+   bool arc_sidebar_cover_cap_first_step_ = false;
++  // helium-fork (2026-11-20, item 2): at most one display frame of the cover's
++  // spring per step (helium::SpringFrameCap).
++  helium::SpringFrameCap arc_sidebar_cover_frame_cap_;
+   // Where the cover is heading: 1 covers the sidebar (hide), 0 uncovers it.
+   double arc_sidebar_cover_target_ = 0.0;
+   // The ratio the layout reads (GetArcSidebarCoverRatio), in [0, 1].
+Index: src/chrome/browser/ui/views/frame/multi_contents_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/multi_contents_view.cc
++++ src/chrome/browser/ui/views/frame/multi_contents_view.cc
+@@ -1042,8 +1042,15 @@
+       drop_target_view_->side() == MultiContentsDropTargetView::DropSide::BOTTOM;
+   const AttachedChromeEdges attached_chrome = GetAttachedChromeEdges();
+   const bool top_edge_is_window_edge = !attached_chrome.top;
++  // helium-fork (2026-11-20, the user: 「进出全屏时，红区四个角的弧度不许变……任何
++  // 状态、任何一帧，四个角都是 12 pt」): full screen dropped every corner to
++  // GetGenericFrameRadius (8) -- the window there has square corners, so a
++  // contents edge that IS the window's needs no system radius. The Arc
++  // shell's card is not the window's edge: it stands inset in full screen as
++  // well, and keeps its own radius (GetPaddedFrameRadius, 12).
+   const bool can_use_system_corners =
+-      (is_in_split || should_round_single_contents) && !is_fullscreen;
++      (is_in_split || should_round_single_contents) &&
++      (!is_fullscreen || IsArcContentCard());
+   const bool leading_edge_is_window_edge =
+       !attached_chrome.leading && !is_drop_target_on_start;
+   const bool trailing_edge_is_window_edge =
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.cc
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+@@ -100,6 +100,9 @@
+   if (to == from) {
+     return;
+   }
++  // helium-fork (2026-11-20, item 3): the pictures below and the slide after
++  // them light no hover; Stop() hands it back.
++  strip->SetListHoverHeld(true);
+   const bool was_active = active_;
+   const helium::SpringState now =
+       was_active ? StateAt(ClockSeconds())
+@@ -199,11 +202,15 @@
+     clock_.Start();
+   }
+   cap_first_step_ = true;
++  frame_cap_.Aim();
+   active_ = true;
+   Apply();
+ }
+ 
+ void SpaceCarousel::Stop() {
++  if (TabStripView* const strip = delegate_->CarouselStrip()) {
++    strip->SetListHoverHeld(false);
++  }
+   pending_ = false;
+   gesture_ = false;
+   const bool was_dragging = std::exchange(dragging_, false);
+@@ -240,12 +247,18 @@
+   if (animation != &clock_ || !active_) {
+     return;
+   }
++  const double now = ClockSeconds();
+   if (cap_first_step_) {
+     // The pictures and the layout above took this frame's time, not the
+     // user's: one step on from where the list was shown.
+     cap_first_step_ = false;
+-    origin_seconds_ =
+-        helium::CapFirstStepOrigin(origin_seconds_, ClockSeconds());
++    origin_seconds_ = helium::CapFirstStepOrigin(origin_seconds_, now,
++                                                 frame_cap_.MaxStep());
++    frame_cap_.Step(now);
++  } else {
++    // ⛔ 2026-11-20 (item 2): any later frame that comes late too -- a switch
++    // can stall the main thread after its first step (the new tab's layout).
++    origin_seconds_ += frame_cap_.Step(now);
+   }
+   const helium::SpringState state = StateAt(ClockSeconds());
+   if (helium::SpringSettled(state, target_, width_)) {
+@@ -463,6 +476,9 @@
+   }
+   first_slot_ = live_slot_ - live_index;
+   last_slot_ = first_slot_ + static_cast<int>(order.size()) - 1;
++  // helium-fork (2026-11-20, item 3): from here until Stop() no row lights a
++  // hover -- the neighbour's picture is taken right below.
++  strip->SetListHoverHeld(true);
+   // The live list's scroll position, put back after each neighbour's picture.
+   SaveScroll(live_space_);
+   dragging_ = true;
+@@ -605,6 +621,7 @@
+   origin_ = {x_, 0.0};
+   target_ = x_;
+   origin_seconds_ = 0.0;
++  frame_cap_.Aim();
+   if (clock_.is_animating()) {
+     clock_.Stop();
+   }
+@@ -622,6 +639,7 @@
+   origin_ = {x_, 0.0};
+   target_ = live_slot_;
+   origin_seconds_ = 0.0;
++  frame_cap_.Aim();
+   if (clock_.is_animating()) {
+     clock_.Stop();
+   }
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.h
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.h
+@@ -204,6 +204,9 @@
+   // Set by a (re)aim: its first frame steps the spring by at most
+   // helium::kSpaceSpringMaxFirstStep.
+   bool cap_first_step_ = false;
++  // helium-fork (2026-11-20, item 2): at most one display frame of the spring
++  // per step (helium::SpringFrameCap).
++  helium::SpringFrameCap frame_cap_;
+   // Where the carousel is. A drag, and the spring that follows it, may take
+   // it past either end: the lists show helium::SwipeShownX of it, the end's
+   // disc (the ⊕, Manage's) rides their edge.
+Index: src/chrome/browser/ui/views/tabs/common/split_tab_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/split_tab_view.cc
++++ src/chrome/browser/ui/views/tabs/common/split_tab_view.cc
+@@ -3,6 +3,8 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/tabs/common/split_tab_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
++// ^ helium-fork (2026-11-20, item 3): IsSidebarListHoverHeld
+ 
+ #include <vector>
+ 
+@@ -210,6 +212,10 @@
+   if (hovered_ == hovered) {
+     return;
+   }
++  // helium-fork (2026-11-20, item 3): not while the carousel moves the list.
++  if (hovered && IsSidebarListHoverHeld(this)) {
++    return;
++  }
+ 
+   hovered_ = hovered;
+ 
+Index: src/chrome/browser/ui/views/tabs/common/tab_group_header_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_group_header_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_group_header_view.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/tabs/common/tab_group_header_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ 
+ #include "base/task/single_thread_task_runner.h"
+ #include "build/build_config.h"
+@@ -380,12 +381,21 @@
+ }
+ 
+ void TabGroupHeaderView::OnMouseMoved(const ui::MouseEvent& event) {
++  // helium-fork (2026-11-20, item 3; reviewer 2026-11-21 r3): not while the
++  // carousel moves the list (TabStripView hands the hover back after).
++  if (IsSidebarListHoverHeld(this)) {
++    return;
++  }
+   // Linux enter/leave events are sometimes flaky, so we don't want to "miss"
+   // an enter event and fail to update state.
+   UpdateEditorBubbleButtonVisibility();
+ }
+ 
+ void TabGroupHeaderView::OnMouseEntered(const ui::MouseEvent& event) {
++  // helium-fork (2026-11-20, item 3; reviewer 2026-11-21 r3): as above.
++  if (IsSidebarListHoverHeld(this)) {
++    return;
++  }
+   delegate_->UpdateHoverCard(TabSlotController::HoverCardUpdateType::kHover);
+   UpdateEditorBubbleButtonVisibility();
+ }
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -17,6 +17,13 @@
+ 
+ #include "base/callback_list.h"
+ #include "base/functional/bind.h"
++#include "base/task/sequenced_task_runner.h"
++#include "ui/events/event.h"
++#include "ui/events/event_utils.h"
++#include "ui/views/widget/widget.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "ui/display/screen.h"
++#include "base/functional/bind.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/numerics/safe_conversions.h"
+@@ -548,6 +555,88 @@
+   widget_observation_.Reset();
+ }
+ 
++namespace {
++
++// helium-fork (2026-11-20, item 3).
++void SendSyntheticMouseExit(views::Widget* widget) {
++  if (views::View* const root = widget->GetRootView()) {
++    const ui::MouseEvent exited(ui::EventType::kMouseExited, gfx::Point(),
++                                gfx::Point(), ui::EventTimeForNow(),
++                                ui::EF_IS_SYNTHESIZED, 0);
++    root->OnMouseExited(exited);
++  }
++}
++
++// Whether the pointer hovers |widget|'s rows at all: the key window does; so
++// does another browser window under the pointer while the app is in front
++// (macOS tracks hover in every window of the active app; reviewer 2026-11-21
++// r3: two windows side by side). Not a window of an app in the background.
++bool PointerCanHover(views::Widget* widget) {
++  if (widget->IsActive()) {
++    return true;
++  }
++  display::Screen* const screen = display::Screen::Get();
++  if (!screen || !screen->IsWindowUnderCursor(widget->GetNativeWindow())) {
++    return false;
++  }
++  BrowserWindowInterface* const last =
++      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
++  return last && last->IsActive();
++}
++
++}  // namespace
++
++void TabStripView::SetListHoverHeld(bool held) {
++  if (list_hover_held_ == held) {
++    return;
++  }
++  list_hover_held_ = held;
++  if (held) {
++    // The row hovered when the lists start to move lets go of its hover
++    // too, whatever kind of row it is (reviewer 2026-11-21 r3: a Today row
++    // kept it and slid with it, a picture of the leaving space caught it,
++    // the "+ New Tab" row kept a hover state that showed up after the move
++    // wherever the row landed). Only with the pointer on the lists: an exit
++    // elsewhere would reach the page.
++    if (views::Widget* const widget = GetWidget();
++        widget && IsDrawn() && IsMouseHovered()) {
++      SendSyntheticMouseExit(widget);
++    }
++    return;
++  }
++  // Not from inside the carousel's step (Stop() runs in an animation
++  // callback and a layout): the move it synthesizes re-enters views.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&TabStripView::ResyncListHover,
++                                hover_weak_factory_.GetWeakPtr()));
++}
++
++void TabStripView::ResyncListHover() {
++  views::Widget* const widget = GetWidget();
++  // Not for a window another one covers, or a strip no longer drawn
++  // (reviewer 2026-11-21 r2: IsMouseHovered() only tests the rectangle).
++  if (!widget || list_hover_held_ || !PointerCanHover(widget) ||
++      !IsDrawn() || !IsMouseHovered()) {
++    return;
++  }
++  // RootView still names the view it last sent an enter to -- maybe a row
++  // that slid away, maybe the row now under the pointer that was kept dark:
++  // a synthesized move alone would reach the latter as a plain move, which
++  // not every row lights a hover on. An exit first, then the move: every
++  // row type takes its hover through its own OnMouseEntered.
++  SendSyntheticMouseExit(widget);
++  widget->SynthesizeMouseMoveEvent();
++}
++
++bool IsSidebarListHoverHeld(const views::View* view) {
++  for (const views::View* v = view; v; v = v->parent()) {
++    if (const auto* strip = views::AsViewClass<TabStripView>(v)) {
++      return strip->list_hover_held();
++    }
++  }
++  return false;
++}
++
+ void TabStripView::OnMouseEntered(const ui::MouseEvent& event) {
+   mouse_entered_tabstrip_time_ = base::TimeTicks::Now();
+   has_reported_time_mouse_entered_to_switch_ = false;
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_TABS_COMMON_TAB_STRIP_VIEW_H_
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include <memory>
+ #include <vector>
+ 
+@@ -143,6 +144,15 @@
+   // committed list, and a longer space's picture has to slide whole. At or
+   // above the edge (0 included) it is the plain mask to bounds again.
+   void SetListClipBottom(int bottom);
++  // helium-fork (2026-11-20, item 3): while the space carousel moves the
++  // lists (a swipe, a switch's slide) no row of them lights a hover it did
++  // not have -- the pointer did not move, the rows did (the user's recording:
++  // the row under a resting pointer came up white on the first frame of every
++  // swipe, and in the neighbour's picture). Released, the row under the
++  // pointer gets its hover the ordinary way (RootView is told the pointer
++  // left, then a synthesized move enters whatever is under it now), posted.
++  void SetListHoverHeld(bool held);
++  bool list_hover_held() const { return list_hover_held_; }
+ 
+   // helium-fork r1025 (the user, 2026-10-14, mock-up R2): how far every row
+   // stands in from this view's left and right edges -- the favorites, both
+@@ -256,6 +266,7 @@
+   void OnNewTabPositionChanged();
+ 
+   float slide_dx_live_ = 0.0f;
++  bool list_hover_held_ = false;
+   int arc_row_left_ = -1;
+   int arc_row_right_ = -1;
+ 
+@@ -291,6 +302,16 @@
+ 
+   base::ScopedObservation<views::Widget, views::WidgetObserver>
+       widget_observation_{this};
++
++  void ResyncListHover();
++  base::WeakPtrFactory<TabStripView> hover_weak_factory_{this};
+ };
+ 
++// helium-fork (2026-11-20, the user: 「横滑从开始到停稳，任何一行都不新出现悬停底；
++// 停稳之后鼠标下那一行的悬停底照常出现」): true while the space carousel moves
++// |view|'s lists (the TabStripView it is in holds their hover). A row that
++// would light a hover it does not have yet leaves it off; the row under the
++// pointer gets it when the lists settle (TabStripView::SetListHoverHeld).
++bool IsSidebarListHoverHeld(const views::View* view);
++
+ #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_TAB_STRIP_VIEW_H_
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -495,6 +495,10 @@
+   if (hovered_ == hovered) {
+     return;
+   }
++  // helium-fork (2026-11-20, item 3): not while the carousel moves the list.
++  if (hovered && IsSidebarListHoverHeld(this)) {
++    return;
++  }
+ 
+   hovered_ = hovered;
+   if (hover_controller_ && !split_) {
+@@ -736,7 +740,11 @@
+ 
+ void TabView::OnMouseEntered(const ui::MouseEvent& event) {
+   CHECK(collection_node_);
+-  UpdateHoverCard(this, TabSlotController::HoverCardUpdateType::kHover);
++  // helium-fork (2026-11-20, item 3; reviewer 2026-11-21 r1): no hover card
++  // for a row the carousel slid under a resting pointer.
++  if (!IsSidebarListHoverHeld(this)) {
++    UpdateHoverCard(this, TabSlotController::HoverCardUpdateType::kHover);
++  }
+ 
+   // Hover state is handled by the parent if it is split.
+   if (split_) {
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+@@ -3,6 +3,8 @@
+ // the terms of the GPL-3.0 license that can be found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/tabs/common/workspace_entry_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
++// ^ helium-fork (2026-11-20, item 3): IsSidebarListHoverHeld
+ 
+ #include <utility>
+ 
+@@ -786,6 +788,11 @@
+ }
+ 
+ void WorkspaceEntryView::OnMouseMoved(const ui::MouseEvent& event) {
++  // helium-fork (2026-11-20, item 3; reviewer 2026-11-21 r1): nor the
++  // drifted row's icon morph while the carousel moves the list.
++  if (IsSidebarListHoverHeld(this)) {
++    return;
++  }
+   // No "Back to Pinned URL" morph under an open rename field: the title it
+   // lifts is not showing.
+   SetIconHovered(drifted_ && !renders_as_capsule() && !editing_ &&
+@@ -793,6 +800,10 @@
+ }
+ 
+ void WorkspaceEntryView::OnMouseEntered(const ui::MouseEvent& event) {
++  // helium-fork (2026-11-20, item 3): not while the carousel moves the list.
++  if (IsSidebarListHoverHeld(this)) {
++    return;
++  }
+   hovered_ = true;
+   UpdateCloseButton();
+   UpdateCloseButtonColors();
+Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
+@@ -3,6 +3,8 @@
+ // the terms of the GPL-3.0 license that can be found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
++// ^ helium-fork (2026-11-20, item 3): IsSidebarListHoverHeld
+ 
+ #include <algorithm>
+ #include <memory>
+@@ -252,6 +254,10 @@
+ }
+ 
+ void WorkspaceFolderRowView::OnMouseEntered(const ui::MouseEvent& event) {
++  // helium-fork (2026-11-20, item 3): not while the carousel moves the list.
++  if (IsSidebarListHoverHeld(this)) {
++    return;
++  }
+   hovered_ = true;
+   SchedulePaint();
+ }
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -4154,6 +4154,12 @@
+ 
+ void WorkspaceSidebarView::ResyncHoverFromCursor() {
+   hover_resync_pending_ = false;
++  // helium-fork (2026-11-20, item 3; reviewer 2026-11-21 r1): not while the
++  // carousel moves the lists -- a space switch's own resync lands mid-slide;
++  // TabStripView::SetListHoverHeld(false) resyncs when they settle.
++  if (IsSidebarListHoverHeld(this)) {
++    return;
++  }
+   views::Widget* widget = GetWidget();
+   if (!widget) {
+     return;
+Index: src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.cc
+@@ -3,6 +3,8 @@
+ // the terms of the GPL-3.0 license that can be found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/tabs/common/workspace_space_head_row_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
++// ^ helium-fork (2026-11-20, item 3): IsSidebarListHoverHeld
+ 
+ #include <algorithm>
+ #include <memory>
+@@ -202,6 +204,12 @@
+     const helium_workspace::WorkspaceSpace& space) {
+   const bool space_changed = space_id_ != space.id;
+   if (space_changed) {
++    // helium-fork (2026-11-20, item 3; reviewer 2026-11-21 r2): nor its hover
++    // -- the pointer rested on the old space's name, not this one's (a
++    // carousel picture of another space came out with the white row). It
++    // comes back through OnMouseEntered when the lists settle
++    // (TabStripView::SetListHoverHeld). All of it: the "···" too (r3).
++    ClearHover();
+     // T053: this one row serves every space -- switching spaces neither
+     // destroys nor hides it (workspace_sidebar_view.cc keeps it visible), so
+     // a latch set for the old space's menu would survive the switch.
+@@ -356,6 +364,10 @@
+ }
+ 
+ void WorkspaceSpaceHeadRowView::OnMouseEntered(const ui::MouseEvent& event) {
++  // helium-fork (2026-11-20, item 3): not while the carousel moves the list.
++  if (IsSidebarListHoverHeld(this)) {
++    return;
++  }
+   hovered_ = true;
+   UpdateMenuButtonVisibility();
+   UpdateIconSlot();
+Index: src/chrome/browser/ui/views/tabs/vertical/vertical_new_tab_button.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/vertical/vertical_new_tab_button.cc
++++ src/chrome/browser/ui/views/tabs/vertical/vertical_new_tab_button.cc
+@@ -3,6 +3,7 @@
+ // the terms of the GPL-3.0 license that can be found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/tabs/vertical/vertical_new_tab_button.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ 
+ #include "cc/paint/paint_flags.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+@@ -67,6 +68,15 @@
+   if (!colors || (state != STATE_HOVERED && state != STATE_PRESSED)) {
+     return;
+   }
++  // helium-fork (2026-11-20, item 3; reviewer 2026-11-21 r1): the row slides
++  // with the lists -- no capsule while they move; TabStripView hands the
++  // hover back when they settle. Nor a hover state the pointer is no longer
++  // on (r3: a move under a resting pointer can leave the row elsewhere with
++  // the state it had).
++  if (IsSidebarListHoverHeld(this) ||
++      (state == STATE_HOVERED && !IsMouseHovered())) {
++    return;
++  }
+   cc::PaintFlags fill;
+   fill.setStyle(cc::PaintFlags::kFill_Style);
+   fill.setAntiAlias(true);
