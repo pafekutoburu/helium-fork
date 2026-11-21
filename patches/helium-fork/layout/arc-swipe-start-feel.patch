@@ -1,0 +1,1164 @@
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.cc
+@@ -1342,8 +1342,43 @@
+   return made ? made->GetHandle() : tabs::TabHandle::Null();
+ }
+ 
++void WorkspaceTabController::FlushDeferredBlankClose() {
++  if (deferred_blank_close_.empty()) {
++    return;
++  }
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(
++                     [](base::WeakPtr<WorkspaceTabController> self) {
++                       if (!self || self->defer_blank_close_ ||
++                           self->browser_window_->IsDeleteScheduled()) {
++                         return;
++                       }
++                       // Not the current space, nor one a slide still
++                       // shows (another deferred release left the views on
++                       // it; reviewer code r2) -- that one waits for its
++                       // own flush.
++                       const std::vector<std::string> spaces =
++                           std::exchange(self->deferred_blank_close_, {});
++                       for (const std::string& space : spaces) {
++                         if (space == self->shown_space_id()) {
++                           self->deferred_blank_close_.push_back(space);
++                         } else if (space != self->current_space_id_) {
++                           self->CloseAbandonedBlankTab(space);
++                         }
++                       }
++                     },
++                     weak_factory_.GetWeakPtr()));
++}
++
+ void WorkspaceTabController::CloseAbandonedBlankTab(
+     const std::string& space_id) {
++  if (defer_blank_close_) {
++    if (std::ranges::find(deferred_blank_close_, space_id) ==
++        deferred_blank_close_.end()) {
++      deferred_blank_close_.push_back(space_id);
++    }
++    return;
++  }
+   TabStripModel* const model = browser_window_->GetTabStripModel();
+   if (!model || model->count() <= 1) {
+     return;
+Index: src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+===================================================================
+--- src.orig/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
++++ src/chrome/browser/ui/helium_workspace/workspace_tab_controller.h
+@@ -235,11 +235,14 @@
+   // space for one synchronous capture -- the carousel shows every space but
+   // the committed one as a picture (decisions 「M6 轮4」④). Read by exactly
+   // two views: WorkspaceSidebarView::RefreshCurrentSpaceId and
+-  // UnpinnedTabContainerView::CurrentSpaceId. ⛔ Nothing that acts on the
+-  // model reads it -- close landings, Cmd+W, new-tab tagging, prefs and the
++  // UnpinnedTabContainerView::CurrentSpaceId (and TabStripView::OnTabChanged
++  // to tell a row that is not on screen). ⛔ Nothing that acts on the model
++  // reads it -- close landings, Cmd+W, new-tab tagging, prefs and the
+   // session all stay on current_space_id(). The override notifies nobody:
+   // the carousel resyncs the two views itself, and puts it back (empty)
+-  // before its task ends.
++  // before its task ends -- except, 2026-11-21, across the slide that
++  // follows a swipe's own release (SpaceCarousel::deferred_): the views stay
++  // on the space left until it lands (≈0.3 s), the model already switched.
+   const std::string& shown_space_id() const {
+     return view_space_override_.empty() ? current_space_id_
+                                         : view_space_override_;
+@@ -485,6 +488,20 @@
+   // ActivateSpaceTab minted for it loses that tab again, so switching around
+   // does not litter every space with a blank page.
+   void CloseAbandonedBlankTab(const std::string& space_id);
++
++ public:
++  // helium-fork (2026-11-21): while set, CloseAbandonedBlankTab only notes
++  // the space -- a swipe's release keeps that space's list on screen through
++  // its slide (SpaceCarousel::deferred_), its blank row with it.
++  // FlushDeferredBlankClose() closes what was noted, in a posted task (never
++  // inside a teardown, a layout or an observer loop; reviewer design r1),
++  // with the same test -- so a space that is current again keeps its page.
++  void SetDeferAbandonedBlankClose(bool defer) {
++    defer_blank_close_ = defer;
++  }
++  void FlushDeferredBlankClose();
++
++ private:
+   // 3a-r1: a background tab in |space_id|'s Today that has never loaded --
+   // the restored-tab machinery (chrome::AddRestoredTab, unselected) fed one
+   // synthetic navigation. Its session records say "this space" and "no entry"
+@@ -612,6 +629,9 @@
+   std::string current_space_id_;
+   // M6 轮4: see shown_space_id(). Empty outside a carousel capture.
+   std::string view_space_override_;
++  // 2026-11-21: see SetDeferAbandonedBlankClose().
++  bool defer_blank_close_ = false;
++  std::vector<std::string> deferred_blank_close_;
+   // The tab each space was looking at when the window last left it, or the
+   // one it activated most recently while current. Dead handles are simply
+   // skipped; a tab that moved to another space is re-checked on use.
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -1561,8 +1561,9 @@
+   // 4b-r2: a page turn under way puts everything back, opens nothing.
+   EndSheetSlide(/*show=*/false);
+   // M6 轮4: the pictures live in the strip's layer; land before it goes.
++  // 2026-11-21: the views are leaving -- no re-filter in here.
+   if (carousel_) {
+-    carousel_->Stop();
++    carousel_->Stop(/*views_now=*/false);
+   }
+   if (GetFocusManager()) {
+     GetFocusManager()->RemoveFocusChangeListener(&focus_listener_);
+@@ -1871,7 +1872,8 @@
+     EndSheetSlide(/*show=*/true);
+   }
+   if (carousel_ && previous_bounds.width() != width()) {
+-    carousel_->Stop();
++    // 2026-11-21: inside a layout -- a re-filter the views need is posted.
++    carousel_->Stop(/*views_now=*/false);
+   }
+   // The strip's width gate (helium::kMediaStripMinWidth) rides the sidebar's
+   // drag-resize and collapse, both of which land here.
+@@ -1975,12 +1977,12 @@
+   return order;
+ }
+ 
+-void VerticalTabStripRegionView::CarouselResyncViews() {
++void VerticalTabStripRegionView::CarouselResyncViews(bool keep_state) {
+   // The switch's own re-filter, for whatever the controller's
+   // shown_space_id() names -- both lists, both animating layout managers
+   // landed (M6-r4 #2: a tween here is rows wiped in inside the picture).
+   if (WorkspaceSidebarView* const sidebar = WorkspaceDragSidebar()) {
+-    sidebar->ResyncToShownSpace();
++    sidebar->ResyncToShownSpace(keep_state);
+   }
+   if (UnpinnedTabContainerView* const today = TodayDropContainer();
+       today && !today->IsDragging()) {
+@@ -2151,6 +2153,21 @@
+   return true;
+ }
+ 
++void VerticalTabStripRegionView::CarouselHoldShownActive(bool hold) {
++  UnpinnedTabContainerView* const today = TodayDropContainer();
++  if (!today) {
++    return;
++  }
++  const helium_workspace::WorkspaceTabController* const controller =
++      CarouselController();
++  if (hold && controller &&
++      controller->shown_space_id() != controller->current_space_id()) {
++    today->BeginCaptureActiveTab(controller->shown_active_tab());
++  } else if (!hold) {
++    today->EndCaptureActiveTab();
++  }
++}
++
+ void VerticalTabStripRegionView::OnSpaceSwipeBegin() {
+   if ((!carousel_ || !carousel_->BeginDrag()) && swipe_input_) {
+     swipe_input_->Abort();
+Index: src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
++++ src/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h
+@@ -568,7 +568,8 @@
+   TabStripView* CarouselStrip() override;
+   helium_workspace::WorkspaceTabController* CarouselController() override;
+   std::vector<std::string> CarouselSpaceOrder() override;
+-  void CarouselResyncViews() override;
++  void CarouselResyncViews(bool keep_state) override;
++  void CarouselHoldShownActive(bool hold) override;
+   void CarouselFitStrip() override;
+   std::vector<std::unique_ptr<HeliumViewSnapshotLayer>>
+   CarouselCaptureRowShadows() override;
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.cc
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.cc
+@@ -11,6 +11,8 @@
+ #include <utility>
+ 
+ #include "base/auto_reset.h"
++#include "base/functional/bind.h"
++#include "base/task/sequenced_task_runner.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
+ #include "ui/compositor/layer.h"
+@@ -45,6 +47,10 @@
+   pending_ = false;
+   // Only the switch a release makes carries its gesture on (its ends).
+   gesture_ = committing_;
++  EnsureLiveViews();
++  // 2026-11-21: a slide still showing the space it left is taken over where
++  // it stands (the views go over to the committed space first).
++  ReconcileLive();
+   helium_workspace::WorkspaceTabController* const controller =
+       delegate_->CarouselController();
+   TabStripView* const strip = delegate_->CarouselStrip();
+@@ -81,6 +87,14 @@
+   pending_ = true;
+   pending_direction_ = direction > 0 ? 1 : -1;
+   pending_from_ = from;
++  if (committing_ && defer_next_) {
++    // 2026-11-21 (deferred_): SetCurrentSpace's own resync, next, keeps the
++    // views on the space being left -- no rows built, nothing photographed.
++    // Until OnSwitchActivated takes it over, |defer_override_| says who has
++    // to put it back if that never comes (reviewer code r1).
++    controller->SetViewSpaceOverride(from);
++    defer_override_ = true;
++  }
+ }
+ 
+ void SpaceCarousel::OnSwitchActivated() {
+@@ -138,38 +152,74 @@
+   } else if (now.v < 0.0) {
+     lo -= 1.0;
+   }
+-  // The new live slot shows the live list; the old one is a picture now.
+-  slots_.erase(to_slot);
+-  std::vector<std::pair<int, std::string>> wanted;
+-  for (int slot = static_cast<int>(std::floor(lo));
+-       slot <= static_cast<int>(std::ceil(hi)); ++slot) {
+-    if (slot == to_slot || slots_.contains(slot)) {
+-      continue;
+-    }
+-    std::string space = slot == from_slot
+-                            ? from
+-                            : SpaceForSlot(slot, from_slot, from, wrapping);
+-    if (!space.empty()) {
+-      wanted.emplace_back(slot, std::move(space));
++  // 2026-11-21 (deferred_): a release EndDrag() marked, its views still on
++  // |from| (OnSwitchWillStart) and every slot it may pass already a picture
++  // -- the arriving list rides its picture and the views stay put until
++  // Stop(). Short of any of that, the views go over now, as before.
++  bool defer = std::exchange(defer_next_, false) && committing_ &&
++               controller->shown_space_id() == from;
++  if (defer) {
++    // Each slot on the way a picture of the space it names now (another
++    // window may have reordered or deleted spaces under the fingers;
++    // reviewer final r1).
++    const double near = std::min(now.x, static_cast<double>(to_slot));
++    const double far = std::max(now.x, static_cast<double>(to_slot));
++    for (int slot = static_cast<int>(std::floor(near));
++         slot <= static_cast<int>(std::ceil(far)); ++slot) {
++      if (slot == from_slot) {
++        continue;
++      }
++      const auto it = slots_.find(slot);
++      if (it == slots_.end() ||
++          it->second.space_id != SpaceForSlot(slot, from_slot, from, wrapping)) {
++        defer = false;
++      }
+     }
+   }
+-  // Photographed now -- the old space's untouched blank page is not yet
+-  // closed. ⛔ sync156 feedback (the user 2026-11-08: 「胶囊在原本的 Space 中是
+-  // 什么状态，在切换的过程中也保持什么状态」): each list wears its own selected
+-  // row's card and shadow -- for the space being left, the tab it was on
+-  // (WorkspaceTabController::FindTabToShowForSpace). Arc g38 f_00203 drops
+-  // the old card on the first frame; we no longer do.
+-  for (auto& [slot, space] : wanted) {
+-    Slot picture;
+-    picture.space_id = space;
+-    picture.layers = CaptureSpace(space);
+-    slots_[slot] = std::move(picture);
+-  }
+-  if (!wanted.empty()) {
+-    controller->SetViewSpaceOverride(std::string());
+-    delegate_->CarouselResyncViews();
++  // The leaving space's untouched blank page waits for the views to leave
++  // it (CloseAbandonedBlankTab runs right after this notification).
++  controller->SetDeferAbandonedBlankClose(defer);
++  defer_override_ = false;
++  if (defer) {
++    deferred_ = true;
++    committed_slot_ = to_slot;
++    committed_space_ = to;
++    delegate_->CarouselHoldShownActive(true);
++  } else {
++    // The new live slot shows the live list; the old one is a picture now.
++    slots_.erase(to_slot);
++    std::vector<std::pair<int, std::string>> wanted;
++    for (int slot = static_cast<int>(std::floor(lo));
++         slot <= static_cast<int>(std::ceil(hi)); ++slot) {
++      if (slot == to_slot || slots_.contains(slot)) {
++        continue;
++      }
++      std::string space = slot == from_slot
++                              ? from
++                              : SpaceForSlot(slot, from_slot, from, wrapping);
++      if (!space.empty()) {
++        wanted.emplace_back(slot, std::move(space));
++      }
++    }
++    // Photographed now -- the old space's untouched blank page is not yet
++    // closed. ⛔ sync156 feedback (the user 2026-11-08: 「胶囊在原本的 Space 中是
++    // 什么状态，在切换的过程中也保持什么状态」): each list wears its own selected
++    // row's card and shadow -- for the space being left, the tab it was on
++    // (WorkspaceTabController::FindTabToShowForSpace). Arc g38 f_00203 drops
++    // the old card on the first frame; we no longer do.
++    for (auto& [slot, space] : wanted) {
++      Slot picture;
++      picture.space_id = space;
++      picture.layers = CaptureSpace(space);
++      slots_[slot] = std::move(picture);
++    }
++    if (!wanted.empty() ||
++        controller->shown_space_id() != controller->current_space_id()) {
++      controller->SetViewSpaceOverride(std::string());
++      delegate_->CarouselResyncViews(/*keep_state=*/true);
++    }
++    RestoreLiveViews(to);
+   }
+-  RestoreLiveViews(to);
+ 
+   // The bar: from what it shows now -- the old current in colour at rest,
+   // or wherever a cross-fade that is still running has got to -- to the new
+@@ -189,8 +239,10 @@
+     blend_end_[space] = space == to ? 0.0f : 1.0f;
+   }
+   blend_origin_x_ = now.x;
+-  live_slot_ = to_slot;
+-  live_space_ = to;
++  if (!deferred_) {
++    live_slot_ = to_slot;
++    live_space_ = to;
++  }
+   target_ = to_slot;
+   width_ = strip->width();
+   origin_ = now;
+@@ -207,7 +259,31 @@
+   Apply();
+ }
+ 
+-void SpaceCarousel::Stop() {
++void SpaceCarousel::Stop(bool views_now) {
++  // 2026-11-21 (deferred_): the views go over to the committed space first,
++  // in this same task, so that no frame shows the real list and the
++  // pictures disagreeing; inside a layout or a teardown only the override
++  // goes (EnsureLiveViews re-filters).
++  if (deferred_) {
++    if (views_now) {
++      SwapToCommitted();
++    } else {
++      deferred_ = false;
++      live_slot_ = committed_slot_;
++      live_space_ = committed_space_;
++      delegate_->CarouselHoldShownActive(false);
++      if (helium_workspace::WorkspaceTabController* const controller =
++              delegate_->CarouselController()) {
++        controller->SetViewSpaceOverride(std::string());
++        controller->FlushDeferredBlankClose();
++      }
++      views_stale_ = true;
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, base::BindOnce(&SpaceCarousel::EnsureLiveViews,
++                                    weak_factory_.GetWeakPtr()));
++    }
++  }
++  defer_next_ = false;
+   if (TabStripView* const strip = delegate_->CarouselStrip()) {
+     strip->SetListHoverHeld(false);
+   }
+@@ -328,7 +404,7 @@
+     return {};
+   }
+   controller->SetViewSpaceOverride(space_id);
+-  delegate_->CarouselResyncViews();
++  delegate_->CarouselResyncViews(/*keep_state=*/true);
+   // At this space's own height: the strip is as tall as its contents.
+   delegate_->CarouselFitStrip();
+   picture_bottom_ = std::max(picture_bottom_, strip->height());
+@@ -438,6 +514,11 @@
+       !strip->GetVisible() || !strip->layer() || strip->width() <= 0) {
+     return false;
+   }
++  EnsureLiveViews();
++  // 2026-11-21: grabbed while a release's slide still shows the space it
++  // left: that list becomes a picture where it stands first (Arc g41 / g44
++  // grab from wherever the list is).
++  ReconcileLive();
+   if (active_ && (wrapping_ || controller->current_space_id() != live_space_ ||
+                   strip->width() != width_)) {
+     // A wrap-around Next / Previous has no bar neighbours to drag toward,
+@@ -533,13 +614,37 @@
+     return DragEnd::kSettle;
+   }
+   // The real switch, now: the controller's hooks aim the spring from here.
+-  const std::string was_live = live_space_;
++  // 2026-11-21 (deferred_): the views stay on this space through it when
++  // the arriving one's picture is up and it has a tab to land on (one it
++  // would have to make a blank page for shows that row only on the real
++  // list -- that switch goes over at once, as before).
++  const std::string was_current = controller->current_space_id();
++  const auto picture = slots_.find(target);
++  defer_next_ = picture != slots_.end() && picture->second.space_id == space &&
++                controller->FindTabToShowForSpace(space) != nullptr;
+   HoldHere();
+   {
+     const base::AutoReset<bool> committing(&committing_, true);
+     controller->SwitchToSpace(space);
+   }
+-  if (live_space_ == was_live) {
++  defer_next_ = false;
++  controller->SetDeferAbandonedBlankClose(false);
++  if (std::exchange(defer_override_, false)) {
++    // The switch never reached OnSwitchActivated (a sheet came up, the
++    // strip went away, the controller found nothing to do): the views go
++    // to the committed space as they would have.
++    controller->SetViewSpaceOverride(std::string());
++    if (TabStripView* const strip = delegate_->CarouselStrip();
++        strip && strip->GetWidget()) {
++      delegate_->CarouselResyncViews(/*keep_state=*/false);
++      if (!active_) {
++        RestoreLiveViews(controller->current_space_id());
++      }
++    } else {
++      views_stale_ = true;
++    }
++  }
++  if (controller->current_space_id() == was_current) {
+     // It did not happen (the space went away under the fingers): back.
+     SettleBack();
+   }
+@@ -612,7 +717,7 @@
+   }
+   if (taken) {
+     controller->SetViewSpaceOverride(std::string());
+-    delegate_->CarouselResyncViews();
++    delegate_->CarouselResyncViews(/*keep_state=*/true);
+     RestoreLiveViews(live_space_);
+   }
+ }
+@@ -648,6 +753,75 @@
+   Apply();
+ }
+ 
++void SpaceCarousel::SwapToCommitted() {
++  if (!deferred_) {
++    return;
++  }
++  deferred_ = false;
++  live_slot_ = committed_slot_;
++  live_space_ = committed_space_;
++  // Its picture gives way to the real list.
++  slots_.erase(live_slot_);
++  helium_workspace::WorkspaceTabController* const controller =
++      delegate_->CarouselController();
++  if (controller) {
++    controller->SetViewSpaceOverride(std::string());
++  }
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (strip && strip->GetWidget()) {
++    // The switch's own re-filter, now that nothing moves -- Today lets go of
++    // the leaving row's card here (CarouselResyncViews).
++    delegate_->CarouselResyncViews(/*keep_state=*/false);
++    RestoreLiveViews(live_space_);
++  } else {
++    views_stale_ = true;
++  }
++  // Today lets go even when the resync skipped it (a drag in Today right
++  // now; reviewer final r1) -- EndCaptureActiveTab is a no-op otherwise.
++  delegate_->CarouselHoldShownActive(false);
++  if (controller) {
++    controller->FlushDeferredBlankClose();
++  }
++}
++
++void SpaceCarousel::ReconcileLive() {
++  if (!deferred_) {
++    return;
++  }
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (strip && strip->GetWidget()) {
++    // The views show the space left, laid out and scrolled as it was, its
++    // selected row wearing the card: photographed as they stand.
++    Slot picture;
++    picture.space_id = live_space_;
++    picture.layers = strip->CaptureListSnapshot();
++    for (auto& shadow : delegate_->CarouselCaptureRowShadows()) {
++      picture.layers.push_back(std::move(shadow));
++    }
++    picture_bottom_ = std::max(picture_bottom_, strip->height());
++    slots_[live_slot_] = std::move(picture);
++  }
++  SwapToCommitted();
++  if (active_) {
++    Apply();
++  }
++}
++
++void SpaceCarousel::EnsureLiveViews() {
++  if (!std::exchange(views_stale_, false)) {
++    return;
++  }
++  TabStripView* const strip = delegate_->CarouselStrip();
++  if (!strip || !strip->GetWidget()) {
++    views_stale_ = true;
++    return;
++  }
++  delegate_->CarouselResyncViews(/*keep_state=*/false);
++  if (!active_) {
++    RestoreLiveViews(live_space_);
++  }
++}
++
+ std::map<std::string, float> SpaceCarousel::BlendAt(double x) const {
+   // A motion that starts on its own target (nothing to cover) is simply
+   // there.
+Index: src/chrome/browser/ui/views/tabs/common/space_carousel.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/space_carousel.h
++++ src/chrome/browser/ui/views/tabs/common/space_carousel.h
+@@ -11,6 +11,7 @@
+ #include <vector>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "chrome/browser/ui/helium/arc_space_motion.h"
+ #include "ui/gfx/animation/linear_animation.h"
+ #include "ui/views/animation/animation_delegate_views.h"
+@@ -48,8 +49,11 @@
+     // The profile's space ids in bar order.
+     virtual std::vector<std::string> CarouselSpaceOrder() = 0;
+     // Re-filters the sidebar and Today to the controller's shown_space_id()
+-    // -- synchronously; the carousel lays the strip out itself.
+-    virtual void CarouselResyncViews() = 0;
++    // -- synchronously; the carousel lays the strip out itself. 2026-11-21:
++    // |keep_state| for a photograph's round trip (the space photographed
++    // away from keeps its rows' runtime state), not for the views going
++    // over to a switch's space.
++    virtual void CarouselResyncViews(bool keep_state) = 0;
+     // Gives the strip the bounds the region's layout would give it for the
+     // space the views show now -- it is as tall as its contents -- and lays
+     // it out.
+@@ -77,6 +81,13 @@
+     // elsewhere, a sheet, the sidebar folding): the rest of that gesture must
+     // not reach the carousel.
+     virtual void OnCarouselDragLost() = 0;
++    // 2026-11-21: the views still show the space a release just left (the
++    // controller's view-space override, see SpaceCarousel::deferred_) while
++    // the model's active tab is already the arriving space's: the leaving
++    // list's selected row keeps its card -- Today's row too, not only the
++    // pinned rows (those read shown_active_tab() on their own) -- until the
++    // views are resynced.
++    virtual void CarouselHoldShownActive(bool hold) = 0;
+ 
+    protected:
+     virtual ~Delegate() = default;
+@@ -95,8 +106,12 @@
+ 
+   // Whether anything but the committed list at rest is on screen.
+   bool IsActive() const { return active_; }
++
+   // Lands at once: the live list at rest, every picture gone. Safe idle.
+-  void Stop();
++  // 2026-11-21: |views_now| false from inside a layout or the widget's
++  // teardown -- views a deferred release left on the space it left are then
++  // re-filtered by a posted task (or the next motion), not in there.
++  void Stop(bool views_now = true);
+ 
+   // ---- M6 轮4 4b: the two-finger swipe (tasks/4/brief.md §3.2) ----
+   // The fingers took the list. A slide that is running stops where it is
+@@ -117,7 +132,8 @@
+   // A release that leaves the committed space switches right away, so the
+   // address row and the page change on the finish's first frame (Arc g40);
+   // either way the spring starts from rest -- the release's own speed is not
+-  // carried (Arc g40 / g41). The two ends' sheets are the region's to open:
++  // carried (Arc g40 / g41; the user tried carrying it on 2026-11-21 and kept
++  // this). The two ends' sheets are the region's to open:
+   // for those the lists hold still where the rubber band has them, until
+   // Stop() (4b-r2: the region turns the page on from there).
+   DragEnd EndDrag(int flick);
+@@ -180,6 +196,17 @@
+   // 4b: springs from rest back to the committed space, the bar back to its
+   // resting look on the way.
+   void SettleBack();
++  // 2026-11-21 (deferred_): the views go over to the committed space now --
++  // its picture gives way to the real list, the leaving space's deferred
++  // blank-page close runs. In Stop(), and in ReconcileLive().
++  void SwapToCommitted();
++  // 2026-11-21: Stop(false) left the views on the wrong space: re-filter
++  // them now (a motion is about to start, or the posted task runs).
++  void EnsureLiveViews();
++  // 2026-11-21: a slide whose views still show the space left is interrupted
++  // where it stands (a grab, another switch): that list becomes a picture in
++  // its slot and the views go over to the committed space, x unchanged.
++  void ReconcileLive();
+ 
+   const raw_ptr<Delegate> delegate_;
+   // A clock and nothing more: the spring is evaluated off its elapsed time
+@@ -192,8 +219,30 @@
+   int pending_direction_ = 0;
+   std::string pending_from_;
+ 
++  // The slot and space the real views show (the live list). The committed
++  // space -- the controller's current one -- is the same, except while
++  // |deferred_|.
+   int live_slot_ = 0;
+   std::string live_space_;
++  // ⛔ 2026-11-21 (the user, AskUserQuestion 「直接用我的首选」: 滑动中活列表继续
++  // 显示出发地，目的地继续用图，停稳时才换成活的): a release that turned the page
++  // switched the model at once (the page and the address row change on the
++  // finish's first frame) but left the views on the space being left, the
++  // arriving space riding the picture its drag took -- no resync, no picture
++  // in the release's task. Stop() swaps them; an interruption first
++  // ReconcileLive()s. Only a gesture's own switch to a space with a tab to
++  // land on (FindTabToShowForSpace) and a picture already taken.
++  bool deferred_ = false;
++  int committed_slot_ = 0;
++  std::string committed_space_;
++  // EndDrag() decided the switch it is about to make goes deferred.
++  bool defer_next_ = false;
++  // OnSwitchWillStart pointed the views at the space left for it; cleared
++  // when OnSwitchActivated takes over (or EndDrag puts it back).
++  bool defer_override_ = false;
++  // Stop(false) cleared a deferred release's override without re-filtering
++  // the views.
++  bool views_stale_ = false;
+   // Pictures, by slot. The live slot never has one.
+   std::map<int, Slot> slots_;
+   // The spring: from |origin_| at |origin_seconds_| on the clock toward
+@@ -251,6 +300,8 @@
+   double blend_origin_x_ = 0.0;
+   // Each space's two scrollers, as they were when it was last left.
+   std::map<std::string, ScrollOffsets> scroll_offsets_;
++
++  base::WeakPtrFactory<SpaceCarousel> weak_factory_{this};
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_TABS_COMMON_SPACE_CAROUSEL_H_
+Index: src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_strip_view.cc
+@@ -36,6 +36,7 @@
+ #include "chrome/browser/ui/helium/arc_sidebar_split.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service.h"
+ #include "chrome/browser/ui/helium_workspace/workspace_service_factory.h"
++#include "chrome/browser/ui/helium_workspace/workspace_tab_controller.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/tabs/horizontal_tab_strip_metrics.h"
+ #include "chrome/browser/ui/tabs/tab_group_model.h"
+@@ -779,6 +780,28 @@
+   TabCollectionNode* activated_node =
+       collection_node_->GetNodeForHandle(active_tab->GetHandle());
+   CHECK(activated_node);
++  // helium-fork (2026-11-21, reviewer design r1): while a swipe's release
++  // keeps the views on the space it left (WorkspaceTabController::
++  // shown_space_id, SpaceCarousel::deferred_), the arriving space's tab has
++  // no row here -- it is laid out at no bounds -- and scrolling to it would
++  // scroll the list on screen away and leave Today's overflow visuals off.
++  // That list comes back at its own scroll position when the views go over.
++  // (UnpinnedTabContainerView::ShouldHideFromToday for a tab no entry owns:
++  // a space's Today shows the tabs IsTabInSpace says are its.)
++  if (const auto* const controller =
++          helium_workspace::WorkspaceTabController::From(
++              const_cast<BrowserWindowInterface*>(
++                  active_tab->GetBrowserWindowInterface()));
++      controller &&
++      controller->shown_space_id() != controller->current_space_id()) {
++    const helium_workspace::WorkspaceService* const service =
++        helium_workspace::WorkspaceServiceFactory::GetForProfile(
++            active_tab->GetProfile());
++    if (service && !service->IsTabInSpace(active_tab->GetHandle(),
++                                          controller->shown_space_id())) {
++      return;
++    }
++  }
+   ScrollToFitViews(activated_node->view(), nullptr);
+ }
+ 
+@@ -792,6 +815,25 @@
+     return;
+   }
+ 
++  // helium-fork (2026-11-21, reviewer final r2): as in OnTabChanged -- while a
++  // swipe's release keeps the views on the space it left, a tab opened in
++  // the arriving space has no row on screen; scrolling to it would scroll
++  // the list that is sliding out.
++  if (const auto* const controller =
++          helium_workspace::WorkspaceTabController::From(
++              const_cast<BrowserWindowInterface*>(
++                  new_tab->GetBrowserWindowInterface()));
++      controller &&
++      controller->shown_space_id() != controller->current_space_id()) {
++    const helium_workspace::WorkspaceService* const service =
++        helium_workspace::WorkspaceServiceFactory::GetForProfile(
++            new_tab->GetProfile());
++    if (service && !service->IsTabInSpace(new_tab->GetHandle(),
++                                          controller->shown_space_id())) {
++      return;
++    }
++  }
++
+   TabCollectionNode* active_node =
+       collection_node_->GetNodeForHandle(active_tab->GetHandle());
+   TabCollectionNode* new_node =
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.cc
++++ src/chrome/browser/ui/views/tabs/common/tab_view.cc
+@@ -1153,7 +1153,8 @@
+   int index = tab_strip_model->GetIndexOfTab(tab);
+   CHECK(index != TabStripModel::kNoTab);
+ 
+-  active_ = tab_strip_model->IsTabInForeground(index);
++  active_ = active_for_capture_ ? active_for_capture_value_
++                                : tab_strip_model->IsTabInForeground(index);
+   split_ = tab->IsSplit();
+   pinned_ = tab->IsPinned();
+ 
+@@ -1172,6 +1173,7 @@
+     return;
+   }
+   active_for_capture_ = true;
++  active_for_capture_value_ = active;
+   active_ = active;
+   // The same three steps OnTabStateChanged takes for the active bit
+   // (reviewer --final 2026-11-08: the z-order too).
+Index: src/chrome/browser/ui/views/tabs/common/tab_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/tab_view.h
++++ src/chrome/browser/ui/views/tabs/common/tab_view.h
+@@ -118,8 +118,10 @@
+   // selected row wearing the card, though the model has its active tab
+   // elsewhere. Sets the active bit for the picture -- white card, title
+   // colour, z-order, as OnTabStateChanged would -- until
+-  // EndActiveForCapture() reads the model again. Only the carousel's
+-  // capture calls these, inside one task.
++  // EndActiveForCapture() reads the model again. The carousel's capture
++  // calls these inside one task -- and, 2026-11-21, a release whose views
++  // stay on the space it left calls them across its slide: the model's own
++  // updates in between (OnTabStateChanged) leave the active bit as set.
+   void SetActiveForCapture(bool active);
+   void EndActiveForCapture();
+   bool IsClosing() const { return !collection_node_; }
+@@ -264,6 +266,7 @@
+   bool active_ = false;
+   // SetActiveForCapture() set active_ against the model.
+   bool active_for_capture_ = false;
++  bool active_for_capture_value_ = false;
+   bool selected_ = false;
+   bool hovered_ = false;
+   bool split_ = false;
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.cc
+@@ -841,6 +841,17 @@
+ }
+ 
+ void UnpinnedTabContainerView::SetCardShadowTarget(views::View* target) {
++  // 2026-11-21: while a capture holds another space's selected row (a
++  // release's slide may span many tasks), the model's re-aim is the one
++  // EndCaptureActiveTab hands back, not the one shown (reviewer design r1).
++  if (capturing_active_tab_) {
++    shadow_target_before_capture_.SetView(target);
++    return;
++  }
++  ApplyCardShadowTarget(target);
++}
++
++void UnpinnedTabContainerView::ApplyCardShadowTarget(views::View* target) {
+   if (card_shadow_tracker_) {
+     card_shadow_tracker_->SetTarget(target);
+   }
+@@ -880,7 +891,7 @@
+                              }
+                            },
+                            tab, &target));
+-  SetCardShadowTarget(target);
++  ApplyCardShadowTarget(target);
+ }
+ 
+ void UnpinnedTabContainerView::EndCaptureActiveTab() {
+@@ -891,7 +902,7 @@
+   ForEachTabView(this, base::BindRepeating([](TabView* view) {
+                    view->EndActiveForCapture();
+                  }));
+-  SetCardShadowTarget(shadow_target_before_capture_.view());
++  ApplyCardShadowTarget(shadow_target_before_capture_.view());
+   shadow_target_before_capture_.SetView(nullptr);
+ }
+ 
+Index: src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
++++ src/chrome/browser/ui/views/tabs/common/unpinned_tab_container_view.h
+@@ -226,6 +226,8 @@
+   void SetArcRowInsets(int left, int right);
+ 
+  private:
++  // SetCardShadowTarget minus the capture guard (2026-11-21).
++  void ApplyCardShadowTarget(views::View* target);
+   // helium-fork M3.11 轮3: where a sidebar entry would land. Two counters
+   // from one hit test: |tab_index| is the tab-strip index the drop commits
+   // at, |row_position| the laid-out row the empty slot goes before. They
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.cc
+@@ -400,11 +400,12 @@
+ }
+ 
+ void WorkspaceEntryView::SetBoundTab(tabs::TabInterface* tab) {
+-  const bool was_bound = !!bound_tab_;
+-  if (bound_tab_.get() == tab) {
++  const bool was_bound = bound_;
++  if (bound_tab_.get() == tab && (tab || !bound_)) {
+     return;
+   }
+   bound_tab_ = tab ? tab->GetWeakPtr() : nullptr;
++  bound_ = !!tab;
+   ResolveIcon();
+   // The speaker follows the bound tab's alerts (audio playing / muted) for
+   // as long as the binding lasts; an unbound row has nothing to say.
+@@ -1372,6 +1373,12 @@
+   editor_->SelectAll(/*reversed=*/false);
+ }
+ 
++void WorkspaceEntryView::CancelRename() {
++  if (editing_) {
++    FinishRename(/*commit=*/false, /*clear_focus=*/true);
++  }
++}
++
+ void WorkspaceEntryView::OnRenameFieldBlurred() {
+   // The focus went elsewhere on its own (a click away): commit, like Arc.
+   // Return and Escape end the edit before they clear the focus, so their
+Index: src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_entry_view.h
+@@ -222,6 +222,20 @@
+   // tile or while already editing.
+   void StartRename();
+   bool renaming() const { return editing_; }
++  // 2026-11-21: ends an in-place rename without committing it, out of the
++  // field first -- the sidebar parks a row of a space it stops showing
++  // (WorkspaceSidebarView::SyncEntryViews). No-op unless editing.
++  void CancelRename();
++  // 2026-11-21 (reviewer code r1): the row comes back from the sidebar's
++  // pool -- a bound row's icon is resolved again (its tab may have navigated
++  // while it was parked; SetBoundTab to the same tab changes nothing). Not an
++  // unbound one: ResolveIcon would put the default globe back over a
++  // favicon the FaviconService already delivered (reviewer final r2).
++  void OnUnparked() {
++    if (bound_tab_) {
++      ResolveIcon();
++    }
++  }
+   // Called by the field when it loses focus: commits unless the edit has
+   // already ended (Return / Escape clear the focus themselves).
+   void OnRenameFieldBlurred();
+@@ -317,6 +331,11 @@
+       helium_workspace::WorkspaceEntry::Section::kPinned;
+ 
+   base::WeakPtr<tabs::TabInterface> bound_tab_;
++  // 2026-11-21 (reviewer code r1): whether SetBoundTab last bound a tab -- a
++  // parked row's tab can go away without a SetBoundTab(nullptr) (the sidebar
++  // does not sync parked rows), and the WeakPtr alone then reads "unbound
++  // already" while the live title / drift marks still show.
++  bool bound_ = false;
+   // What the bound tab currently shows; empty / false while unbound.
+   std::u16string live_title_;
+   bool drifted_ = false;
+Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.cc
+@@ -399,6 +399,14 @@
+   if (!editing_) {
+     return;
+   }
++  // 2026-11-21: out of the field before EndRename hides it (hiding a focused
++  // view advances the focus to the next stop -- the page); |editing_| goes
++  // first, so the blur that follows commits nothing.
++  editing_ = false;
++  if (views::FocusManager* const focus_manager = GetFocusManager();
++      focus_manager && editor_->HasFocus()) {
++    focus_manager->ClearFocus();
++  }
+   EndRename();
+ }
+ 
+Index: src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_folder_row_view.h
+@@ -110,6 +110,10 @@
+   // Swaps the name for a field with the whole name selected (Arc's
+   // new-folder state). No-op while already editing.
+   void StartRename();
++  // 2026-11-21: ends an in-place rename without committing it, out of the
++  // field first (WorkspaceSidebarView parks a folder row of a space it
++  // stops showing). No-op unless editing.
++  void CancelRename();
+ 
+   // M3.11-r1 family: a row the pointer left during a menu/drag/edit never
+   // got its OnMouseExited; the sidebar clears instead (never sets).
+@@ -159,7 +163,6 @@
+ 
+  private:
+   void CommitRename();
+-  void CancelRename();
+   void EndRename();
+   void UpdateIcon();
+ 
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.cc
+@@ -953,7 +953,23 @@
+          views::IsViewClass<views::Textfield>(focused);
+ }
+ 
+-void WorkspaceSidebarView::ResyncToShownSpace() {
++void WorkspaceSidebarView::ResyncToShownSpace(bool keep_state) {
++  const helium_workspace::WorkspaceTabController* const controller =
++      helium_workspace::WorkspaceTabController::From(GetBrowserWindow());
++  const std::string shown =
++      controller ? controller->shown_space_id() : std::string();
++  if (shown == current_space_id_) {
++    // 2026-11-21 (reviewer design r1): a switch whose views stay on the space
++    // left keeps its rows as they are -- surfaced folder rows, a fold, a
++    // shift -- until the views do go over.
++    return;
++  }
++  if (keep_state) {
++    kept_surfaced_[current_space_id_] = {surfaced_entry_ids_,
++                                         drop_surfaced_entry_id_};
++  } else {
++    kept_surfaced_.clear();
++  }
+   // ⛔ Both blends' size guards compare entry counts, which two spaces can
+   // share; drop the snapshots outright rather than lerp unrelated rows.
+   if (folder_animation_.is_animating()) {
+@@ -967,9 +983,16 @@
+   // 3a-r3: nor a shift -- nothing inside the list animates on a switch (user
+   // 2026-09-18).
+   FinishEntryShift();
+-  // Per-window, per-space runtime state of the rows that are leaving.
++  // Per-window, per-space runtime state of the rows that are leaving (kept
++  // above when only a photograph takes the views away, and brought back).
+   surfaced_entry_ids_.clear();
+   drop_surfaced_entry_id_.clear();
++  if (const auto kept = kept_surfaced_.find(shown);
++      keep_state && kept != kept_surfaced_.end()) {
++    surfaced_entry_ids_ = std::move(kept->second.first);
++    drop_surfaced_entry_id_ = std::move(kept->second.second);
++    kept_surfaced_.erase(kept);
++  }
+   SyncEntryViews();
+   PreferredSizeChanged();
+   InvalidateLayout();
+@@ -1688,10 +1711,12 @@
+   // M6: this window's view of the model -- the favorites (every space) plus
+   // the current space's pinned rows and folders. Everything below reads
+   // this one filtered copy, so a row of another space is simply "gone" to
+-  // the stale sweep and comes back when its space does. (Rows are destroyed
+-  // rather than kept hidden on purpose: favorite_count_ is the hard grid /
+-  // rows boundary in ordered_entries_, and the drop indices count the rows
+-  // that are laid out -- both are only right for a list that IS the space.)
++  // the stale sweep and comes back when its space does. (Rows leave the
++  // display order rather than staying in it hidden on purpose:
++  // favorite_count_ is the hard grid / rows boundary in ordered_entries_,
++  // and the drop indices count the rows that are laid out -- both are only
++  // right for a list that IS the space. The views themselves are parked,
++  // below.)
+   RefreshCurrentSpaceId();
+   std::vector<helium_workspace::WorkspaceEntry> entries;
+   entries.reserve(service_->entries().size());
+@@ -1702,8 +1727,22 @@
+     }
+   }
+   SyncSpaceHead();
++  // helium-fork (2026-11-21, swipe start; the user: 「行视图留着、只做显隐」):
++  // a row or folder row of another space -- its entry still in the service
++  // -- is parked (hidden, kept in |parked_*_views_|) instead of destroyed,
++  // and comes back from there when its space is shown again. A space switch
++  // and every carousel picture used to destroy one space's rows and build
++  // the other's (the user's trace: 23-46 ms per swipe start, five times per
++  // swipe). |entry_views_| / |folder_views_| / |ordered_entries_| still hold
++  // the shown space only, so the reasons above for destroying stand: parked
++  // views are in neither the display order nor the drop indices. Only an
++  // entry gone from the service is destroyed.
++  std::set<std::string> service_ids;
++  for (const helium_workspace::WorkspaceEntry& entry : service_->entries()) {
++    service_ids.insert(entry.id);
++  }
+ 
+-  // Drop rows and folder rows whose entry is gone.
++  // Drop rows and folder rows whose entry is gone (or park them, above).
+   std::vector<std::string> stale;
+   for (const auto& [id, view] : entry_views_) {
+     const bool still_there =
+@@ -1740,10 +1779,23 @@
+     // M3.12-r2: tiles live in the band, rows here -- remove from whichever
+     // parent actually holds it.
+     drop_from_order(id);
+-    views::View* const gone = entry_views_[id].get();
+-    gone->parent()->RemoveChildViewT(gone);
++    WorkspaceEntryView* const gone = entry_views_[id].get();
+     entry_views_.erase(id);
+     surfaced_entry_ids_.erase(id);
++    if (service_ids.contains(id) && gone->parent() == this) {
++      // Another space's row (a tile is every space's, never parked). No
++      // reparenting -- an OS drag session may hold it (M3.12-r2). An
++      // in-place rename ends uncommitted, out of its field before the row
++      // hides (as when the row was destroyed; reviewer design r1); its hover
++      // and the "Back to Pinned URL" hint go at once, so a picture taken
++      // when the row comes back shows it at rest.
++      gone->CancelRename();
++      gone->ClearHoverAtOnce();
++      gone->SetVisible(false);
++      parked_entry_views_[id] = gone;
++      continue;
++    }
++    gone->parent()->RemoveChildViewT(gone);
+   }
+   std::vector<std::string> stale_folders;
+   for (const auto& [id, view] : folder_views_) {
+@@ -1758,13 +1810,41 @@
+   structure_changed |= !stale_folders.empty();
+   for (const std::string& id : stale_folders) {
+     drop_from_order(id);
+-    views::View* const gone = folder_views_[id].get();
+-    gone->parent()->RemoveChildViewT(gone);
++    WorkspaceFolderRowView* const gone = folder_views_[id].get();
+     folder_views_.erase(id);
+     if (animating_folder_id_ == id) {
+       folder_animation_.End();
+       animating_folder_id_.clear();
+     }
++    if (service_ids.contains(id) && gone->parent() == this) {
++      gone->CancelRename();
++      gone->ClearHover();
++      gone->SetVisible(false);
++      parked_folder_views_[id] = gone;
++      continue;
++    }
++    gone->parent()->RemoveChildViewT(gone);
++  }
++  // Parked views whose entry has since left the service for good.
++  for (auto it = parked_entry_views_.begin();
++       it != parked_entry_views_.end();) {
++    if (service_ids.contains(it->first)) {
++      ++it;
++      continue;
++    }
++    views::View* const gone = it->second.get();
++    it = parked_entry_views_.erase(it);
++    gone->parent()->RemoveChildViewT(gone);
++  }
++  for (auto it = parked_folder_views_.begin();
++       it != parked_folder_views_.end();) {
++    if (service_ids.contains(it->first)) {
++      ++it;
++      continue;
++    }
++    views::View* const gone = it->second.get();
++    it = parked_folder_views_.erase(it);
++    gone->parent()->RemoveChildViewT(gone);
+   }
+ 
+   // Create or update the rest, and rebuild the display order (both kinds
+@@ -1778,10 +1858,17 @@
+       auto it = folder_views_.find(entry.id);
+       WorkspaceFolderRowView* row = nullptr;
+       if (it == folder_views_.end()) {
+-        row = AddChildView(std::make_unique<WorkspaceFolderRowView>(this));
+-        // M3.13-r1: whole-folder reorder rides the same drag machinery as
+-        // the rows (`Arc:` 轮0 -- a folder reorders with its brood).
+-        row->set_drag_controller(this);
++        if (const auto parked = parked_folder_views_.find(entry.id);
++            parked != parked_folder_views_.end()) {
++          row = parked->second.get();
++          parked_folder_views_.erase(parked);
++          row->SetVisible(true);
++        } else {
++          row = AddChildView(std::make_unique<WorkspaceFolderRowView>(this));
++          // M3.13-r1: whole-folder reorder rides the same drag machinery as
++          // the rows (`Arc:` 轮0 -- a folder reorders with its brood).
++          row->set_drag_controller(this);
++        }
+         folder_views_[entry.id] = row;
+         structure_changed = true;
+       } else {
+@@ -1802,12 +1889,22 @@
+     auto it = entry_views_.find(entry.id);
+     WorkspaceEntryView* view = nullptr;
+     if (it == entry_views_.end()) {
+-      // Created straight into its segment's host; the delegate and drag
+-      // controller stay this view either way -- the band has no logic.
+-      views::View* const host = is_favorite ? GridHost() : this;
+-      view = host->AddChildView(
+-          std::make_unique<WorkspaceEntryView>(this, profile_.get()));
+-      view->set_drag_controller(this);
++      if (const auto parked = parked_entry_views_.find(entry.id);
++          parked != parked_entry_views_.end()) {
++        // Back from the pool (a row of this view; a favorite now is
++        // re-hosted by the form flip below).
++        view = parked->second.get();
++        parked_entry_views_.erase(parked);
++        view->SetVisible(true);
++        view->OnUnparked();
++      } else {
++        // Created straight into its segment's host; the delegate and drag
++        // controller stay this view either way -- the band has no logic.
++        views::View* const host = is_favorite ? GridHost() : this;
++        view = host->AddChildView(
++            std::make_unique<WorkspaceEntryView>(this, profile_.get()));
++        view->set_drag_controller(this);
++      }
+       entry_views_[entry.id] = view;
+       structure_changed = true;
+     } else {
+Index: src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+===================================================================
+--- src.orig/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
++++ src/chrome/browser/ui/views/tabs/common/workspace_sidebar_view.h
+@@ -130,7 +130,13 @@
+   // carousel's snapshot pass, which points the views at another space,
+   // photographs it and points them back within one task. Nothing is
+   // painted in between.
+-  void ResyncToShownSpace();
++  // 2026-11-21: nothing at all when the views already show that space (a
++  // release that keeps them on the space it left, SpaceCarousel::deferred_).
++  // |keep_state|: a photograph's round trip, not a switch -- each space's
++  // surfaced folder rows (surfaced_entry_ids_ / drop_surfaced_entry_id_) are
++  // kept for when the views come back to it rather than forgotten.
++  void ResyncToShownSpace(bool keep_state = false);
++
+   // M6 轮4 4b: whether a two-finger swipe must leave the sidebar alone -- a
+   // row is being dragged, or one of the rows' names is being edited in
+   // place (the address row's field is not ours: the new tab page focuses it,
+@@ -811,6 +817,12 @@
+   // service's entries the walk reads kind/folder_id/collapsed off.
+   std::map<std::string, raw_ptr<WorkspaceEntryView>> entry_views_;
+   std::map<std::string, raw_ptr<WorkspaceFolderRowView>> folder_views_;
++  // helium-fork (2026-11-21, swipe start): rows and folder rows of the
++  // spaces not shown, hidden children of this view, out of everything
++  // above (SyncEntryViews parks and fetches them). Destroyed only when
++  // their entry leaves the service.
++  std::map<std::string, raw_ptr<WorkspaceEntryView>> parked_entry_views_;
++  std::map<std::string, raw_ptr<WorkspaceFolderRowView>> parked_folder_views_;
+   std::vector<raw_ptr<views::View>> ordered_entries_;
+   std::vector<helium_workspace::WorkspaceEntry> ordered_model_;
+   size_t favorite_count_ = 0;
+@@ -848,6 +860,10 @@
+   // plain surfacing rule drops tabless entries on the next sync; it is
+   // forgotten when the folder is opened, along with the set.
+   std::string drop_surfaced_entry_id_;
++  // 2026-11-21: the two above for a space the views are photographing away
++  // from (ResyncToShownSpace(keep_state = true)), by space id.
++  std::map<std::string, std::pair<std::set<std::string>, std::string>>
++      kept_surfaced_;
+   // Where the pointer went down inside the row, as a fraction of its size.
+   // Recorded in WriteDragDataForView, which the framework calls *before*
+   // OnWillStartDragForView -- so it cannot go straight into DragState.
